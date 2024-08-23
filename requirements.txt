@@ -1,0 +1,6 @@
+jax[cpu]>=0.4.26
+absl-py
+orbax
+uvicorn
+fastapi
+google-cloud-logging
