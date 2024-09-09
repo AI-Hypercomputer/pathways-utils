@@ -25,7 +25,7 @@ setuptools.setup(
         'google-cloud-logging',
         'jax[cpu]>=0.4.26',
         'absl-py',
-        'orbax',
+        'orbax-checkpoint',
         'uvicorn',
         'fastapi',
     ],
