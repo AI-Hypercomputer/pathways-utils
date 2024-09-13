@@ -14,6 +14,7 @@
 """Package of Pathways-on-Cloud utilities."""
 
 import datetime
+import os
 from absl import logging
 import jax
 from pathwaysutils import cloud_logging
@@ -32,9 +33,11 @@ if _is_pathways_used():
   logging.warning("pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes.")
   proxy_backend.register_backend_factory()
   profiling.monkey_patch_jax()
-  # pathways_orbax_handler.register_pathways_handlers(
-  #     datetime.timedelta(minutes=10)
-  # )
+  # Remove when OCDBT-compatible
+  if "ENABLE_PATHWAYS_PERSISTENCE" in os.environ:
+    pathways_orbax_handler.register_pathways_handlers(
+        datetime.timedelta(minutes=10)
+    )
   cloud_logging.setup()
 else:
   logging.warning(
