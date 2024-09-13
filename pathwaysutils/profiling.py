@@ -18,7 +18,7 @@ import threading
 import time
 
 from absl import logging
-from fastapi import FastAPI
+import fastapi
 import jax
 from jax import numpy as jnp
 from pathwaysutils import plugin_executable
@@ -103,7 +103,7 @@ def start_server(port: int):
   """
   def server_loop(port: int):
     logging.info("Starting JAX profiler server on port %s", port)
-    app = FastAPI()
+    app = fastapi.FastAPI()
 
     @dataclasses.dataclass
     class ProfilingConfig:
@@ -180,4 +180,3 @@ def monkey_patch_jax():
     return stop_server()
 
   jax.profiler.stop_server = stop_server_patch
-
