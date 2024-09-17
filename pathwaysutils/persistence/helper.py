@@ -20,7 +20,7 @@ from typing import Sequence, Union
 
 import jax
 from jax import core
-from jax._src.lib import xla_client as xc
+from jax.lib import xla_client as xc
 import numpy as np
 from pathwaysutils import plugin_executable
 
