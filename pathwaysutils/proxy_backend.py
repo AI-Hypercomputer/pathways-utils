@@ -14,12 +14,12 @@
 """Register the IFRT Proxy as a backend for JAX."""
 
 import jax
-from jax._src import xla_bridge
-from jaxlib.xla_extension import ifrt_proxy
+from jax.extend import backend
+from jax.lib.xla_extension import ifrt_proxy
 
 
 def register_backend_factory():
-  xla_bridge.register_backend_factory(
+  backend.register_backend_factory(
       "proxy",
       lambda: ifrt_proxy.get_client(
           jax.config.read("jax_backend_target"),
