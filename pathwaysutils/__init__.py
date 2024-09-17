@@ -14,6 +14,8 @@
 """Package of Pathways-on-Cloud utilities."""
 
 import datetime
+import os
+
 from absl import logging
 import jax
 from pathwaysutils import cloud_logging
@@ -28,15 +30,34 @@ def _is_pathways_used():
   return jax.config.jax_platforms and "proxy" in jax.config.jax_platforms
 
 
+def _is_persistence_enabled():
+  if "ENABLE_PATHWAYS_PERSISTENCE" in os.environ:
+    if os.environ["ENABLE_PATHWAYS_PERSISTENCE"] == "1":
+      return True
+    if os.environ["ENABLE_PATHWAYS_PERSISTENCE"] == "0":
+      return False
+    else:
+      raise ValueError(
+          "ENABLE_PATHWAYS_PERSISTENCE must be set to 1/0 or unset, got: "
+          + os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
+      )
+  return False
+
+
 if _is_pathways_used():
-  logging.warning("pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes.")
+  logging.warning(
+      "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
+  )
   proxy_backend.register_backend_factory()
   profiling.monkey_patch_jax()
-  # pathways_orbax_handler.register_pathways_handlers(
-  #     datetime.timedelta(minutes=10)
-  # )
+  # TODO(b/365549911): Remove when OCDBT-compatible
+  if _is_persistence_enabled():
+    pathways_orbax_handler.register_pathways_handlers(
+        datetime.timedelta(minutes=10)
+    )
   cloud_logging.setup()
 else:
   logging.warning(
-      "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes applied."
+      "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
+      " applied."
   )
