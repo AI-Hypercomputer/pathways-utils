@@ -146,7 +146,7 @@ def write_one_array(
       location, name, value, timeout.total_seconds()
   )
   write_executable = plugin_executable.PluginExecutable(write_request)
-  _, write_future = write_executable.call([[value]])
+  _, write_future = write_executable.call([value])
   return write_future
 
 

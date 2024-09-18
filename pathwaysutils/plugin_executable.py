@@ -15,7 +15,7 @@
 
 import concurrent.futures
 import threading
-from typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple, Union
 
 import jax
 from jax._src.interpreters import pxla
@@ -33,7 +33,7 @@ class PluginExecutable:
 
   def call(
       self,
-      in_arr: Sequence[List[jax.Array]] = (),
+      in_arr: Sequence[Union[jax.Array, List[jax.Array]]] = (),
       out_shardings: Sequence[jax.sharding.XLACompatibleSharding] = (),
       out_avals: Sequence[jax.core.ShapedArray] = (),
       out_committed: bool = True,
