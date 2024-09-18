@@ -55,7 +55,10 @@ if _is_pathways_used():
     pathways_orbax_handler.register_pathways_handlers(
         datetime.timedelta(minutes=10)
     )
-  cloud_logging.setup()
+  try:
+    cloud_logging.setup()
+  except OSError as e:
+    logging.warning("pathwaysutils: Failed to set up cloud logging.")
 else:
   logging.warning(
       "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
