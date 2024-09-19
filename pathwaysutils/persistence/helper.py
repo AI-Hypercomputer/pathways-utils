@@ -86,6 +86,11 @@ def get_write_request(
   """Returns a string representation of the plugin program which writes the given jax_array to the given location."""
   sharding = jax_array.sharding
   assert isinstance(sharding, jax.sharding.Sharding), sharding
+
+  timeout_seconds, timeout_fractional_seconds = divmod(
+      timeout.total_seconds(), 1
+  )
+  timeout_nanoseconds = timeout_fractional_seconds * 1e9
   return json.dumps({
       "persistenceWriteRequest": {
           "b64_location": string_to_base64(location_path),
@@ -103,8 +108,8 @@ def get_write_request(
               ],
           },
           "timeout": {
-              "seconds": timeout.seconds,
-              "nano": timeout.microseconds * 1000,
+              "seconds": int(timeout_seconds),
+              "nanos": int(timeout_nanoseconds),
           },
       }
   })
@@ -122,6 +127,11 @@ def get_read_request(
   """Returns a string representation of the plugin program which reads the given array from the given location into the provided sharding."""
   if not isinstance(devices, np.ndarray):
     devices = np.array(devices)
+
+  timeout_seconds, timeout_fractional_seconds = divmod(
+      timeout.total_seconds(), 1
+  )
+  timeout_nanoseconds = timeout_fractional_seconds * 1e9
   return json.dumps({
       "persistenceReadRequest": {
           "b64_location": string_to_base64(location_path),
@@ -134,8 +144,8 @@ def get_read_request(
               "device_ids": [device.id for device in devices.flatten()]
           },
           "timeout": {
-              "seconds": timeout.seconds,
-              "nano": timeout.microseconds * 1000,
+              "seconds": int(timeout_seconds),
+              "nanos": int(timeout_nanoseconds),
           },
       }
   })
