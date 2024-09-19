@@ -19,7 +19,7 @@ from typing import List, Sequence, Tuple, Union
 
 import jax
 from jax._src.interpreters import pxla
-from jaxlib import xla_client
+from jax.extend.ifrt_programs import ifrt_programs
 
 
 class PluginExecutable:
@@ -27,8 +27,8 @@ class PluginExecutable:
 
   def __init__(self, prog_str: str):
     ifrt_client = jax.local_devices()[0].client
-    program = xla_client.ifrt_programs.make_plugin_program(prog_str)
-    options = xla_client.ifrt_programs.make_plugin_compile_options()
+    program = ifrt_programs.make_plugin_program(prog_str)
+    options = ifrt_programs.make_plugin_compile_options()
     self.compiled = ifrt_client.compile_ifrt_program(program, options)
 
   def call(
