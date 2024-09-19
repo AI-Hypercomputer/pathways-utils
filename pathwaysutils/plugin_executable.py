@@ -34,7 +34,7 @@ class PluginExecutable:
   def call(
       self,
       in_arr: Sequence[Union[jax.Array, List[jax.Array]]] = (),
-      out_shardings: Sequence[jax.sharding.XLACompatibleSharding] = (),
+      out_shardings: Sequence[jax.sharding.Sharding] = (),
       out_avals: Sequence[jax.core.ShapedArray] = (),
       out_committed: bool = True,
   ) -> Tuple[Sequence[jax.Array], concurrent.futures.Future[None]]:

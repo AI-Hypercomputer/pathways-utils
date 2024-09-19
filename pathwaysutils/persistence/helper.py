@@ -50,7 +50,7 @@ def string_to_base64(text: str) -> str:
 
 
 def get_hlo_sharding_string(
-    sharding: jax.sharding.XLACompatibleSharding,
+    sharding: jax.sharding.Sharding,
     num_dimensions: int,
 ) -> str:
   """Serializes the sharding to an hlo-sharding, encodes it to base64 and returns the base-64 as an utf-8 string."""
@@ -85,7 +85,7 @@ def get_write_request(
 ) -> str:
   """Returns a string representation of the plugin program which writes the given jax_array to the given location."""
   sharding = jax_array.sharding
-  assert isinstance(sharding, jax.sharding.XLACompatibleSharding), sharding
+  assert isinstance(sharding, jax.sharding.Sharding), sharding
   return json.dumps({
       "persistenceWriteRequest": {
           "b64_location": string_to_base64(location_path),
@@ -112,7 +112,7 @@ def get_read_request(
     name: str,
     dtype: np.dtype,
     shape: Sequence[int],
-    sharding: jax.sharding.XLACompatibleSharding,
+    sharding: jax.sharding.Sharding,
     devices: Sequence[jax.Device],
     timeout_seconds: int,
 ) -> str:
@@ -155,7 +155,7 @@ def read_one_array(
     name: str,
     dtype: np.dtype,
     shape: Sequence[int],
-    shardings: jax.sharding.XLACompatibleSharding,
+    shardings: jax.sharding.Sharding,
     devices: Union[Sequence[jax.Device], np.ndarray],
     timeout: datetime.timedelta,
 ):
