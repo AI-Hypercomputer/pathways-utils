@@ -81,7 +81,7 @@ def get_write_request(
     location_path: str,
     name: str,
     jax_array: jax.Array,
-    timeout: int,
+    timeout: datetime.timedelta,
 ) -> str:
   """Returns a string representation of the plugin program which writes the given jax_array to the given location."""
   sharding = jax_array.sharding
@@ -102,7 +102,10 @@ def get_write_request(
                   # pylint:enable=protected-access
               ],
           },
-          "timeout": {"seconds": timeout},
+          "timeout": {
+              "seconds": timeout.seconds,
+              "nano": timeout.microseconds * 1000,
+          },
       }
   })
 
@@ -114,7 +117,7 @@ def get_read_request(
     shape: Sequence[int],
     sharding: jax.sharding.Sharding,
     devices: Sequence[jax.Device],
-    timeout_seconds: int,
+    timeout: datetime.timedelta,
 ) -> str:
   """Returns a string representation of the plugin program which reads the given array from the given location into the provided sharding."""
   if not isinstance(devices, np.ndarray):
@@ -130,7 +133,10 @@ def get_read_request(
           "devices": {
               "device_ids": [device.id for device in devices.flatten()]
           },
-          "timeout": {"seconds": timeout_seconds},
+          "timeout": {
+              "seconds": timeout.seconds,
+              "nano": timeout.microseconds * 1000,
+          },
       }
   })
 
@@ -142,9 +148,7 @@ def write_one_array(
     timeout: datetime.timedelta,
 ):
   """Creates the write array plugin program string, compiles it to an executable, calls it and returns an awaitable future."""
-  write_request = get_write_request(
-      location, name, value, timeout.total_seconds()
-  )
+  write_request = get_write_request(location, name, value, timeout)
   write_executable = plugin_executable.PluginExecutable(write_request)
   _, write_future = write_executable.call([value])
   return write_future
@@ -167,7 +171,7 @@ def read_one_array(
       shape,
       shardings,
       devices,
-      timeout.total_seconds(),
+      timeout,
   )
   read_executable = plugin_executable.PluginExecutable(read_request)
   out_aval = core.ShapedArray(shape, dtype)
