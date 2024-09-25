@@ -15,7 +15,7 @@
 
 import jax
 from jax._src import xla_bridge
-from jax.lib.xla_extension import ifrt_proxy
+from jaxlib.xla_extension import ifrt_proxy
 
 
 def register_backend_factory():
