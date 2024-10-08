@@ -24,8 +24,6 @@ from jax import numpy as jnp
 from pathwaysutils import plugin_executable
 import uvicorn
 
-logging.set_verbosity(logging.INFO)
-
 
 class _ProfileState:
   def __init__(self):
@@ -102,7 +100,7 @@ def start_server(port: int):
     port : The port to start the server on.
   """
   def server_loop(port: int):
-    logging.info("Starting JAX profiler server on port %s", port)
+    logging.debug("Starting JAX profiler server on port %s", port)
     app = fastapi.FastAPI()
 
     @dataclasses.dataclass
@@ -111,9 +109,9 @@ def start_server(port: int):
       repository_path: str
 
     @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig):
-      logging.info("Capturing profiling data for %s ms", pc.duration_ms)
-      logging.info("Writing profiling data to %s", pc.repository_path)
+    async def profiling(pc: ProfilingConfig):  # pylint: disable=unused-variable
+      logging.debug("Capturing profiling data for %s ms", pc.duration_ms)
+      logging.debug("Writing profiling data to %s", pc.repository_path)
       jax.profiler.start_trace(pc.repository_path)
       time.sleep(pc.duration_ms / 1e3)
       jax.profiler.stop_trace()
@@ -158,25 +156,27 @@ def monkey_patch_jax():
       create_perfetto_link: bool = False,  # pylint: disable=unused-argument
       create_perfetto_trace: bool = False,  # pylint: disable=unused-argument
   ) -> None:
-    logging.info("jax.profile.start_trace patched with pathways' start_trace")
+    logging.debug("jax.profile.start_trace patched with pathways' start_trace")
     return start_trace(log_dir)
 
   jax.profiler.start_trace = start_trace_patch
 
   def stop_trace_patch() -> None:
-    logging.info("jax.profile.stop_trace patched with pathways' stop_trace")
+    logging.debug("jax.profile.stop_trace patched with pathways' stop_trace")
     return stop_trace()
 
   jax.profiler.stop_trace = stop_trace_patch
 
   def start_server_patch(port: int):
-    logging.info("jax.profile.start_server patched with pathways' start_server")
+    logging.debug(
+        "jax.profile.start_server patched with pathways' start_server"
+    )
     return start_server(port)
 
   jax.profiler.start_server = start_server_patch
 
   def stop_server_patch():
-    logging.info("jax.profile.stop_server patched with pathways' stop_server")
+    logging.debug("jax.profile.stop_server patched with pathways' stop_server")
     return stop_server()
 
   jax.profiler.stop_server = stop_server_patch

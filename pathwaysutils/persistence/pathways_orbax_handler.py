@@ -180,7 +180,7 @@ def register_pathways_handlers(
     read_timeout: Optional[datetime.timedelta] = None,
 ):
   """Function that must be called before saving or restoring with Pathways."""
-  logging.warning(
+  logging.debug(
       'Registering CloudPathwaysArrayHandler (Pathways Persistence API).'
   )
   type_handlers.register_type_handler(

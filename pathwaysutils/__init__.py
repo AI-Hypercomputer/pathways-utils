@@ -45,7 +45,7 @@ def _is_persistence_enabled():
 
 
 if _is_pathways_used():
-  logging.warning(
+  logging.debug(
       "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
   )
   proxy_backend.register_backend_factory()
@@ -58,9 +58,9 @@ if _is_pathways_used():
   try:
     cloud_logging.setup()
   except OSError as e:
-    logging.warning("pathwaysutils: Failed to set up cloud logging.")
+    logging.debug("pathwaysutils: Failed to set up cloud logging.")
 else:
-  logging.warning(
+  logging.debug(
       "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
       " applied."
   )
