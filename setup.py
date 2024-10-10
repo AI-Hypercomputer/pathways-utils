@@ -17,7 +17,7 @@ import setuptools
 
 setuptools.setup(
     name='pathwaysutils',
-    version='0.0.5',
+    version='0.0.6',
     description='Pathways-on-Cloud utilities',
     packages=setuptools.find_packages(),  # Automatically find packages
     # Add any dependencies your package needs here:
