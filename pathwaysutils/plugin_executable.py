@@ -19,7 +19,7 @@ from typing import List, Sequence, Tuple, Union
 
 import jax
 from jax._src.interpreters import pxla
-from jaxlib.xla_extension import ifrt_programs
+from jax.extend.ifrt_programs import ifrt_programs
 
 
 class PluginExecutable:
