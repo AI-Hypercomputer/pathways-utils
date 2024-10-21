@@ -1,0 +1,58 @@
+[project]
+# Project metadata. Available keys are documented at:
+# https://packaging.python.org/en/latest/specifications/declaring-project-metadata
+name = "pathwaysutils"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [{name = "Pathways-on-Cloud Utilities Developers", email="pathwaysutils-dev@google.com"}]
+classifiers = [  # List of https://pypi.org/classifiers/
+    "License :: OSI Approved :: Apache Software License",
+]
+keywords = []
+
+dependencies = [
+    "absl-py",
+    "fastapi",
+    "google-cloud-logging",
+    "jax>=0.4.26",
+    "orbax-checkpoint",
+    "uvicorn",
+]
+
+# `version` is automatically set by flit to use `my_project.__version__`
+# `description` is automatically set by flit to use `my_project.__doc__`
+dynamic = ["version", "description"]
+
+[project.urls]
+homepage = "https://github.com/AI-Hypercomputer/pathways-utils"
+repository = "https://github.com/AI-Hypercomputer/pathways-utils"
+changelog = "https://github.com/AI-Hypercomputer/pathways-utils/blob/main/CHANGELOG.md"
+# documentation = ""
+
+[project.optional-dependencies]
+# Development deps (unittest, linting, formating,...)
+# Installed through `pip install -e .[dev]`
+dev = [
+    "pytest",
+    "pytest-xdist",
+    "pylint>=2.6.0",
+    "pyink",
+]
+
+[tool.pyink]
+# Formatting configuration to follow Google style-guide
+line-length = 80
+unstable = true
+pyink-indentation = 2
+pyink-use-majority-quotes = true
+
+[build-system]
+requires = ["flit_core >=3.8,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.flit.sdist]
+exclude = [
+  "**/*_test.py",
+]
+
