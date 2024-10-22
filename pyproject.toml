@@ -34,8 +34,6 @@ changelog = "https://github.com/AI-Hypercomputer/pathways-utils/blob/main/CHANGE
 # Development deps (unittest, linting, formating,...)
 # Installed through `pip install -e .[dev]`
 dev = [
-    "pytest",
-    "pytest-xdist",
     "pylint>=2.6.0",
     "pyink",
 ]
