@@ -24,6 +24,8 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 ## [Unreleased]
 * Updated `setup.py` to `pyproject.toml`
 * Added this changelog
+* Added unittests
+* Prepared for PyPI release
 
 ## [0.0.6] - 2024-10-10
 * Decreased logging severity for most logs
