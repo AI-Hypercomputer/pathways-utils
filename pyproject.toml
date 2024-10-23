@@ -51,6 +51,6 @@ build-backend = "flit_core.buildapi"
 
 [tool.flit.sdist]
 exclude = [
-  "**/*_test.py",
+  "**/test",
 ]
 
