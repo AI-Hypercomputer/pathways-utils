@@ -26,7 +26,7 @@ from pathwaysutils.persistence import pathways_orbax_handler
 
 # A new PyPI release will be pushed every time `__version__` is increased.
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.0.6"
+__version__ = "v0.0.7"
 
 
 #  This is a brittle implementation since the platforms value is not necessarily
