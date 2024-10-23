@@ -37,7 +37,7 @@ jobs:
     # * Repo is self (prevents running from forks)
     # * Branch is `main`
     if: |
-      github.repository == 'google/etils'
+      github.repository == 'AI-Hypercomputer/pathways-utils'
       && github.ref == 'refs/heads/main'
     needs: unittest-job  # Only publish after tests are successful
     runs-on: ubuntu-latest
