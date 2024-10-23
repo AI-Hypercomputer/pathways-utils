@@ -22,6 +22,8 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 -->
 
 ## [Unreleased]
+
+## [0.0.7] - 2024-10-23
 * Updated `setup.py` to `pyproject.toml`
 * Added this changelog
 * Added unittests
@@ -32,5 +34,5 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 * Persistence enabled
 * General argument type fixes
 
-[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.0.7...HEAD
 
