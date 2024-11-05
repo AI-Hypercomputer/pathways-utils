@@ -22,7 +22,7 @@ from typing import Optional, Sequence
 from absl import logging
 import jax
 from orbax.checkpoint import future
-from orbax.checkpoint import type_handlers
+from orbax.checkpoint._src.serialization import type_handlers
 from pathwaysutils.persistence import helper
 
 ParamInfo = type_handlers.ParamInfo
