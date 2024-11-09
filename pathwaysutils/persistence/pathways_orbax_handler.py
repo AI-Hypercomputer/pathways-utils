@@ -142,8 +142,9 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       inputs_by_global_mesh[global_mesh].append(i)
 
     results = [None] * len(infos)
-
-    for global_mesh, idxs in inputs_by_global_mesh.items():
+    
+    logging.warning(f"[ksadi] restore loop will take {len(inputs_by_global_mesh.items())} iterations")
+    for i, global_mesh, idxs in enumerate(inputs_by_global_mesh.items()):
       grouped_infos = [infos[idx] for idx in idxs]
       grouped_global_shapes = [global_shapes[idx] for idx in idxs]
       grouped_dtypes = [dtypes[idx] for idx in idxs]
@@ -178,6 +179,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
           array_and_future[1] for array_and_future in grouped_arrays_and_futures
       ]
 
+      logging.warning(f"for loop {i}, {len(futures)} being waited on")
       _ = concurrent.futures.wait(
           futures, return_when=concurrent.futures.ALL_COMPLETED
       )
