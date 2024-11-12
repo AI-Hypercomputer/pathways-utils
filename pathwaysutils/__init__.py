@@ -60,6 +60,11 @@ if _is_pathways_used():
     pathways_orbax_handler.register_pathways_handlers(
         datetime.timedelta(minutes=10)
     )
+
+  # Turn off JAX compilation cache because Pathways handles its own compilation
+  # cache.
+  jax.config.update("jax_enable_compilation_cache", False)
+
   try:
     cloud_logging.setup()
   except OSError as e:
