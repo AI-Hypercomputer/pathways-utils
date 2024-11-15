@@ -25,6 +25,7 @@ import jax
 from orbax.checkpoint import future
 from orbax.checkpoint import type_handlers
 from pathwaysutils.persistence import helper
+import pathwaysutils
 
 ParamInfo = type_handlers.ParamInfo
 SaveArgs = type_handlers.SaveArgs
@@ -83,6 +84,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       args: Optional[Sequence[RestoreArgs]] = None,
   ) -> Sequence[jax.Array]:
     """Uses Pathways Persistence API to deserialize a jax array."""
+    jax.profiler.start_trace("gs://ksadi-checkpoints-us-east5/profiles")
     if args is None:
       raise ValueError("Must provide ArrayRestoreArgs to restore as jax.Array.")
     type_handlers.check_input_arguments(infos, args)
@@ -150,6 +152,8 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       grouped_dtypes = [dtypes[idx] for idx in idxs]
       grouped_shardings = [shardings[idx] for idx in idxs]
       locations, names = extract_parent_dir_and_name(grouped_infos)
+
+      
       f = functools.partial(
           helper.read_one_array,
           devices=global_mesh.devices,
@@ -187,6 +191,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
       for idx, arr in zip(idxs, grouped_arrays):
         results[idx] = arr
+    jax.profiler.stop_trace()
     return results  # pytype: disable=bad-return-type
 
 
