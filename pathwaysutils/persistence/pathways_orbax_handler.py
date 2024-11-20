@@ -16,14 +16,17 @@
 import collections
 import datetime
 import functools
+import logging
 import typing
 from typing import Optional, Sequence
 
-from absl import logging
 import jax
 from orbax.checkpoint import future
 from orbax.checkpoint import type_handlers
 from pathwaysutils.persistence import helper
+
+
+logger = logging.getLogger(__name__)
 
 ParamInfo = type_handlers.ParamInfo
 SaveArgs = type_handlers.SaveArgs
@@ -121,7 +124,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
         mesh_axes.append(sharding.spec)
         shardings.append(sharding)
       if arg.global_shape is None or arg.dtype is None:
-        logging.warning(
+        logger.warning(
             'Shape or dtype not provided for restoration. Provide these'
             ' properties for improved performance.'
         )
@@ -180,7 +183,7 @@ def register_pathways_handlers(
     read_timeout: Optional[datetime.timedelta] = None,
 ):
   """Function that must be called before saving or restoring with Pathways."""
-  logging.debug(
+  logger.debug(
       'Registering CloudPathwaysArrayHandler (Pathways Persistence API).'
   )
   type_handlers.register_type_handler(

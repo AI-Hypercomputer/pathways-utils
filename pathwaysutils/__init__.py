@@ -14,15 +14,17 @@
 """Package of Pathways-on-Cloud utilities."""
 
 import datetime
+import logging
 import os
 
-from absl import logging
 import jax
 from pathwaysutils import cloud_logging
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
 from pathwaysutils.persistence import pathways_orbax_handler
 
+
+logger = logging.getLogger(__name__)
 
 # A new PyPI release will be pushed every time `__version__` is increased.
 # When changing this, also update the CHANGELOG.md.
@@ -50,7 +52,7 @@ def _is_persistence_enabled():
 
 
 if _is_pathways_used():
-  logging.debug(
+  logger.debug(
       "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
   )
   proxy_backend.register_backend_factory()
@@ -68,9 +70,9 @@ if _is_pathways_used():
   try:
     cloud_logging.setup()
   except OSError as e:
-    logging.debug("pathwaysutils: Failed to set up cloud logging.")
+    logger.debug("pathwaysutils: Failed to set up cloud logging.")
 else:
-  logging.debug(
+  logger.debug(
       "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
       " applied."
   )
