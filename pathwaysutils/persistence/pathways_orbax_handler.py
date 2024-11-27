@@ -165,14 +165,16 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
             )
 
             grouped_arrays_and_futures = None
-            from functools import partial
-            args_list = [[location, name, dtype, shape, sharding] for location, name, dtype, shape, sharding in zip(
-                        locations,
-                        names,
-                        grouped_dtypes,
-                        grouped_global_shapes,
-                        grouped_shardings,
-                    )]
+            args_list = [
+                [location, name, dtype, shape, sharding]
+                for location, name, dtype, shape, sharding in zip(
+                    locations,
+                    names,
+                    grouped_dtypes,
+                    grouped_global_shapes,
+                    grouped_shardings,
+                )
+            ]
             with Pool() as p:
                 grouped_arrays_and_futures = p.apply(f, args_list)
             # grouped_arrays_and_futures = [
