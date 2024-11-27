@@ -176,7 +176,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
                 )
             ]
             with Pool() as p:
-                grouped_arrays_and_futures = p.apply(f, args_list)
+                grouped_arrays_and_futures = p.map(f, args_list)
             # grouped_arrays_and_futures = [
             #     f(
             #         location=location,
