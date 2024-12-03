@@ -155,7 +155,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
             grouped_shardings = [shardings[idx] for idx in idxs]
             locations, names = extract_parent_dir_and_name(grouped_infos)
             grouped_arrays = helper.read_arrays(
-                location[0],
+                locations[0],
                 names,
                 grouped_dtypes,
                 grouped_global_shapes,
