@@ -154,7 +154,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
             grouped_dtypes = [dtypes[idx] for idx in idxs]
             grouped_shardings = [shardings[idx] for idx in idxs]
             locations, names = extract_parent_dir_and_name(grouped_infos)
-            grouped_arrays = helper.read_arrays(
+            grouped_arrays, read_future = helper.read_arrays(
                 locations[0],
                 names,
                 grouped_dtypes,
@@ -163,6 +163,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
                 global_mesh.devices,
                 timeout=self._read_timeout,
             )
+            read_future.result()
             # f = functools.partial(
             #     helper.read_one_array,
             #     devices=global_mesh.devices,
