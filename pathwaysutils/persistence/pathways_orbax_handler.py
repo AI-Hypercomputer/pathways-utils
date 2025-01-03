@@ -60,7 +60,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     self._read_timeout = read_timeout
 
     if use_ocdbt:
-      raise ValueError('OCDBT not supported for Pathways.')
+      raise ValueError("OCDBT not supported for Pathways.")
     super().__init__()
 
   async def serialize(
@@ -73,12 +73,10 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     type_handlers.check_input_arguments(values, infos, args)
 
     if any([arg.dtype is not None for arg in args]):
-      raise ValueError('Casting during save not supported for Pathways.')
+      raise ValueError("Casting during save not supported for Pathways.")
 
     locations, names = extract_parent_dir_and_name(infos)
-    f = functools.partial(
-        helper.write_one_array, timeout=self._read_timeout
-    )
+    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
     return list(map(f, locations, names, values))
 
   async def deserialize(
@@ -88,7 +86,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
   ) -> Sequence[jax.Array]:
     """Uses Pathways Persistence API to deserialize a jax array."""
     if args is None:
-      raise ValueError('Must provide ArrayRestoreArgs to restore as jax.Array.')
+      raise ValueError("Must provide ArrayRestoreArgs to restore as jax.Array.")
     type_handlers.check_input_arguments(infos, args)
 
     global_meshes = []
@@ -101,14 +99,14 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     for arg in args:
       if not isinstance(arg, ArrayRestoreArgs):
         raise ValueError(
-            'To restore jax.Array, provide ArrayRestoreArgs; found'
-            f' {type(arg).__name__}'
+            "To restore jax.Array, provide ArrayRestoreArgs; found"
+            f" {type(arg).__name__}"
         )
       arg = typing.cast(ArrayRestoreArgs, arg)
       if arg.sharding is None and (arg.mesh is None or arg.mesh_axes is None):
         raise ValueError(
-            'Sharding of jax.Array cannot be None. Provide `mesh`'
-            ' and `mesh_axes` OR `sharding`.'
+            "Sharding of jax.Array cannot be None. Provide `mesh`"
+            " and `mesh_axes` OR `sharding`."
         )
       if arg.sharding is None:
         global_meshes.append(arg.mesh)
@@ -118,15 +116,15 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
         )
       else:
         if not isinstance(arg.sharding, jax.sharding.NamedSharding):
-          raise ValueError('Pathways only supports jax.sharding.NamedSharding.')
+          raise ValueError("Pathways only supports jax.sharding.NamedSharding.")
         sharding = typing.cast(jax.sharding.NamedSharding, arg.sharding)
         global_meshes.append(sharding.mesh)
         mesh_axes.append(sharding.spec)
         shardings.append(sharding)
       if arg.global_shape is None or arg.dtype is None:
         logger.warning(
-            'Shape or dtype not provided for restoration. Provide these'
-            ' properties for improved performance.'
+            "Shape or dtype not provided for restoration. Provide these"
+            " properties for improved performance."
         )
         should_open_metadata = True
       global_shapes.append(arg.global_shape)
@@ -153,27 +151,17 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       grouped_dtypes = [dtypes[idx] for idx in idxs]
       grouped_shardings = [shardings[idx] for idx in idxs]
       locations, names = extract_parent_dir_and_name(grouped_infos)
-      f = functools.partial(
-          helper.read_one_array,
-          devices=global_mesh.devices,
+      grouped_arrays, read_future = helper.read_arrays(
+          locations[0],
+          names,
+          grouped_dtypes,
+          grouped_global_shapes,
+          grouped_shardings,
+          global_mesh.devices,
           timeout=self._read_timeout,
       )
-      grouped_arrays = [
-          f(
-              location=location,
-              name=name,
-              dtype=dtype,
-              shape=shape,
-              shardings=sharding,
-          )
-          for location, name, dtype, shape, sharding in zip(
-              locations,
-              names,
-              grouped_dtypes,
-              grouped_global_shapes,
-              grouped_shardings,
-          )
-      ]
+      # each persistence call is awaited serially.
+      read_future.result()
       for idx, arr in zip(idxs, grouped_arrays):
         results[idx] = arr
     return results  # pytype: disable=bad-return-type
@@ -184,7 +172,7 @@ def register_pathways_handlers(
 ):
   """Function that must be called before saving or restoring with Pathways."""
   logger.debug(
-      'Registering CloudPathwaysArrayHandler (Pathways Persistence API).'
+      "Registering CloudPathwaysArrayHandler (Pathways Persistence API)."
   )
   type_handlers.register_type_handler(
       jax.Array,
