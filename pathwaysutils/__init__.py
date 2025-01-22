@@ -60,7 +60,7 @@ if _is_pathways_used():
   # TODO(b/365549911): Remove when OCDBT-compatible
   if _is_persistence_enabled():
     pathways_orbax_handler.register_pathways_handlers(
-        datetime.timedelta(minutes=10)
+        datetime.timedelta(hours=1)
     )
 
   # Turn off JAX compilation cache because Pathways handles its own compilation
