@@ -21,35 +21,34 @@ from typing import Any, Sequence, Tuple, Union
 
 import jax
 from jax import core
-from jax.lib import xla_client as xc
 import numpy as np
 from pathwaysutils import plugin_executable
 
 
-def dtype_to_etype(dtype: np.dtype) -> xc.PrimitiveType:
+def dtype_to_xla_primitive_type_str(dtype: np.dtype) -> str:
   """Converts a numpy dtype to an xla PrimitiveType."""
   if dtype == np.dtype("bfloat16"):
-    return xc.PrimitiveType.BF16
+    return "BF16"
   elif dtype == np.dtype("float32"):
-    return xc.PrimitiveType.F32
+    return "F32"
   elif dtype == np.dtype("float64"):
-    return xc.PrimitiveType.F64
+    return "F64"
   elif dtype == np.dtype("int8"):
-    return xc.PrimitiveType.S8
+    return "S8"
   elif dtype == np.dtype("int16"):
-    return xc.PrimitiveType.S16
+    return "S16"
   elif dtype == np.dtype("int32"):
-    return xc.PrimitiveType.S32
+    return "S32"
   elif dtype == np.dtype("int64"):
-    return xc.PrimitiveType.S64
+    return "S64"
   elif dtype == np.dtype("uint8"):
-    return xc.PrimitiveType.U8
+    return "U8"
   elif dtype == np.dtype("uint16"):
-    return xc.PrimitiveType.U16
+    return "U16"
   elif dtype == np.dtype("uint32"):
-    return xc.PrimitiveType.U32
+    return "U32"
   elif dtype == np.dtype("uint64"):
-    return xc.PrimitiveType.U64
+    return "U64"
   else:
     raise ValueError(f"Unsupported dtype: {dtype}")
 
@@ -91,19 +90,15 @@ def get_hlo_sharding_string(
   )
 
 
-def get_shape_string(
+def get_shape_info(
     dtype: np.dtype,
-    shape: Sequence[int],
-) -> str:
-  """Serializes the shape, encodes it to base64 and returns the base-64 as an utf-8 string."""
-  return base64_utf8_stringify(
-      xc.Shape.array_shape(
-          xc.PrimitiveType(dtype_to_etype(dtype)),
-          shape,
-      )
-      .with_major_to_minor_layout_if_absent()
-      .to_serialized_proto()
-  )
+    dimensions: Sequence[int],
+) -> dict[str, Union[Sequence[int], str]]:
+  """Returns shape info in the format expected by read requests."""
+  return {
+      "xla_primitive_type_str": dtype_to_xla_primitive_type_str(dtype),
+      "dimensions": dimensions,
+  }
 
 
 def get_write_request(
@@ -188,7 +183,7 @@ def get_read_request(
   d = {
       "persistenceReadRequest": {
           "b64_location": string_to_base64(location_path),
-          "b64_shape_proto_string": get_shape_string(dtype, shape),
+          "shape": get_shape_info(dtype, shape),
           "b64_name": string_to_base64(name),
           "b64_hlo_sharding_string": get_hlo_sharding_string(
               sharding, len(shape)
