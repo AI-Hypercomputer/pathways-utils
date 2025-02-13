@@ -13,6 +13,10 @@ XlaRuntimeError = jax.errors.JaxRuntimeError
 
 class PluginExecutableTest(absltest.TestCase):
 
+  def setUp(self):
+    jax.config.update("jax_platforms", "cpu")
+    super().setUp()
+
   def test_bad_json_program(self):
     with self.assertRaisesRegex(XlaRuntimeError, "INVALID_ARGUMENT"):
       PluginExecutable('{"printTextRequest":{"badParamName":"foo"}}')

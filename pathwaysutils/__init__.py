@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # A new PyPI release will be pushed every time `__version__` is increased.
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.0.7"
+__version__ = "v0.0.8"
 
 
 #  This is a brittle implementation since the platforms value is not necessarily

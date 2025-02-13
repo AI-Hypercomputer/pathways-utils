@@ -14,7 +14,11 @@ class PersistenceTest(absltest.TestCase):
   name = "name"
   dtype = np.dtype(np.int32)
   shape = [8, 4]
-  timeout = datetime.timedelta(seconds=30)
+  timeout = datetime.timedelta(seconds=3)
+
+  def setUp(self):
+    jax.config.update("jax_platforms", "cpu")
+    super().setUp()
 
   def test_get_read_request(self):
     devices = jax.devices()
