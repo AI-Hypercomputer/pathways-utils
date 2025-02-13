@@ -31,24 +31,37 @@ jobs:
     - name: Run core tests
       run: python -m unittest discover --pattern "*_test.py" --start-directory "pathwaysutils/test"
 
-  # Auto-publish when version is increased
-  publish-job:
-    # Only try to publish if:
-    # * Repo is self (prevents running from forks)
-    # * Branch is `main`
-    if: |
-      github.repository == 'AI-Hypercomputer/pathways-utils'
-      && github.ref == 'refs/heads/main'
+  publish-to-testpypi:
+    if: ${{inputs.testpypi}} == true
+    name: Publish Python distribution to TestPyPI
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/pathwaysutils
+    permissions:
+      id-token: write
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+    - name: Publish distribution 📦 to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        verbose: true
+
+  publish-to-pypi:
+    name: Publish Python distribution to PyPI
+    if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
     needs: unittest-job  # Only publish after tests are successful
     runs-on: ubuntu-latest
+    environment:
+      # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/#configuring-trusted-publishing
+      name: pypi
+      url: https://pypi.org/p/pathwaysutils  # Replace <package-name> with your PyPI project name
     permissions:
-      contents: write
-    timeout-minutes: 30
-
-    steps:
-    # Publish the package (if local `__version__` > pip version)
-    - uses: etils-actions/pypi-auto-publish@v1
-      with:
-        pypi-token: ${{ secrets.PYPI_API_TOKEN }}
-        gh-token: ${{ secrets.GH_TOKEN }}
-        parse-changelog: true
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
