@@ -1,0 +1,47 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License
+#
+name: Unittests
+
+# Allow to trigger the workflow manually (e.g. when deps changes)
+on: [push, workflow_dispatch]
+
+jobs:
+  unittest-job:
+    name: Unittests
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.python-version }}
+      cancel-in-progress: true
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # Install deps
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - run: pip --version
+    - run: pip install -e .
+    - run: pip freeze
+
+    # Run tests
+    - name: Run core tests
+      run: python -m unittest discover --pattern "*_test.py" --start-directory "pathwaysutils/test"
