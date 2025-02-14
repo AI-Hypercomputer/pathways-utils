@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-name: PyPI releases
+name: Build Wheel and PyPI releases
 on:
   workflow_dispatch:
     inputs:
@@ -37,8 +37,8 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.x"
+    - run: pip --version
     - name: Install pypa/build
-      run: pip --version
       run: pip install build
     - name: Clone pathwaysutils from tag
       if: github.event_name == 'worfklow_dispatch'
@@ -57,9 +57,7 @@ jobs:
   publish-to-testpypi:
     if: ${{inputs.testpypi}} == true
     name: Publish Python distribution to TestPyPI
-    uses: ./.github/workflows/test.yml
     needs:
-    - test
     - build
     runs-on: ubuntu-latest
     environment:
@@ -81,10 +79,8 @@ jobs:
 
   publish-to-pypi:
     name: Publish Python distribution to PyPI
-    uses: ./.github/workflows/test.yml
     if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
     needs:
-    - test
     - build
     runs-on: ubuntu-latest
     environment:
