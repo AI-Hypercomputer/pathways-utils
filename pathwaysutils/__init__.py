@@ -25,8 +25,7 @@ from pathwaysutils.persistence import pathways_orbax_handler
 
 
 logger = logging.getLogger(__name__)
-
-# A new PyPI release will be pushed every time `__version__` is increased.
+_initialized = False
 # When changing this, also update the CHANGELOG.md.
 __version__ = "v0.0.8"
 
@@ -51,28 +50,38 @@ def _is_persistence_enabled():
   return False
 
 
-if _is_pathways_used():
-  logger.debug(
-      "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
-  )
-  proxy_backend.register_backend_factory()
-  profiling.monkey_patch_jax()
-  # TODO(b/365549911): Remove when OCDBT-compatible
-  if _is_persistence_enabled():
-    pathways_orbax_handler.register_pathways_handlers(
-        datetime.timedelta(hours=1)
+def initialize():
+  """Initializes pathwaysutils."""
+  global _initialized
+  if _initialized:
+    return
+
+  _initialized = True
+
+  if _is_pathways_used():
+    logger.debug(
+        "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
+    )
+    proxy_backend.register_backend_factory()
+    profiling.monkey_patch_jax()
+    # TODO(b/365549911): Remove when OCDBT-compatible
+    if _is_persistence_enabled():
+      pathways_orbax_handler.register_pathways_handlers(
+          datetime.timedelta(hours=1)
+      )
+
+    # Turn off JAX compilation cache because Pathways handles its own
+    # compilation cache.
+    jax.config.update("jax_enable_compilation_cache", False)
+
+    try:
+      cloud_logging.setup()
+    except OSError as e:
+      logger.debug("pathwaysutils: Failed to set up cloud logging.")
+  else:
+    logger.debug(
+        "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
+        " applied."
     )
 
-  # Turn off JAX compilation cache because Pathways handles its own compilation
-  # cache.
-  jax.config.update("jax_enable_compilation_cache", False)
-
-  try:
-    cloud_logging.setup()
-  except OSError as e:
-    logger.debug("pathwaysutils: Failed to set up cloud logging.")
-else:
-  logger.debug(
-      "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
-      " applied."
-  )
+initialize()
