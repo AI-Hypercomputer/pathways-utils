@@ -14,11 +14,11 @@
 """TypeHandlers supporting Pathways backend."""
 
 import collections
+from collections.abc import Sequence
 import datetime
 import functools
 import logging
 import typing
-from typing import Optional, Sequence
 
 import jax
 from orbax.checkpoint import future
@@ -48,7 +48,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
   def __init__(
       self,
-      read_timeout: Optional[datetime.timedelta] = None,
+      read_timeout: datetime.timedelta | None = None,
       use_ocdbt: bool = False,
   ):
     """Constructor.
@@ -67,7 +67,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       self,
       values: Sequence[jax.Array],
       infos: Sequence[ParamInfo],
-      args: Optional[Sequence[SaveArgs]] = None,
+      args: Sequence[SaveArgs] | None = None,
   ) -> Sequence[future.Future]:
     """Uses Pathways Persistence API to serialize a jax array."""
     type_handlers.check_input_arguments(values, infos, args)
@@ -82,7 +82,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
   async def deserialize(
       self,
       infos: Sequence[ParamInfo],
-      args: Optional[Sequence[RestoreArgs]] = None,
+      args: Sequence[RestoreArgs] | None = None,
   ) -> Sequence[jax.Array]:
     """Uses Pathways Persistence API to deserialize a jax array."""
     if args is None:
@@ -168,7 +168,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
 
 def register_pathways_handlers(
-    read_timeout: Optional[datetime.timedelta] = None,
+    read_timeout: datetime.timedelta | None = None,
 ):
   """Function that must be called before saving or restoring with Pathways."""
   logger.debug(

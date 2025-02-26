@@ -21,7 +21,7 @@ import jax
 from pathwaysutils import cloud_logging
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
-from pathwaysutils.persistence import pathways_orbax_handler
+from pathwaysutils.persistence import orbax_handler
 
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,7 @@ if _is_pathways_used():
   profiling.monkey_patch_jax()
   # TODO(b/365549911): Remove when OCDBT-compatible
   if _is_persistence_enabled():
-    pathways_orbax_handler.register_pathways_handlers(
-        datetime.timedelta(hours=1)
-    )
+    orbax_handler.register_pathways_handlers(datetime.timedelta(hours=1))
 
   # Turn off JAX compilation cache because Pathways handles its own compilation
   # cache.
