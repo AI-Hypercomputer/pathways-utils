@@ -17,6 +17,8 @@ from typing import Any
 from typing import Callable, Sequence
 import jax
 
+PyTree = Any
+
 
 def default_put_array(
     arr: jax.Array,
@@ -29,12 +31,12 @@ def default_put_array(
 
 
 def reshard(
-    x: Any,
-    sharding: jax.sharding.Sharding | Any,
+    x: jax.Array | PyTree,
+    sharding: jax.sharding.Sharding | PyTree,
     *,
     donate_input: bool = False,
     put_array: (
-        Callable[[jax.Array, Sequence[jax.sharding.Sharding], bool], jax.Array]
+        Callable[[jax.Array, jax.sharding.Sharding, bool], jax.Array]
         | None
     ) = None,
 ) -> Any:
