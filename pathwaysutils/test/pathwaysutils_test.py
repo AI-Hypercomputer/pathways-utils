@@ -13,12 +13,48 @@
 # limitations under the License.
 
 import os
+from unittest import mock
+import warnings
+
 import jax
 import pathwaysutils
+from pathwaysutils import cloud_logging
+
 from absl.testing import absltest
+from absl.testing import parameterized
 
 
-class PathwaysutilsTest(absltest.TestCase):
+class PathwaysutilsTest(parameterized.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.mock_setup_logging = mock.patch.object(
+        cloud_logging, "setup", autospec=True
+    )
+
+  def test_legacy_initialize(self):
+    pathwaysutils._initialization_count = 0
+
+    with self.assertWarns(UserWarning, msg="Legacy initialization"):
+      pathwaysutils.initialize()
+
+  def test_legacy_and_new_initialize(self):
+    pathwaysutils._initialization_count = 1
+
+    with warnings.catch_warnings(record=True) as caught_warnings:
+      pathwaysutils.initialize()
+
+    self.assertEmpty(caught_warnings)
+
+  @parameterized.named_parameters(
+      ("initialization_count 2", 2),
+      ("initialization_count 5", 5),
+  )
+  def test_initialize_more_than_once(self, initialization_count):
+    pathwaysutils._initialization_count = initialization_count
+
+    with self.assertWarns(UserWarning, msg="Already initialized"):
+      pathwaysutils.initialize()
 
   def test_is_pathways_used(self):
     for platform in ["", "cpu", "tpu", "gpu", "cpu,tpu,gpu"]:
