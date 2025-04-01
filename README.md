@@ -10,7 +10,7 @@ This package handles the underlying adaptations required for the cloud environme
 # Further Reading
 [Pathways Research Paper](https://arxiv.org/abs/2203.12533)
 
-[Coming Soon]
+[More resources coming Soon]
 
 
 # How to get access to Pathways on Cloud
