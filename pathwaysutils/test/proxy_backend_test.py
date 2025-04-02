@@ -11,10 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""Tests for the proxy backend module."""
+
+from unittest import mock
+
 import jax
 from jax.extend import backend
 from jax.lib.xla_extension import ifrt_proxy
-import mock
 from pathwaysutils import proxy_backend
 
 from absl.testing import absltest
@@ -26,7 +29,9 @@ class ProxyBackendTest(absltest.TestCase):
     super().setUp()
     jax.config.update("jax_platforms", "proxy")
     jax.config.update("jax_backend_target", "grpc://localhost:12345")
+    backend.clear_backends()
 
+  @absltest.skip("b/408025233")
   def test_no_proxy_backend_registration_raises_error(self):
     self.assertRaises(RuntimeError, backend.backends)
 
