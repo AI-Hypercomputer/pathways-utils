@@ -128,7 +128,7 @@ Get the necessary code and scripts.
 
 ```bash
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
-cd pathwaysutils
+cd pathways-utils
 ```
 
 **2. Prepare Sidecar Dependencies**
