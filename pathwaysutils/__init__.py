@@ -28,7 +28,7 @@ from pathwaysutils.persistence import orbax_handler
 _logger = logging.getLogger(__name__)
 _initialization_count = 0
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.1.0"
+__version__ = "v0.0.8"
 
 
 #  This is a brittle implementation since the platforms value is not necessarily
