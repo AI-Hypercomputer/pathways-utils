@@ -1,4 +1,4 @@
-jax[cpu]>=0.4.26
+jax[cpu]>=0.5.1
 absl-py
 orbax-checkpoint
 uvicorn

@@ -23,6 +23,14 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.0] - 2025-04-07
+* Bump the JAX requirement to 0.5.1
+* Introduce `pathwaysutils.initialize()` to remove relying on side-effects from `import pathwaysutils`. by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/47
+* Add a test for proxy backend registration by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/55
+* Adding debugging utilities by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/57
+* Adding an elastic manager and reshard modules by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/58
+* Update README for Colocated Python Sidecar. by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/60
+
 ## [0.0.8] - 2024-02-12
 * Disabled JAX's compilation cache
 * Updated Orbax handler to use bulk APIs
@@ -39,5 +47,5 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 * Persistence enabled
 * General argument type fixes
 
-[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.1.0...HEAD
 
