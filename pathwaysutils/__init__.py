@@ -56,21 +56,15 @@ def initialize():
   global _initialization_count
   _initialization_count += 1
 
-  if _initialization_count == 1:
-    warnings.warn(
-        "pathwaysutils: Legacy initialization. Ensure you also call"
-        " pathwaysutils.initialize(). This warning will be removed in a future"
-        " release."
-    )
-
-  # Ignoring the second call to initialize() is a temporary measure so that this warning is not triggered for customers who are following our instructions and using the new initialize() function only once but have already had the legacy initialization triggered.
-  if _initialization_count > 2:
+  if _initialization_count > 1:
     warnings.warn(
         "pathwaysutils: Already initialized. Ignoring duplicate call."
     )
-
-  if _initialization_count > 1:
     return
+
+  _logger.info(
+      "pathwaysutils: Starting initialize."
+  )
 
   if _is_pathways_used():
     _logger.debug(
@@ -99,5 +93,3 @@ def initialize():
         "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
         " applied."
     )
-
-initialize()
