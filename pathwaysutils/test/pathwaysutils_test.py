@@ -32,14 +32,8 @@ class PathwaysutilsTest(parameterized.TestCase):
         cloud_logging, "setup", autospec=True
     )
 
-  def test_legacy_initialize(self):
+  def test_initialize(self):
     pathwaysutils._initialization_count = 0
-
-    with self.assertWarns(UserWarning, msg="Legacy initialization"):
-      pathwaysutils.initialize()
-
-  def test_legacy_and_new_initialize(self):
-    pathwaysutils._initialization_count = 1
 
     with warnings.catch_warnings(record=True) as caught_warnings:
       pathwaysutils.initialize()
@@ -47,7 +41,7 @@ class PathwaysutilsTest(parameterized.TestCase):
     self.assertEmpty(caught_warnings)
 
   @parameterized.named_parameters(
-      ("initialization_count 2", 2),
+      ("initialization_count 1", 1),
       ("initialization_count 5", 5),
   )
   def test_initialize_more_than_once(self, initialization_count):
