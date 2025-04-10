@@ -164,7 +164,7 @@ export JAX_VERSION=0.5.3
 docker build --build-arg JAX_VERSION=${JAX_VERSION} -t ${LOCAL_IMAGE_NAME} .
 ```
 
-Now you can upload the image to Google Artifact Registry.
+Now you can upload the image to Google Artifact Registry. If you do not have an Artifact Registry repository, please follow the instructions [here](https://cloud.google.com/artifact-registry/docs/repositories/create-repos) to create one.
 
 ```bash
 export REGION=us  # Your Region
@@ -186,6 +186,8 @@ Modify your Kubernetes deployment YAML file to use your colocated python sidecar
 
 For example, if using 2 v4-16 TPUs, use the following yaml. This example is modified from [pathways-job](https://github.com/google/pathways-job/blob/main/config/samples/colocated_python_example_pathwaysjob.yaml).
 
+If you do not have an existing GCS Bucket, instructions to create one are [here](https://cloud.google.com/storage/docs/creating-buckets).
+
 ```yaml
 apiVersion: pathways-job.pathways.domain/v1
 kind: PathwaysJob
@@ -200,7 +202,7 @@ spec:
   - type: ct4p-hightpu-4t
     topology: 2x2x2
     numSlices: 2
-  pathwaysDir: "gs://<test-bucket>/tmp" #This bucket needs to be created in advance.
+  pathwaysDir: "gs://<test-bucket>/tmp" # This bucket needs to be created in advance.
   controller:
     # Pod template for training, default mode.
     deploymentMode: default
@@ -209,14 +211,7 @@ spec:
       spec:
         containers:
         - name: main
-          env:
-          - name: XCLOUD_ENVIRONMENT
-            value: GCP
-          - name: JAX_PLATFORMS
-            value: proxy
-          - name: JAX_BACKEND_TARGET
-            value: grpc://pathways-colocatedpython-trial-pathways-head-0-0.pathways-colocatedpython-trial:29000
-          image: python:3.13
+          image: python:3.12
           imagePullPolicy: Always
           command:
           - /bin/sh
