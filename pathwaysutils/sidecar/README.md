@@ -104,6 +104,8 @@ out = create_and_save_plot(dummy_device_array)
 
 For more advanced usage (such as data loading), check out [MaxText's RemoteIterator class](https://github.com/AI-Hypercomputer/maxtext/blob/391a5a788d85cae8942334b042fdabdbd549af51/MaxText/multihost_dataloading.py#L175).
 
+See Installation and Usage for instructions on how to use MaxText out of the box with this feature.
+
 ### Verification
 
 To verify files were created, SSH into one of the TPU workers using the following command and check that the file was created.
@@ -120,7 +122,12 @@ Follow these steps to set up, build, and deploy your application with the Coloca
 
 **Prerequisites**
 
-Ensure [Docker](https://docs.docker.com/engine/install/) is installed on your system along with [gcloud](https://cloud.google.com/sdk/docs/install). Ensure you are authenticated into gcloud.
+Ensure [Docker](https://docs.docker.com/engine/install/) is installed on your system along with [gcloud](https://cloud.google.com/sdk/docs/install). Ensure you are authenticated into gcloud and Docker is configured for your region. For Google Artifact Registry, you typically run a command like this (replace `REGION` with the region of your repository, e.g., `us-east5`):
+
+```bash
+gcloud auth login
+gcloud auth configure-docker REGION-docker.pkg.dev
+```
 
 **1. Clone the Repository**
 
@@ -128,7 +135,7 @@ Get the necessary code and scripts.
 
 ```bash
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
-cd pathways-utils
+cd pathways-utils/sidecar/python
 ```
 
 **2. Prepare Sidecar Dependencies**
@@ -143,7 +150,6 @@ jax>=0.5.1
 tensorflow-datasets
 tiktoken
 grain-nightly>=0.0.10
-sentencepiece==0.1.97
 ```
 
 **3. Build the Colocated Python Sidecar Image and upload it to Artifact Registry**
@@ -152,38 +158,85 @@ Use the provided Dockerfile to create the sidecar image. This image will contain
 
 ```bash
 export PROJECT_ID=<your_project_id>
-export IMAGE_LOCATION=us-docker.pkg.dev/${PROJECT_ID}/colocated-python:latest
+export LOCAL_IMAGE_NAME=my-colocated-python-server
+export JAX_VERSION=0.5.3
 
-docker build -t ${IMAGE_LOCATION} .
+docker build --build-arg JAX_VERSION=${JAX_VERSION} -t ${LOCAL_IMAGE_NAME} .
+```
+
+Now you can upload the image to Google Artifact Registry.
+
+```bash
+export REGION=us  # Your Region
+export ARTIFACT_REGISTRY_REPO=YOUR_ARTIFACT_REGISTRY_REPO
+export EXPORTED_IMAGE_LOCATION=${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/my-colocated-python:latest
+
+docker tag ${LOCAL_IMAGE_NAME} ${EXPORTED_IMAGE_LOCATION}
+docker push ${EXPORTED_IMAGE_LOCATION}
+
+# Delete the local image as it's no longer needed.
+docker image rm ${LOCAL_IMAGE_NAME}
 ```
 
 **4. Update Deployment Configuration**
 
+***Simple Example***
+
 Modify your Kubernetes deployment YAML file to use your colocated python sidecar image. This assumes you are using the [pathways-job](https://github.com/google/pathways-job) api.
 
-For example.
+For example, if using 2 v4-16 TPUs, use the following yaml. This example is modified from [pathways-job](https://github.com/google/pathways-job/blob/main/config/samples/colocated_python_example_pathwaysjob.yaml).
 
 ```yaml
-...
+apiVersion: pathways-job.pathways.domain/v1
+kind: PathwaysJob
+metadata:
+  name: pathways-colocated
 spec:
   maxRestarts: 0
   customComponents:
   - componentType: colocated_python_sidecar
-    image: us-docker.pkg.dev/<your_project_id>/colocated-python:latest
-...
+    image: <location of your colocated python sidecar server image>
+  workers:
+  - type: ct4p-hightpu-4t
+    topology: 2x2x2
+    numSlices: 2
+  pathwaysDir: "gs://<test-bucket>/tmp" #This bucket needs to be created in advance.
+  controller:
+    # Pod template for training, default mode.
+    deploymentMode: default
+    mainContainerName: main
+    template: # UserPodTemplate
+      spec:
+        containers:
+        - name: main
+          env:
+          - name: XCLOUD_ENVIRONMENT
+            value: GCP
+          - name: JAX_PLATFORMS
+            value: proxy
+          - name: JAX_BACKEND_TARGET
+            value: grpc://pathways-colocatedpython-trial-pathways-head-0-0.pathways-colocatedpython-trial:29000
+          image: python:3.13
+          imagePullPolicy: Always
+          command:
+          - /bin/sh
+          - -c
+          - |
+            pip install --upgrade pip
+            pip install -U --pre jax jaxlib -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
+            pip install pathwaysutils
+            python -c "import jax; import pathwaysutils; print(\"Number of JAX devices is\", len(jax.devices()))"
 ```
 
-For a full sample Yaml, please refer to [pathways-job](https://github.com/google/pathways-job/blob/main/config/samples/colocated_python_example_pathwaysjob.yaml).
-
-**5. (Optional) Turn on Data Loading Optimization in MaxText**
+***MaxText Reference Example***
 
 If using MaxText, to turn on the data loading optimization that uses Colocated Python feature.
 
 ```python
-colocated_python_data_input = True
+colocated_python_data_input=True
 ```
 
-**6. Deploy the Application**
+**5. Deploy the Application**
 
 Apply the updated deployment configuration to your Kubernetes cluster:
 
@@ -197,5 +250,5 @@ This will create the necessary pods with your application, pathways head, and th
 
 **User Dependency Conflicts**
 
-Colocated Python relies on specific internal dependencies, including JAX. Refer to the provided `server_requirements.txt` for the complete list of required dependencies. Using a different dependency version than the one provided in `server_requirements.txt` will cause the remote Python image build to fail.
+Colocated Python relies on specific internal dependencies, including JAX. Refer to the provided `server_requirements.txt` for the complete list of required dependencies. Using a different dependency version than the one provided in `server_requirements.txt` will cause the Colocated Python image build to fail.
 

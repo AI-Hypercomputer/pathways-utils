@@ -1,0 +1,5 @@
+# Your requirements go here, for example:
+jax>=0.5.1
+tensorflow-datasets
+tiktoken
+grain-nightly>=0.0.1
