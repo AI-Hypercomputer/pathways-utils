@@ -1,6 +1,6 @@
 # Package of Pathways-on-Cloud utilities
 
-Pathways is a novel compute orchtestration method that enables single controller runtime ML workloads.
+Pathways is a novel compute orchestration method that enables single controller runtime ML workloads.
 This approach unlocks a range of new capabilities for training resiliency, multihost inference and interactive development on cluster of arbitrary scale.
 Pathways simplifies large-scale machine learning computations by enabling a single JAX client to orchestrate workloads across multiple large TPU slices, potentially spanning hundreds or thousands of TPU chips. Pathways is used internally at Google to train large models like Gemini. Pathways on Cloud brings the same benefits to Google Cloud customers.
 
