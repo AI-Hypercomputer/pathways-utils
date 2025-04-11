@@ -16,7 +16,6 @@
 import datetime
 import logging
 import os
-import warnings
 
 import jax
 from pathwaysutils import cloud_logging
@@ -33,11 +32,29 @@ __version__ = "v0.1.0"
 
 #  This is a brittle implementation since the platforms value is not necessarily
 #  which backend is ultimately selected
-def _is_pathways_used():
+def is_pathways_backend_used() -> bool:
+  """Returns whether Pathways backend is used.
+
+  This function checks the JAX platforms configuration to determine whether
+  Pathways is used. If the platforms configuration contains the string "proxy",
+  Pathways is used. This is a brittle implementation since the platforms value
+  is not necessarily which backend is ultimately selected or there may be more
+  than one platform specified and another may have higher priority.
+  """
   return jax.config.jax_platforms and "proxy" in jax.config.jax_platforms
 
 
-def _is_persistence_enabled():
+def _is_persistence_enabled() -> bool:
+  """Returns whether persistence is enabled.
+
+  This function checks the environment variable ENABLE_PATHWAYS_PERSISTENCE to
+  determine whether persistence is enabled. If the variable is set to "1",
+  persistence is enabled. If the variable is set to "0" or unset, persistence is
+  disabled.
+
+  Returns:
+    True if persistence is enabled, False otherwise.
+  """
   if "ENABLE_PATHWAYS_PERSISTENCE" in os.environ:
     if os.environ["ENABLE_PATHWAYS_PERSISTENCE"] == "1":
       return True
@@ -51,31 +68,29 @@ def _is_persistence_enabled():
   return False
 
 
-def initialize():
-  """Initializes pathwaysutils."""
+def initialize() -> None:
+  """Initializes pathwaysutils.
+
+  This function is called by the user to initialize pathwaysutils. It is
+  responsible for setting up the logging, profiling, and persistence handlers
+  through various monkey patching functions. It is also responsible for
+  registering the proxy backend factory.
+  """
   global _initialization_count
   _initialization_count += 1
 
-  if _initialization_count == 1:
-    warnings.warn(
-        "pathwaysutils: Legacy initialization. Ensure you also call"
-        " pathwaysutils.initialize(). This warning will be removed in a future"
-        " release."
-    )
-
-  # Ignoring the second call to initialize() is a temporary measure so that this warning is not triggered for customers who are following our instructions and using the new initialize() function only once but have already had the legacy initialization triggered.
+  # Ignoring the second call to initialize() is a temporary measure so that this
+  # debug log is not triggered for customers who are following our instructions
+  # and using the new initialize() function only once but have already had the
+  # legacy initialization triggered.
   if _initialization_count > 2:
-    warnings.warn(
-        "pathwaysutils: Already initialized. Ignoring duplicate call."
-    )
+    _logger.debug("Already initialized. Ignoring duplicate call.")
 
   if _initialization_count > 1:
     return
 
-  if _is_pathways_used():
-    _logger.debug(
-        "pathwaysutils: Detected Pathways-on-Cloud backend. Applying changes."
-    )
+  if is_pathways_backend_used():
+    _logger.debug("Detected Pathways-on-Cloud backend. Applying changes.")
     proxy_backend.register_backend_factory()
     profiling.monkey_patch_jax()
     # TODO: b/365549911 - Remove when OCDBT-compatible
@@ -90,14 +105,13 @@ def initialize():
       cloud_logging.setup()
     except Exception as error:  # pylint: disable=broad-except
       _logger.debug(
-          "pathwaysutils: Failed to set up cloud logging due to the following"
-          " error: %s",
+          "Failed to set up cloud logging due to the following error: %s",
           error,
       )
   else:
     _logger.debug(
-        "pathwaysutils: Did not detect Pathways-on-Cloud backend. No changes"
-        " applied."
+        "Did not detect Pathways-on-Cloud backend. No changes applied."
     )
+
 
 initialize()

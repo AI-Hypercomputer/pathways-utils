@@ -14,8 +14,8 @@
 
 import os
 from unittest import mock
-import warnings
 
+import google.cloud.logging
 import jax
 import pathwaysutils
 from pathwaysutils import cloud_logging
@@ -32,37 +32,65 @@ class PathwaysutilsTest(parameterized.TestCase):
         cloud_logging, "setup", autospec=True
     )
 
-  def test_legacy_initialize(self):
+  def test_first_initialize(self):
+    jax.config.update("jax_platforms", "proxy")
     pathwaysutils._initialization_count = 0
 
-    with self.assertWarns(UserWarning, msg="Legacy initialization"):
+    self.enter_context(
+        mock.patch.object(google.cloud.logging, "Client", autospec=True)
+    )
+
+    with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
       pathwaysutils.initialize()
 
-  def test_legacy_and_new_initialize(self):
+    self.assertLen(logs.output, 1)
+    self.assertIn(
+        "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[0]
+    )
+
+  def test_second_initialize(self):
+    jax.config.update("jax_platforms", "proxy")
     pathwaysutils._initialization_count = 1
 
-    with warnings.catch_warnings(record=True) as caught_warnings:
+    with self.assertNoLogs(pathwaysutils._logger, level="DEBUG"):
       pathwaysutils.initialize()
-
-    self.assertEmpty(caught_warnings)
 
   @parameterized.named_parameters(
       ("initialization_count 2", 2),
       ("initialization_count 5", 5),
+      ("initialization_count 1000", 1000),
   )
-  def test_initialize_more_than_once(self, initialization_count):
+  def test_initialize_more_than_twice(self, initialization_count):
     pathwaysutils._initialization_count = initialization_count
 
-    with self.assertWarns(UserWarning, msg="Already initialized"):
+    with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
       pathwaysutils.initialize()
 
-  def test_is_pathways_used(self):
-    for platform in ["", "cpu", "tpu", "gpu", "cpu,tpu,gpu"]:
-      jax.config.update("jax_platforms", platform)
-      self.assertFalse(pathwaysutils._is_pathways_used())
-    for platform in ["proxy", "proxy,cpu", "cpu,proxy", "tpu,cpu,proxy,gpu"]:
-      jax.config.update("jax_platforms", platform)
-      self.assertTrue(pathwaysutils._is_pathways_used())
+    self.assertLen(logs.output, 1)
+    self.assertIn(
+        "Already initialized. Ignoring duplicate call.", logs.output[0]
+    )
+
+  @parameterized.named_parameters(
+      ("empty", ""),
+      ("cpu", "cpu"),
+      ("tpu", "tpu"),
+      ("gpu", "gpu"),
+      ("cpu,tpu,gpu", "cpu,tpu,gpu"),
+  )
+  def test_not_is_pathways_backend_used(self, platform: str):
+    jax.config.update("jax_platforms", platform)
+    self.assertFalse(pathwaysutils.is_pathways_backend_used())
+
+  @parameterized.named_parameters(
+      ("proxy", "proxy"),
+      ("proxy,cpu", "proxy,cpu"),
+      ("cpu,proxy", "cpu,proxy"),
+      ("tpu,cpu,proxy,gpu", "tpu,cpu,proxy,gpu"),
+  )
+  def test_is_pathways_backend_used(self, platform: str):
+    jax.config.update("jax_platforms", platform)
+    self.assertTrue(pathwaysutils.is_pathways_backend_used())
 
   def test_persistence_enabled(self):
     os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
