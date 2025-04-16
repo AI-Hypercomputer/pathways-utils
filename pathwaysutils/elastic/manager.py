@@ -25,8 +25,10 @@ It is responsible for:
 - Resharding the snapshot.
 """
 
+import sys
 import collections
 from collections.abc import Callable, Mapping, Sequence
+import copy
 import itertools
 import logging
 import traceback
@@ -356,8 +358,8 @@ class Manager:
           f"Max reshard retry count reached {self.max_reshard_retry_count=}"
       )
 
-  # TODO b/407772100 - Support multiple snapshots.
-  def pop_snapshot(self) -> tuple[int, PyTree]:
+  # TODO: b/407772100 - Support multiple snapshots.
+  def pop_snapshot(self) -> tuple[int, PyTree | None, PyTree | None]:
     """Pops next snapshot.
 
     This function is used to get the next snapshot and remove it from
@@ -373,50 +375,60 @@ class Manager:
     if self._snapshot is None:
       raise ElasticRuntimeError("No snapshot to pop.")
 
-    step = self._snapshot.pop("step")
-    snapshot = self._snapshot.pop("snapshot")
+    step, snapshot_jax_arrays, snapshot_controller = (
+        self._snapshot.pop(key)
+        for key in ["step", "snapshot_jax_arrays", "snapshot_controller"]
+    )
     self._snapshot = None
 
-    return step, snapshot
+    return step, snapshot_jax_arrays, snapshot_controller
 
   @staticmethod
-  def _get_snapshot_size(snapshot: PyTree) -> int:
+  def _get_snapshot_jax_arrays_size(snapshot_jax_arrays: PyTree | None) -> int:
     """Returns the size of a snapshot.
 
     Args:
       snapshot: The snapshot to get the size of.
     """
-    return sum(leaf.nbytes for leaf in jax.tree.leaves(snapshot))
+    return sum(leaf.nbytes for leaf in jax.tree.leaves(snapshot_jax_arrays))
 
   @staticmethod
-  def _put_snapshot_on_host(
-      snapshot: PyTree,
-  ) -> PyTree:
+  def _put_snapshot_jax_arrays_on_host(
+      snapshot_jax_arrays: PyTree | None,
+  ) -> PyTree | None:
     """Puts a copy of the snapshot on the host.
 
     Args:
       snapshot: The snapshot to move to the host. Must be a PyTree of JAX
-        arrays.
+        arrays or None.
 
     Returns:
       A copy of the snapshot on the host.
     """
 
     sharding_pinned_host = jax.tree.map(
-        lambda x: x.sharding.with_memory_kind("pinned_host"), snapshot
+        lambda x: x.sharding.with_memory_kind("pinned_host"), snapshot_jax_arrays
     )
     return jax.device_put(
-        snapshot,
+        snapshot_jax_arrays,
         sharding_pinned_host,
         donate=False,
         may_alias=False,
     )
 
+  @staticmethod
+  def _put_snapshot_on_controller(
+      snapshot: PyTree | None,
+  ) -> PyTree | None:
+    return copy.deepcopy(snapshot)
+
+  # TODO: b/407772100 - Support multiple snapshots.
   @timing.timeit
   def maybe_snapshot(
       self,
       step: int,
-      snapshot: PyTree,
+      snapshot_jax_arrays: PyTree | None = None,
+      snapshot_controller: PyTree | None = None,
       force: bool = False,
       block: bool = False,
   ) -> None:
@@ -436,24 +448,28 @@ class Manager:
       _logger.info("Not saving a snapshot")
       return
 
-    total_nbytes = self._get_snapshot_size(snapshot)
+    total_nbytes = self._get_snapshot_jax_arrays_size(snapshot_jax_arrays)
 
-    _logger.info("Saving a snapshot of %s bytes", total_nbytes)
+    _logger.info("Saving a snapshot of %s bytes on host", total_nbytes)
 
-    snapshot_host = self._put_snapshot_on_host(snapshot)
+    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(snapshot_jax_arrays)
     _logger.info("Snapshot dispatched")
 
     if block:
-      jax.block_until_ready(snapshot_host)
+      jax.block_until_ready(snapshot_jax_arrays_host)
       _logger.info("Snapshot completed")
 
-    # TODO b/407772100 - Support multiple snapshots.
-    self._snapshot = {"step": step, "snapshot": snapshot_host}
+    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+    self._snapshot = {
+        "step": step,
+        "snapshot_jax_arrays": snapshot_jax_arrays_host,
+        "snapshot_controller": snapshot_on_controller,
+    }
 
   @timing.timeit
   def get_resharded_snapshot(
       self, mesh: jax.sharding.Mesh
-  ) -> tuple[int, Mapping[str, int | PyTree]]:
+  ) -> tuple[int, PyTree | None, PyTree | None]:
     """Get the resharded snapshot.
 
     The snapshot on pinned memory is resharded to the new mesh. This snapshot is
@@ -466,34 +482,41 @@ class Manager:
     Returns:
       The next step and snapshot resharded to the new mesh.
     """
-    step, snapshot = self.pop_snapshot()
+    step, snapshot_jax_arrays, snapshot_controller = self.pop_snapshot()
 
     sharding_pinned_host = jax.tree.map(
         lambda x: jax.sharding.NamedSharding(
             mesh, x.sharding.spec, memory_kind="pinned_host"
         ),
-        snapshot,
+        snapshot_jax_arrays,
     )
-    resharded_snapshot_pinned_host = jax.device_put(
-        snapshot,
+    resharded_jax_arrays_pinned_host = jax.device_put(
+        snapshot_jax_arrays,
         sharding_pinned_host,
         donate=True,
         may_alias=False,
     )
-    self._snapshot = {"step": step, "snapshot": resharded_snapshot_pinned_host}
 
     sharding_device = jax.tree.map(
         lambda x: x.sharding.with_memory_kind("device"),
-        resharded_snapshot_pinned_host,
+        resharded_jax_arrays_pinned_host,
     )
-    resharded_snapshot_device = jax.device_put(
-        resharded_snapshot_pinned_host,
+    resharded_jax_arrays_device = jax.device_put(
+        resharded_jax_arrays_pinned_host,
         sharding_device,
         donate=False,
         may_alias=False,
     )
 
-    return step, resharded_snapshot_device
+    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+
+    self._snapshot = {
+        "step": step,
+        "snapshot_jax_arrays": resharded_jax_arrays_pinned_host,
+        "snapshot_controller": snapshot_on_controller,
+    }
+
+    return step, resharded_jax_arrays_device, snapshot_controller
 
   @timing.timeit
   def maybe_reshard_down(
@@ -559,8 +582,9 @@ class Manager:
   def maybe_reshard_up(
       self,
       step: int,
-      snapshot: Mapping[str, int | PyTree],
       elastic_handler: Callable[..., Any],
+      snapshot_jax_arrays: PyTree | None = None,
+      snapshot_controller: PyTree | None = None,
       handler_args: tuple[Any, ...] | None = None,
       handler_kwargs: Mapping[str, Any] | None = None,
   ) -> Any:
@@ -595,7 +619,8 @@ class Manager:
 
     self.maybe_snapshot(
         step=step,
-        snapshot=snapshot,
+        snapshot_jax_arrays=snapshot_jax_arrays,
+        snapshot_controller=snapshot_controller,
         force=True,
         block=True,
     )
