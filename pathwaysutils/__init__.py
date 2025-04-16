@@ -83,11 +83,11 @@ def initialize() -> None:
   # debug log is not triggered for customers who are following our instructions
   # and using the new initialize() function only once but have already had the
   # legacy initialization triggered.
-  if _initialization_count > 2:
-    _logger.debug("Already initialized. Ignoring duplicate call.")
-
   if _initialization_count > 1:
+    _logger.debug("Already initialized. Ignoring duplicate call.")
     return
+
+  _logger.debug("Starting initialize.")
 
   if is_pathways_backend_used():
     _logger.debug("Detected Pathways-on-Cloud backend. Applying changes.")
@@ -112,6 +112,3 @@ def initialize() -> None:
     _logger.debug(
         "Did not detect Pathways-on-Cloud backend. No changes applied."
     )
-
-
-initialize()

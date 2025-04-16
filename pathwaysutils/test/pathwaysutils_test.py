@@ -43,24 +43,21 @@ class PathwaysutilsTest(parameterized.TestCase):
     with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
       pathwaysutils.initialize()
 
-    self.assertLen(logs.output, 1)
+    self.assertLen(logs.output, 2)
     self.assertIn(
-        "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[0]
+        "Starting initialize.", logs.output[0]
+    )
+    self.assertIn(
+        "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[1]
     )
 
-  def test_second_initialize(self):
-    jax.config.update("jax_platforms", "proxy")
-    pathwaysutils._initialization_count = 1
-
-    with self.assertNoLogs(pathwaysutils._logger, level="DEBUG"):
-      pathwaysutils.initialize()
-
   @parameterized.named_parameters(
+      ("initialization_count 1", 1),
       ("initialization_count 2", 2),
       ("initialization_count 5", 5),
       ("initialization_count 1000", 1000),
   )
-  def test_initialize_more_than_twice(self, initialization_count):
+  def test_initialize_more_than_once(self, initialization_count):
     pathwaysutils._initialization_count = initialization_count
 
     with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
