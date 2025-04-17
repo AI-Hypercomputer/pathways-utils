@@ -23,6 +23,7 @@ import logging
 from pathwaysutils import profiling
 
 _logger = logging.getLogger(__name__)
+_logger.setLevel(logging.INFO)
 
 
 _DESCRIPTION = """
@@ -33,29 +34,38 @@ profiler server has started, you can run `collect_profile` to trace the executio
 for a provided duration. The trace file will be dumped into a GCS bucket
 (determined by `--log_dir`).
 """
-parser = argparse.ArgumentParser(description=_DESCRIPTION)
-parser.add_argument(
-    "--log_dir",
-    required=True,
-    help="GCS path to store log files.",
-    type=str,
-)
-parser.add_argument("port", help="Port to collect trace", type=int)
-parser.add_argument(
-    "duration_ms", help="Duration to collect trace in milliseconds", type=int
-)
-parser.add_argument(
-    "--host",
-    default="127.0.0.1",
-    help=(
-        "Host to collect trace. This host IP/DNS address should be accessible"
-        " from where this API is being called. Defaults to 127.0.0.1"
-    ),
-    type=str,
-)
 
 
-def main(args):
+def _get_parser():
+  """Returns an argument parser for the collect_profile script."""
+  parser = argparse.ArgumentParser(description=_DESCRIPTION)
+  parser.add_argument(
+      "--log_dir",
+      required=True,
+      help="GCS path to store log files.",
+      type=str,
+  )
+  parser.add_argument("port", help="Port to collect trace", type=int)
+  parser.add_argument(
+      "duration_ms", help="Duration to collect trace in milliseconds", type=int
+  )
+  parser.add_argument(
+      "--host",
+      default="127.0.0.1",
+      help=(
+          "Host to collect trace. This host IP/DNS address should be accessible"
+          " from where this API is being called. Defaults to 127.0.0.1"
+      ),
+      type=str,
+  )
+
+  return parser
+
+
+def main():
+  parser = _get_parser()
+  args = parser.parse_args()
+
   if profiling.collect_profile(
       args.port, args.duration_ms, args.host, args.log_dir
   ):
@@ -63,5 +73,6 @@ def main(args):
   else:
     _logger.error("Failed to collect profiling information.")
 
+
 if __name__ == "__main__":
-  main(parser.parse_args())
+  main()
