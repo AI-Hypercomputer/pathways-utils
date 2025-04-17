@@ -54,3 +54,5 @@ exclude = [
   "**/test",
 ]
 
+[project.scripts]
+collect_profile = "pathwaysutils.collect_profile:main"
