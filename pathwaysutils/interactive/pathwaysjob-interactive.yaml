@@ -1,0 +1,13 @@
+apiVersion: pathways-job.pathways.domain/v1
+kind: PathwaysJob
+metadata:
+  name: pathways-demo
+spec:
+  maxRestarts: 100
+  workers:
+    - type: ct5lp-hightpu-4t
+      topology: 4x8
+      numSlices: 2
+  pathwaysDir: "gs://<BUCKET>" # Replace the bucket before applying the YAML
+  controller:
+    deploymentMode: default
