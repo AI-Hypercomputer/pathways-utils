@@ -18,7 +18,6 @@ import logging
 import os
 
 import jax
-from pathwaysutils import cloud_logging
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
 from pathwaysutils.persistence import orbax_handler
@@ -101,13 +100,6 @@ def initialize() -> None:
     # compilation cache.
     jax.config.update("jax_enable_compilation_cache", False)
 
-    try:
-      cloud_logging.setup()
-    except Exception as error:  # pylint: disable=broad-except
-      _logger.debug(
-          "Failed to set up cloud logging due to the following error: %s",
-          error,
-      )
   else:
     _logger.debug(
         "Did not detect Pathways-on-Cloud backend. No changes applied."

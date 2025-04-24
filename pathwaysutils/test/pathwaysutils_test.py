@@ -15,10 +15,8 @@
 import os
 from unittest import mock
 
-import google.cloud.logging
 import jax
 import pathwaysutils
-from pathwaysutils import cloud_logging
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -26,19 +24,9 @@ from absl.testing import parameterized
 
 class PathwaysutilsTest(parameterized.TestCase):
 
-  def setUp(self):
-    super().setUp()
-    self.mock_setup_logging = mock.patch.object(
-        cloud_logging, "setup", autospec=True
-    )
-
   def test_first_initialize(self):
     jax.config.update("jax_platforms", "proxy")
     pathwaysutils._initialization_count = 0
-
-    self.enter_context(
-        mock.patch.object(google.cloud.logging, "Client", autospec=True)
-    )
 
     with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
       pathwaysutils.initialize()
