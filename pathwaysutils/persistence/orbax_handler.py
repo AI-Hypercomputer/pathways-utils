@@ -63,6 +63,18 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       raise ValueError("OCDBT not supported for Pathways.")
     super().__init__()
 
+  async def _background_serialize(
+      self,
+      values: Sequence[jax.Array],
+      locations: Sequence[str],
+      names: Sequence[str],
+  ) -> None:
+    """Uses Pathways Persistence API to serialize a jax array."""
+    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
+    futures_results = list(map(f, locations, names, values))
+    for future_result in futures_results:
+      future_result.result()
+
   async def serialize(
       self,
       values: Sequence[jax.Array],
@@ -76,8 +88,12 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       raise ValueError("Casting during save not supported for Pathways.")
 
     locations, names = extract_parent_dir_and_name(infos)
-    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
-    return list(map(f, locations, names, values))
+    return [
+        future.CommitFutureAwaitingContractedSignals(
+            self._background_serialize(values, locations, names),
+            name="cloud_pathways_array_handler",
+        )
+    ]
 
   async def deserialize(
       self,
