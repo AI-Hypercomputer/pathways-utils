@@ -14,10 +14,10 @@ keywords = []
 dependencies = [
     "absl-py",
     "fastapi",
-    "google-cloud-logging",
     "jax>=0.4.26",
     "orbax-checkpoint",
     "uvicorn",
+    "requests",
 ]
 
 # `version` is automatically set by flit to use `my_project.__version__`

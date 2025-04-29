@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 from unittest import mock
 
 from pathwaysutils import profiling
@@ -32,13 +33,14 @@ class ProfilingTest(parameterized.TestCase):
 
   @parameterized.parameters(8000, 1234)
   def test_collect_profile_port(self, port):
-    profiling.collect_profile(
+    result = profiling.collect_profile(
         port=port,
         duration_ms=1000,
         host="127.0.0.1",
         log_dir="gs://test_bucket/test_dir",
     )
 
+    self.assertTrue(result)
     self.mock_post.assert_called_once_with(
         f"http://127.0.0.1:{port}/profiling",
         json={
@@ -49,13 +51,14 @@ class ProfilingTest(parameterized.TestCase):
 
   @parameterized.parameters(1000, 1234)
   def test_collect_profile_duration_ms(self, duration_ms):
-    profiling.collect_profile(
+    result = profiling.collect_profile(
         port=8000,
         duration_ms=duration_ms,
         host="127.0.0.1",
         log_dir="gs://test_bucket/test_dir",
     )
 
+    self.assertTrue(result)
     self.mock_post.assert_called_once_with(
         "http://127.0.0.1:8000/profiling",
         json={
@@ -66,13 +69,14 @@ class ProfilingTest(parameterized.TestCase):
 
   @parameterized.parameters("127.0.0.1", "localhost", "192.168.1.1")
   def test_collect_profile_host(self, host):
-    profiling.collect_profile(
+    result = profiling.collect_profile(
         port=8000,
         duration_ms=1000,
         host=host,
         log_dir="gs://test_bucket/test_dir",
     )
 
+    self.assertTrue(result)
     self.mock_post.assert_called_once_with(
         f"http://{host}:8000/profiling",
         json={
@@ -87,10 +91,11 @@ class ProfilingTest(parameterized.TestCase):
       "gs://test_bucket3/test/log/dir",
   )
   def test_collect_profile_log_dir(self, log_dir):
-    profiling.collect_profile(
+    result = profiling.collect_profile(
         port=8000, duration_ms=1000, host="127.0.0.1", log_dir=log_dir
     )
 
+    self.assertTrue(result)
     self.mock_post.assert_called_once_with(
         "http://127.0.0.1:8000/profiling",
         json={
@@ -107,22 +112,27 @@ class ProfilingTest(parameterized.TestCase):
       )
 
   @parameterized.parameters(
-      requests.exceptions.ConnectionError,
-      requests.exceptions.Timeout,
-      requests.exceptions.TooManyRedirects,
-      requests.exceptions.RequestException,
-      requests.exceptions.HTTPError,
+      requests.exceptions.ConnectionError("Connection error"),
+      requests.exceptions.Timeout("Timeout"),
+      requests.exceptions.TooManyRedirects("Too many redirects"),
+      requests.exceptions.RequestException("Request exception"),
+      requests.exceptions.HTTPError("HTTP error"),
   )
-  def test_collect_profile_request_error(self, exception_type):
-    self.mock_post.side_effect = exception_type
+  def test_collect_profile_request_error(self, exception):
+    self.mock_post.side_effect = exception
 
-    result = profiling.collect_profile(
-        port=8000,
-        duration_ms=1000,
-        host="127.0.0.1",
-        log_dir="gs://test_bucket/test_dir",
+    with self.assertLogs(profiling._logger, level=logging.ERROR) as logs:
+      result = profiling.collect_profile(
+          port=8000,
+          duration_ms=1000,
+          host="127.0.0.1",
+          log_dir="gs://test_bucket/test_dir",
+      )
+
+    self.assertLen(logs.output, 1)
+    self.assertIn(
+        f"Failed to collect profiling data: {exception}", logs.output[0]
     )
-
     self.assertFalse(result)
     self.mock_post.assert_called_once()
 

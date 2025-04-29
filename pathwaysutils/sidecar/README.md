@@ -218,7 +218,7 @@ spec:
           - -c
           - |
             pip install --upgrade pip
-            pip install -U --pre jax jaxlib -f https://storage.googleapis.com/jax-releases/jax_nightly_releases.html
+            pip install -U --pre jax jaxlib --extra-index-url https://us-python.pkg.dev/ml-oss-artifacts-published/jax-public-nightly-artifacts-registry/simple/
             pip install pathwaysutils
             python -c "import jax; import pathwaysutils; print(\"Number of JAX devices is\", len(jax.devices()))"
 ```

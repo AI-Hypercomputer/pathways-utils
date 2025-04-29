@@ -23,6 +23,13 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-04-25
+
+* Port the `collect_profile` script from JAX to PathwaysUtils
+* Remove support for legacy initialize
+* Add collect_profile as a script of pathwaysutils
+* Make CloudPathwaysArrayHandler compatible with async directory creation feature in orbax
+
 ## [0.1.0] - 2025-04-07
 * Bump the JAX requirement to 0.5.1
 * Introduce `pathwaysutils.initialize()` to remove relying on side-effects from `import pathwaysutils`. by @copybara-service in https://github.com/AI-Hypercomputer/pathways-utils/pull/47
@@ -47,5 +54,5 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 * Persistence enabled
 * General argument type fixes
 
-[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/AI-Hypercomputer/pathways-utils/compare/v0.1.1...HEAD
 
