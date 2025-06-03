@@ -87,10 +87,15 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     if any([arg.dtype is not None for arg in args]):
       raise ValueError("Casting during save not supported for Pathways.")
 
+    # Create a copy of the arrays to ensure their buffers are not deallocated
+    # before the asynchronous write operation completes.
+    copied_values = [v.copy() for v in values]
+    jax.block_until_ready(copied_values)
+
     locations, names = extract_parent_dir_and_name(infos)
     return [
         future.CommitFutureAwaitingContractedSignals(
-            self._background_serialize(values, locations, names),
+            self._background_serialize(copied_values, locations, names),
             name="cloud_pathways_array_handler",
         )
     ]
