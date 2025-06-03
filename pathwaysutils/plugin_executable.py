@@ -18,7 +18,7 @@ import threading
 from typing import List, Sequence, Tuple, Union
 
 import jax
-from jax._src.interpreters import pxla
+from jax.interpreters import pxla
 from jax.extend.ifrt_programs import ifrt_programs
 
 
