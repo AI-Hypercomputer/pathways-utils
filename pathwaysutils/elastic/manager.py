@@ -25,12 +25,13 @@ It is responsible for:
 - Resharding the snapshot.
 """
 
-import sys
 import collections
 from collections.abc import Callable, Mapping, Sequence
 import copy
 import itertools
 import logging
+import threading
+import time
 import traceback
 from typing import Any, TypeAlias
 
@@ -49,6 +50,7 @@ class ElasticRuntimeError(RuntimeError):
 
 class Manager:
   """Utility class for elastic training."""
+
   _devices: Sequence[jax.Device]
   _total_slice_count: int | None = None
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
@@ -59,7 +61,7 @@ class Manager:
   elastic_down_event_count: int
   reshard_retry_count: int
   good_slice_indices: set[int]
-  # TODO b/407772100 - Support multiple snapshots.
+  # TODO: b/407772100 - Support multiple snapshots.
   _snapshot: PyTree
 
   _SIMPLE_EXECUTION_TEST_VALUE = 100
@@ -149,8 +151,7 @@ class Manager:
   def _is_error_due_to_slice_down(cls, error: Exception) -> bool:
     """Check if the error is due to slice down."""
     return_value = any(
-        error_type in str(error)
-        for error_type in cls._ELASTIC_DOWN_ERROR_TYPES
+        error_type in str(error) for error_type in cls._ELASTIC_DOWN_ERROR_TYPES
     )
     if return_value:
       _logger.info("Caught an error due to slice down")
@@ -256,9 +257,7 @@ class Manager:
         "Previous good slice indices: self.good_slice_indices=%s",
         self.good_slice_indices,
     )
-    _logger.info(
-        "Current good slice indices: %s", good_slice_indices
-    )
+    _logger.info("Current good slice indices: %s", good_slice_indices)
 
     self.good_slice_indices = good_slice_indices
 
@@ -388,7 +387,7 @@ class Manager:
     """Returns the size of a snapshot.
 
     Args:
-      snapshot: The snapshot to get the size of.
+      snapshot_jax_arrays: The snapshot to get the size of.
     """
     return sum(leaf.nbytes for leaf in jax.tree.leaves(snapshot_jax_arrays))
 
@@ -399,15 +398,16 @@ class Manager:
     """Puts a copy of the snapshot on the host.
 
     Args:
-      snapshot: The snapshot to move to the host. Must be a PyTree of JAX
-        arrays or None.
+      snapshot_jax_arrays: The snapshot to move to the host. Must be a PyTree of
+        JAX arrays or None.
 
     Returns:
       A copy of the snapshot on the host.
     """
 
     sharding_pinned_host = jax.tree.map(
-        lambda x: x.sharding.with_memory_kind("pinned_host"), snapshot_jax_arrays
+        lambda x: x.sharding.with_memory_kind("pinned_host"),
+        snapshot_jax_arrays,
     )
     return jax.device_put(
         snapshot_jax_arrays,
@@ -440,7 +440,9 @@ class Manager:
 
     Args:
       step: The current step.
-      snapshot: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_jax_arrays: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_controller: The snapshot to save on the controller. Must be
+        deepcopyable.
       force: If True, save the snapshot regardless of the step.
       block: If True, block until the snapshot is ready.
     """
@@ -452,14 +454,18 @@ class Manager:
 
     _logger.info("Saving a snapshot of %s bytes on host", total_nbytes)
 
-    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(snapshot_jax_arrays)
+    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(
+        snapshot_jax_arrays
+    )
     _logger.info("Snapshot dispatched")
 
     if block:
       jax.block_until_ready(snapshot_jax_arrays_host)
       _logger.info("Snapshot completed")
 
-    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+    snapshot_on_controller = self._put_snapshot_on_controller(
+        snapshot_controller
+    )
     self._snapshot = {
         "step": step,
         "snapshot_jax_arrays": snapshot_jax_arrays_host,
@@ -508,7 +514,9 @@ class Manager:
         may_alias=False,
     )
 
-    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+    snapshot_on_controller = self._put_snapshot_on_controller(
+        snapshot_controller
+    )
 
     self._snapshot = {
         "step": step,
@@ -598,9 +606,11 @@ class Manager:
 
     Args:
       step: The current step.
-      snapshot: The snapshot to reshard.
       elastic_handler: The elastic handler to call. This function must work for
         both reshard up and reshard down.
+      snapshot_jax_arrays: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_controller: The snapshot to save on the controller. Must be
+        deepcopyable.
       handler_args: The args to pass to the elastic handler.
       handler_kwargs: The kwargs to pass to the elastic handler.
 
@@ -639,3 +649,67 @@ class Manager:
 
     _logger.info("Finished resharding up")
     return handler_return_values
+
+  def wait_for_slices(
+      self,
+      slice_count: int | None = None,
+      wait_period: float | int | None = None,
+      timeout_duration: float | int | None = None,
+  ) -> set[int]:
+    """Waits until after at least `slice_count` slices become available.
+
+    Args:
+      slice_count: The number of slices to wait for. If None, waits for all
+        slices to become available.
+      wait_period: The number of seconds to wait between availability checks. If
+        None, waits for 10 seconds.
+      timeout_duration: The maximum number of seconds to wait. If None, there is
+        no timeout.
+
+    Returns:
+      The good slice indices
+
+    Raises:
+      TimeoutError: If the timeout is reached before the slices become
+        available.
+    """
+    if slice_count is None:
+      slice_count = self.total_slice_count
+    if wait_period is None:
+      wait_period = 10
+
+    start_time = time.time()
+
+    while (
+        len(good_slice_indices := self.get_slice_availability()) < slice_count
+    ):
+      if (
+          timeout_duration is not None
+          and time.time() - start_time + wait_period >= timeout_duration
+      ):
+        raise TimeoutError(
+            f"Timed out waiting for {slice_count} slices. Only"
+            f" {len(good_slice_indices)} available after"
+            f" {time.time() - start_time} seconds."
+            f" Next check would occur after the timeout of {timeout_duration}"
+            " seconds."
+        )
+
+      _logger.info(
+          "%s/%s slices available. Wanting at least %s/%s. Sleeping for %s"
+          " seconds.",
+          len(good_slice_indices),
+          self.total_slice_count,
+          slice_count,
+          self.total_slice_count,
+          wait_period,
+      )
+      time.sleep(wait_period)
+
+    _logger.info(
+        "%s/%s slices are available",
+        len(good_slice_indices),
+        self.total_slice_count,
+    )
+
+    return good_slice_indices
