@@ -25,7 +25,6 @@ It is responsible for:
 - Resharding the snapshot.
 """
 
-import sys
 import collections
 from collections.abc import Callable, Mapping, Sequence
 import copy
@@ -59,7 +58,7 @@ class Manager:
   elastic_down_event_count: int
   reshard_retry_count: int
   good_slice_indices: set[int]
-  # TODO b/407772100 - Support multiple snapshots.
+  # TODO: b/407772100 - Support multiple snapshots.
   _snapshot: PyTree
 
   _SIMPLE_EXECUTION_TEST_VALUE = 100
@@ -388,7 +387,7 @@ class Manager:
     """Returns the size of a snapshot.
 
     Args:
-      snapshot: The snapshot to get the size of.
+      snapshot_jax_arrays: The snapshot to get the size of.
     """
     return sum(leaf.nbytes for leaf in jax.tree.leaves(snapshot_jax_arrays))
 
@@ -399,15 +398,16 @@ class Manager:
     """Puts a copy of the snapshot on the host.
 
     Args:
-      snapshot: The snapshot to move to the host. Must be a PyTree of JAX
-        arrays or None.
+      snapshot_jax_arrays: The snapshot to move to the host. Must be a PyTree of
+        JAX arrays or None.
 
     Returns:
       A copy of the snapshot on the host.
     """
 
     sharding_pinned_host = jax.tree.map(
-        lambda x: x.sharding.with_memory_kind("pinned_host"), snapshot_jax_arrays
+        lambda x: x.sharding.with_memory_kind("pinned_host"),
+        snapshot_jax_arrays,
     )
     return jax.device_put(
         snapshot_jax_arrays,
@@ -440,7 +440,9 @@ class Manager:
 
     Args:
       step: The current step.
-      snapshot: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_jax_arrays: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_controller: The snapshot to save on the controller. Must be
+        deepcopyable.
       force: If True, save the snapshot regardless of the step.
       block: If True, block until the snapshot is ready.
     """
@@ -452,14 +454,18 @@ class Manager:
 
     _logger.info("Saving a snapshot of %s bytes on host", total_nbytes)
 
-    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(snapshot_jax_arrays)
+    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(
+        snapshot_jax_arrays
+    )
     _logger.info("Snapshot dispatched")
 
     if block:
       jax.block_until_ready(snapshot_jax_arrays_host)
       _logger.info("Snapshot completed")
 
-    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+    snapshot_on_controller = self._put_snapshot_on_controller(
+        snapshot_controller
+    )
     self._snapshot = {
         "step": step,
         "snapshot_jax_arrays": snapshot_jax_arrays_host,
@@ -508,7 +514,9 @@ class Manager:
         may_alias=False,
     )
 
-    snapshot_on_controller = self._put_snapshot_on_controller(snapshot_controller)
+    snapshot_on_controller = self._put_snapshot_on_controller(
+        snapshot_controller
+    )
 
     self._snapshot = {
         "step": step,
@@ -598,9 +606,11 @@ class Manager:
 
     Args:
       step: The current step.
-      snapshot: The snapshot to reshard.
       elastic_handler: The elastic handler to call. This function must work for
         both reshard up and reshard down.
+      snapshot_jax_arrays: The snapshot to save. Must be a PyTree of JAX arrays.
+      snapshot_controller: The snapshot to save on the controller. Must be
+        deepcopyable.
       handler_args: The args to pass to the elastic handler.
       handler_kwargs: The kwargs to pass to the elastic handler.
 
