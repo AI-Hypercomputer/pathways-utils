@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 import copy
 import itertools
 import logging
+import time
 import traceback
 from typing import Any, TypeAlias
 
@@ -48,6 +49,7 @@ class ElasticRuntimeError(RuntimeError):
 
 class Manager:
   """Utility class for elastic training."""
+
   _devices: Sequence[jax.Device]
   _total_slice_count: int | None = None
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
@@ -148,8 +150,7 @@ class Manager:
   def _is_error_due_to_slice_down(cls, error: Exception) -> bool:
     """Check if the error is due to slice down."""
     return_value = any(
-        error_type in str(error)
-        for error_type in cls._ELASTIC_DOWN_ERROR_TYPES
+        error_type in str(error) for error_type in cls._ELASTIC_DOWN_ERROR_TYPES
     )
     if return_value:
       _logger.info("Caught an error due to slice down")
@@ -255,9 +256,7 @@ class Manager:
         "Previous good slice indices: self.good_slice_indices=%s",
         self.good_slice_indices,
     )
-    _logger.info(
-        "Current good slice indices: %s", good_slice_indices
-    )
+    _logger.info("Current good slice indices: %s", good_slice_indices)
 
     self.good_slice_indices = good_slice_indices
 
@@ -649,3 +648,63 @@ class Manager:
 
     _logger.info("Finished resharding up")
     return handler_return_values
+
+  def wait_for_slices(
+      self,
+      slice_count: int | None = None,
+      wait_period: float | int = 10,
+      timeout: float | int | None = None,
+  ) -> set[int]:
+    """Waits until after at least `slice_count` slices become available.
+
+    Args:
+      slice_count: The number of slices to wait for. If None, waits for all
+        slices to become available.
+      wait_period: The number of seconds to wait between availability checks.
+      Defaults to 10 seconds.
+      timeout: The maximum number of seconds to wait. If None, there is
+        no timeout.
+
+    Returns:
+      The good slice indices
+
+    Raises:
+      TimeoutError: If the timeout is reached before the slices become
+        available.
+    """
+    if slice_count is None:
+      slice_count = self.total_slice_count
+
+    start_time = time.time()
+
+    while (
+        len(good_slice_indices := self.get_slice_availability()) < slice_count
+    ):
+      elapsed_time = time.time() - start_time
+      if timeout is not None and elapsed_time + wait_period >= timeout:
+        raise TimeoutError(
+            f"Timed out waiting for {slice_count} slices. Only"
+            f" {len(good_slice_indices)} available after"
+            f" {elapsed_time:.2f} seconds."
+            f" Next check would occur after the timeout of {timeout}"
+            " seconds."
+        )
+
+      _logger.info(
+          "%s/%s slices available. Wanting at least %s/%s. Sleeping for %s"
+          " seconds.",
+          len(good_slice_indices),
+          self.total_slice_count,
+          slice_count,
+          self.total_slice_count,
+          wait_period,
+      )
+      time.sleep(wait_period)
+
+    _logger.info(
+        "%s/%s slices are available",
+        len(good_slice_indices),
+        self.total_slice_count,
+    )
+
+    return good_slice_indices
