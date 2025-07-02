@@ -15,7 +15,14 @@
 
 import jax
 from jax.extend import backend
-from jax.lib.xla_extension import ifrt_proxy
+
+# Attempt to import ifrt_proxy from the new location, fallback to the old one.
+try:
+    from jax._src.lib import _jax
+    ifrt_proxy = _jax.ifrt_proxy
+except (ImportError, AttributeError):
+    # AttributeError is included in case jax._src.lib exists but _jax or ifrt_proxy does not.
+    from jax.lib.xla_extension import ifrt_proxy
 
 
 def register_backend_factory():
