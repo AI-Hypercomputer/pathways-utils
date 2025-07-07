@@ -38,7 +38,7 @@ def lru_cache(
 
     wrapper.cache_clear = cached.cache_clear
     wrapper.cache_info = cached.cache_info
-    jax.extend.backend.add_clear_backends_callback(wrapper.cache_clear)
+    jax.extend.backend.register_backend_cache(wrapper, "Pathways LRU cache")
     return wrapper
 
   return wrap
