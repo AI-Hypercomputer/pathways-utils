@@ -22,10 +22,13 @@ import logging
 import typing
 
 import jax
+from orbax.checkpoint import experimental
 from orbax.checkpoint import future
 from orbax.checkpoint import type_handlers
 from pathwaysutils.persistence import helper
 
+
+ColocatedPythonArrayHandler = experimental.ColocatedPythonArrayHandler
 
 logger = logging.getLogger(__name__)
 
@@ -192,15 +195,24 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
 def register_pathways_handlers(
     read_timeout: datetime.timedelta | None = None,
+    use_colocated_python: bool = False,
 ):
   """Function that must be called before saving or restoring with Pathways."""
-  logger.debug(
-      "Registering CloudPathwaysArrayHandler (Pathways Persistence API)."
-  )
-  type_handlers.register_type_handler(
-      jax.Array,
-      CloudPathwaysArrayHandler(
-          read_timeout=read_timeout,
-      ),
-      override=True,
-  )
+  if use_colocated_python:
+    logger.debug("Registering ColocatedPythonArrayHandler.")
+    type_handlers.register_type_handler(
+        jax.Array,
+        ColocatedPythonArrayHandler(),
+        override=True,
+    )
+  else:
+    logger.debug(
+        "Registering CloudPathwaysArrayHandler (Pathways Persistence API)."
+    )
+    type_handlers.register_type_handler(
+        jax.Array,
+        CloudPathwaysArrayHandler(
+            read_timeout=read_timeout,
+        ),
+        override=True,
+    )

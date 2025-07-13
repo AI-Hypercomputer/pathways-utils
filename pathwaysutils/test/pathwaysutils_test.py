@@ -24,20 +24,44 @@ from absl.testing import parameterized
 
 class PathwaysutilsTest(parameterized.TestCase):
 
-  def test_first_initialize(self):
+  @parameterized.named_parameters(
+      ("persistence", "ENABLE_PATHWAYS_PERSISTENCE"),
+      ("colocated_python", "ENABLE_COLOCATED_PYTHON_CHECKPOINTING"),
+  )
+  def test_first_initialize(self, flag):
     jax.config.update("jax_platforms", "proxy")
     pathwaysutils._initialization_count = 0
 
-    with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
-      pathwaysutils.initialize()
+    with mock.patch.dict(os.environ, {flag: "1"}, clear=True):
+      with self.assertLogs("pathwaysutils", level="DEBUG") as logs:
+        pathwaysutils.initialize()
 
-    self.assertLen(logs.output, 2)
-    self.assertIn(
-        "Starting initialize.", logs.output[0]
-    )
+    self.assertLen(logs.output, 3)
+    self.assertIn("Starting initialize.", logs.output[0])
     self.assertIn(
         "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[1]
     )
+    if flag == "ENABLE_PATHWAYS_PERSISTENCE":
+      self.assertIn(
+          "Registering CloudPathwaysArrayHandler", logs.output[2]
+      )
+    else:
+      self.assertIn("Registering ColocatedPythonArrayHandler", logs.output[2])
+
+  def test_initialize_with_both_enabled_raises_error(self):
+    jax.config.update("jax_platforms", "proxy")
+    pathwaysutils._initialization_count = 0
+
+    with mock.patch.dict(
+        os.environ,
+        {
+            "ENABLE_PATHWAYS_PERSISTENCE": "1",
+            "ENABLE_COLOCATED_PYTHON_CHECKPOINTING": "1",
+        },
+        clear=True,
+    ):
+      with self.assertRaises(ValueError):
+        pathwaysutils.initialize()
 
   @parameterized.named_parameters(
       ("initialization_count 1", 1),
@@ -78,17 +102,42 @@ class PathwaysutilsTest(parameterized.TestCase):
     self.assertTrue(pathwaysutils.is_pathways_backend_used())
 
   def test_persistence_enabled(self):
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
-    self.assertTrue(pathwaysutils._is_persistence_enabled())
+    with mock.patch.dict(
+        os.environ, {"ENABLE_PATHWAYS_PERSISTENCE": "1"}, clear=True
+    ):
+      self.assertTrue(pathwaysutils._is_persistence_enabled())
 
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "0"
-    self.assertFalse(pathwaysutils._is_persistence_enabled())
+    with mock.patch.dict(
+        os.environ, {"ENABLE_PATHWAYS_PERSISTENCE": "0"}, clear=True
+    ):
+      self.assertFalse(pathwaysutils._is_persistence_enabled())
 
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = ""
-    self.assertRaises(ValueError, pathwaysutils._is_persistence_enabled)
+    with mock.patch.dict(
+        os.environ, {"ENABLE_PATHWAYS_PERSISTENCE": ""}, clear=True
+    ):
+      self.assertRaises(ValueError, pathwaysutils._is_persistence_enabled)
 
-    del os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
-    self.assertFalse(pathwaysutils._is_persistence_enabled())
+    with mock.patch.dict(os.environ, {}, clear=True):
+      self.assertFalse(pathwaysutils._is_persistence_enabled())
+
+  def test_colocated_python_enabled(self):
+    with mock.patch.dict(
+        os.environ, {"ENABLE_COLOCATED_PYTHON_CHECKPOINTING": "1"}, clear=True
+    ):
+      self.assertTrue(pathwaysutils._is_colocated_python_enabled())
+
+    with mock.patch.dict(
+        os.environ, {"ENABLE_COLOCATED_PYTHON_CHECKPOINTING": "0"}, clear=True
+    ):
+      self.assertFalse(pathwaysutils._is_colocated_python_enabled())
+
+    with mock.patch.dict(
+        os.environ, {"ENABLE_COLOCATED_PYTHON_CHECKPOINTING": ""}, clear=True
+    ):
+      self.assertRaises(ValueError, pathwaysutils._is_colocated_python_enabled)
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+      self.assertFalse(pathwaysutils._is_colocated_python_enabled())
 
 
 if __name__ == "__main__":

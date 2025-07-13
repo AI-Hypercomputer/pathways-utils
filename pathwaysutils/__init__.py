@@ -67,6 +67,31 @@ def _is_persistence_enabled() -> bool:
   return False
 
 
+def _is_colocated_python_enabled() -> bool:
+  """Returns whether colocated python checkpointing is enabled.
+
+  This function checks the environment variable
+  ENABLE_COLOCATED_PYTHON_CHECKPOINTING to determine whether colocated python
+  checkpointing is enabled. If the variable is set to "1", it is enabled. If the
+  variable is set to "0" or unset, it is disabled.
+
+  Returns:
+    True if colocated python checkpointing is enabled, False otherwise.
+  """
+  if "ENABLE_COLOCATED_PYTHON_CHECKPOINTING" in os.environ:
+    if os.environ["ENABLE_COLOCATED_PYTHON_CHECKPOINTING"] == "1":
+      return True
+    if os.environ["ENABLE_COLOCATED_PYTHON_CHECKPOINTING"] == "0":
+      return False
+    else:
+      raise ValueError(
+          "ENABLE_COLOCATED_PYTHON_CHECKPOINTING must be set to 1/0 or"
+          " unset, got: "
+          + os.environ["ENABLE_COLOCATED_PYTHON_CHECKPOINTING"]
+      )
+  return False
+
+
 def initialize() -> None:
   """Initializes pathwaysutils.
 
@@ -93,8 +118,16 @@ def initialize() -> None:
     proxy_backend.register_backend_factory()
     profiling.monkey_patch_jax()
     # TODO: b/365549911 - Remove when OCDBT-compatible
-    if _is_persistence_enabled():
-      orbax_handler.register_pathways_handlers(datetime.timedelta(hours=1))
+    if _is_persistence_enabled() ^ _is_colocated_python_enabled():
+      orbax_handler.register_pathways_handlers(
+          datetime.timedelta(hours=1),
+          use_colocated_python=_is_colocated_python_enabled(),
+      )
+    elif _is_persistence_enabled() and _is_colocated_python_enabled():
+      raise ValueError(
+          "Invalid configuration: ENABLE_PATHWAYS_PERSISTENCE and"
+          " ENABLE_COLOCATED_PYTHON_CHECKPOINTING cannot both be enabled."
+      )
 
     # Turn off JAX compilation cache because Pathways handles its own
     # compilation cache.
