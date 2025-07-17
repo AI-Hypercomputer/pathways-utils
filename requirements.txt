@@ -4,3 +4,4 @@ orbax-checkpoint
 uvicorn
 fastapi
 google-cloud-logging
+etils
