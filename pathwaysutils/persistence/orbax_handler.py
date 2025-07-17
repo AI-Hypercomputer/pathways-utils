@@ -84,6 +84,9 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       raise ValueError("Casting during save not supported for Pathways.")
 
     locations, names = extract_parent_dir_and_name(infos)
+    # Create destination directories before initiating the writes b/432371796.
+    for location in set(locations):
+      epath.Path(location).mkdir(parents=True, exist_ok=True)
     f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
     futures_results = list(map(f, locations, names, values))
 
