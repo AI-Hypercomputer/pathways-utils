@@ -15,6 +15,7 @@
 
 import collections
 from collections.abc import Sequence
+import concurrent.futures
 import datetime
 import functools
 import logging
@@ -65,13 +66,8 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
   async def _background_serialize(
       self,
-      values: Sequence[jax.Array],
-      locations: Sequence[str],
-      names: Sequence[str],
+      futures_results: Sequence[concurrent.futures.Future[None]],
   ) -> None:
-    """Uses Pathways Persistence API to serialize a jax array."""
-    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
-    futures_results = list(map(f, locations, names, values))
     for future_result in futures_results:
       future_result.result()
 
@@ -87,15 +83,13 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     if any([arg.dtype is not None for arg in args]):
       raise ValueError("Casting during save not supported for Pathways.")
 
-    # Create a copy of the arrays to ensure their buffers are not deallocated
-    # before the asynchronous write operation completes.
-    copied_values = [v.copy() for v in values]
-    jax.block_until_ready(copied_values)
-
     locations, names = extract_parent_dir_and_name(infos)
+    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
+    futures_results = list(map(f, locations, names, values))
+
     return [
         future.CommitFutureAwaitingContractedSignals(
-            self._background_serialize(copied_values, locations, names),
+            self._background_serialize(futures_results),
             name="cloud_pathways_array_handler",
         )
     ]
