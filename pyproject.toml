@@ -18,6 +18,7 @@ dependencies = [
     "orbax-checkpoint",
     "uvicorn",
     "requests",
+    "etils",
 ]
 
 # `version` is automatically set by flit to use `my_project.__version__`
