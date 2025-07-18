@@ -71,6 +71,13 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     for future_result in futures_results:
       future_result.result()
 
+  def _wait_for_directory_creation_signals(self):
+    async def _no_op():
+      pass
+
+    # Wait for directory creation signals to be set.
+    future.CommitFutureAwaitingContractedSignals(_no_op()).result()
+
   async def serialize(
       self,
       values: Sequence[jax.Array],
@@ -83,6 +90,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
     if any([arg.dtype is not None for arg in args]):
       raise ValueError("Casting during save not supported for Pathways.")
 
+    self._wait_for_directory_creation_signals()
     locations, names = extract_parent_dir_and_name(infos)
     f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
     futures_results = list(map(f, locations, names, values))
