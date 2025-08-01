@@ -19,16 +19,21 @@ on: [push, workflow_dispatch]
 
 jobs:
   unittest-job:
-    name: Unittests
+    name: Unittests (Python ${{ matrix.python-version }}, JAX ${{ matrix.jax-version }})
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.10', '3.11', '3.12']
+        jax-version: ['0.5.3', '0.6.0', '0.6.1', '0.6.2', '0.7.0']
+
+        exclude:
+          - python-version: '3.10'
+            jax-version: '0.7.0'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.python-version }}
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.python-version }}-${{ matrix.jax-version }}
       cancel-in-progress: true
 
     steps:
@@ -39,7 +44,7 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     - run: pip --version
-    - run: pip install -e .
+    - run: pip install -e . "jax==${{ matrix.jax-version }}"
     - run: pip freeze
 
     # Run tests
