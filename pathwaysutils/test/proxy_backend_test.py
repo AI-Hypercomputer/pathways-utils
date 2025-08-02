@@ -17,7 +17,7 @@ from unittest import mock
 
 import jax
 from jax.extend import backend
-from jax.lib.xla_extension import ifrt_proxy
+from pathwaysutils import jax as pw_jax
 from pathwaysutils import proxy_backend
 
 from absl.testing import absltest
@@ -38,7 +38,7 @@ class ProxyBackendTest(absltest.TestCase):
   def test_proxy_backend_registration(self):
     self.enter_context(
         mock.patch.object(
-            ifrt_proxy,
+            pw_jax.ifrt_proxy,
             "get_client",
             return_value=mock.MagicMock(),
         )
