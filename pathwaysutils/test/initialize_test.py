@@ -13,28 +13,25 @@
 # limitations under the License.
 
 import os
-from unittest import mock
 
 import jax
-import pathwaysutils
+from pathwaysutils import _initialize
 
 from absl.testing import absltest
 from absl.testing import parameterized
 
 
-class PathwaysutilsTest(parameterized.TestCase):
+class InitializeTest(parameterized.TestCase):
 
   def test_first_initialize(self):
     jax.config.update("jax_platforms", "proxy")
-    pathwaysutils._initialization_count = 0
+    _initialize._initialization_count = 0
 
-    with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
-      pathwaysutils.initialize()
+    with self.assertLogs(_initialize._logger, level="DEBUG") as logs:
+      _initialize.initialize()
 
     self.assertLen(logs.output, 2)
-    self.assertIn(
-        "Starting initialize.", logs.output[0]
-    )
+    self.assertIn("Starting initialize.", logs.output[0])
     self.assertIn(
         "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[1]
     )
@@ -46,10 +43,10 @@ class PathwaysutilsTest(parameterized.TestCase):
       ("initialization_count 1000", 1000),
   )
   def test_initialize_more_than_once(self, initialization_count):
-    pathwaysutils._initialization_count = initialization_count
+    _initialize._initialization_count = initialization_count
 
-    with self.assertLogs(pathwaysutils._logger, level="DEBUG") as logs:
-      pathwaysutils.initialize()
+    with self.assertLogs(_initialize._logger, level="DEBUG") as logs:
+      _initialize.initialize()
 
     self.assertLen(logs.output, 1)
     self.assertIn(
@@ -65,7 +62,7 @@ class PathwaysutilsTest(parameterized.TestCase):
   )
   def test_not_is_pathways_backend_used(self, platform: str):
     jax.config.update("jax_platforms", platform)
-    self.assertFalse(pathwaysutils.is_pathways_backend_used())
+    self.assertFalse(_initialize.is_pathways_backend_used())
 
   @parameterized.named_parameters(
       ("proxy", "proxy"),
@@ -75,20 +72,20 @@ class PathwaysutilsTest(parameterized.TestCase):
   )
   def test_is_pathways_backend_used(self, platform: str):
     jax.config.update("jax_platforms", platform)
-    self.assertTrue(pathwaysutils.is_pathways_backend_used())
+    self.assertTrue(_initialize.is_pathways_backend_used())
 
   def test_persistence_enabled(self):
     os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
-    self.assertTrue(pathwaysutils._is_persistence_enabled())
+    self.assertTrue(_initialize._is_persistence_enabled())
 
     os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "0"
-    self.assertFalse(pathwaysutils._is_persistence_enabled())
+    self.assertFalse(_initialize._is_persistence_enabled())
 
     os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = ""
-    self.assertRaises(ValueError, pathwaysutils._is_persistence_enabled)
+    self.assertRaises(ValueError, _initialize._is_persistence_enabled)
 
     del os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
-    self.assertFalse(pathwaysutils._is_persistence_enabled())
+    self.assertFalse(_initialize._is_persistence_enabled())
 
 
 if __name__ == "__main__":
