@@ -16,7 +16,7 @@
 import functools
 from typing import Any, Callable
 
-from jax.extend import backend
+from pathwaysutils import jax as pw_jax
 
 
 def lru_cache(
@@ -38,7 +38,7 @@ def lru_cache(
 
     wrapper.cache_clear = cached.cache_clear
     wrapper.cache_info = cached.cache_info
-    backend.register_backend_cache(wrapper, "Pathways LRU cache")
+    pw_jax.register_backend_cache(wrapper, "Pathways LRU cache")
     return wrapper
 
   return wrap
