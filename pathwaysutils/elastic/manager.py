@@ -146,8 +146,7 @@ class Manager:
           f"Slice {slice_index=} not found in {self.slice_to_devices=}"
       ) from error
 
-  @classmethod
-  def is_error_due_to_slice_down(cls, error: Exception) -> bool:
+  def is_error_due_to_slice_down(self, error: Exception) -> bool:
     """Returns True if the error is due to slice down.
 
     The error types that are considered due to slice down are
@@ -160,7 +159,8 @@ class Manager:
       error: The error to check.
     """
     return_value = isinstance(error, jax.errors.JaxRuntimeError) and any(
-        error_type in str(error) for error_type in cls._ELASTIC_DOWN_ERROR_TYPES
+        error_type in str(error)
+        for error_type in self._ELASTIC_DOWN_ERROR_TYPES
     )
     if return_value:
       _logger.info("Caught an error due to slice down")
@@ -171,8 +171,7 @@ class Manager:
 
     return return_value
 
-  @classmethod
-  def _simple_execution(cls, devices: Sequence[jax.Device]) -> jax.Array:
+  def _simple_execution(self, devices: Sequence[jax.Device]) -> jax.Array:
     """Simple execution to test if a slice is available.
 
     This function is used to test if a slice is available. It executes a simple
@@ -192,7 +191,7 @@ class Manager:
       raise ValueError("No devices")
 
     test_input = np.zeros(len(devices), dtype=float) + (
-        cls._SIMPLE_EXECUTION_TEST_VALUE - 1
+        self._SIMPLE_EXECUTION_TEST_VALUE - 1
     )
 
     return jax.pmap(lambda x: x + 1, devices=devices)(test_input)
@@ -374,7 +373,8 @@ class Manager:
     the manager. Calls will raise an error if there are no snapshot to pop.
 
     Returns:
-      A tuple of the step and the snapshot.
+      A tuple of the step, the snapshot of jax arrays, and the snapshot of
+      controller variables.
 
     Raises:
       ElasticRuntimeError: If there is no snapshot to pop.
@@ -390,46 +390,6 @@ class Manager:
     self._snapshot = None
 
     return step, snapshot_jax_arrays, snapshot_controller
-
-  @staticmethod
-  def _get_snapshot_jax_arrays_size(snapshot_jax_arrays: PyTree | None) -> int:
-    """Returns the size of a snapshot.
-
-    Args:
-      snapshot_jax_arrays: The snapshot to get the size of.
-    """
-    return sum(leaf.nbytes for leaf in jax.tree.leaves(snapshot_jax_arrays))
-
-  @staticmethod
-  def _put_snapshot_jax_arrays_on_host(
-      snapshot_jax_arrays: PyTree | None,
-  ) -> PyTree | None:
-    """Puts a copy of the snapshot on the host.
-
-    Args:
-      snapshot_jax_arrays: The snapshot to move to the host. Must be a PyTree of
-        JAX arrays or None.
-
-    Returns:
-      A copy of the snapshot on the host.
-    """
-
-    sharding_pinned_host = jax.tree.map(
-        lambda x: x.sharding.with_memory_kind("pinned_host"),
-        snapshot_jax_arrays,
-    )
-    return jax.device_put(
-        snapshot_jax_arrays,
-        sharding_pinned_host,
-        donate=False,
-        may_alias=False,
-    )
-
-  @staticmethod
-  def _put_snapshot_on_controller(
-      snapshot: PyTree | None,
-  ) -> PyTree | None:
-    return copy.deepcopy(snapshot)
 
   # TODO: b/407772100 - Support multiple snapshots.
   @timing.timeit
@@ -459,12 +419,21 @@ class Manager:
       _logger.info("Not saving a snapshot")
       return
 
-    total_nbytes = self._get_snapshot_jax_arrays_size(snapshot_jax_arrays)
+    total_nbytes = sum(
+        leaf.nbytes for leaf in jax.tree.leaves(snapshot_jax_arrays)
+    )
 
     _logger.info("Saving a snapshot of %s bytes on host", total_nbytes)
 
-    snapshot_jax_arrays_host = self._put_snapshot_jax_arrays_on_host(
-        snapshot_jax_arrays
+    sharding_pinned_host = jax.tree.map(
+        lambda x: x.sharding.with_memory_kind("pinned_host"),
+        snapshot_jax_arrays,
+    )
+    snapshot_jax_arrays_host = jax.device_put(
+        snapshot_jax_arrays,
+        sharding_pinned_host,
+        donate=False,
+        may_alias=False,
     )
     _logger.info("Snapshot dispatched")
 
@@ -472,9 +441,8 @@ class Manager:
       jax.block_until_ready(snapshot_jax_arrays_host)
       _logger.info("Snapshot completed")
 
-    snapshot_on_controller = self._put_snapshot_on_controller(
-        snapshot_controller
-    )
+    snapshot_on_controller = copy.deepcopy(snapshot_controller)
+
     self._snapshot = {
         "step": step,
         "snapshot_jax_arrays": snapshot_jax_arrays_host,
@@ -523,9 +491,7 @@ class Manager:
         may_alias=False,
     )
 
-    snapshot_on_controller = self._put_snapshot_on_controller(
-        snapshot_controller
-    )
+    snapshot_on_controller = copy.deepcopy(snapshot_controller)
 
     self._snapshot = {
         "step": step,
