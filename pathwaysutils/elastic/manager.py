@@ -82,6 +82,18 @@ class Manager:
       max_elastic_down_event_count: int | None = None,
       max_reshard_retry_count: int | None = None,
   ) -> None:
+    """Initializes the manager.
+
+    Args:
+      devices: The devices to use. If None, jax.devices() is used.
+      reshard_check_period: The number of steps between reshard checks after a
+        slice down event has occurred.
+      snapshot_period: The number of steps between snapshots.
+      max_elastic_down_event_count: The maximum number of elastic down events.
+        If None, there is no limit.
+      max_reshard_retry_count: The maximum number of consequetive reshard
+        retries. If None, there is no limit.
+    """
     if devices is None:
       devices = jax.devices()
     self.devices = devices
