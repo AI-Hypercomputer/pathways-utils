@@ -644,7 +644,7 @@ class Manager:
   def wait_for_slices(
       self,
       slice_count: int | None = None,
-      wait_period: float | int = 10,
+      poll_interval: float | int = 10,
       timeout: float | int | None = None,
   ) -> set[int]:
     """Waits until after at least `slice_count` slices become available.
@@ -652,10 +652,11 @@ class Manager:
     Args:
       slice_count: The number of slices to wait for. If None, waits for all
         slices to become available.
-      wait_period: The number of seconds to wait between availability checks.
-      Defaults to 10 seconds.
-      timeout: The maximum number of seconds to wait. If None, there is
-        no timeout.
+      poll_interval: The minimum number of seconds to wait between availability
+        checks. If the check takes longer than this, the next check will start
+        immediately after the current check completes. Defaults to 10 seconds.
+      timeout: The maximum number of seconds to wait. If None, there is no
+        timeout.
 
     Returns:
       The good slice indices
@@ -669,11 +670,35 @@ class Manager:
 
     start_time = time.time()
 
-    while (
-        len(good_slice_indices := self.get_slice_availability()) < slice_count
-    ):
-      elapsed_time = time.time() - start_time
-      if timeout is not None and elapsed_time + wait_period >= timeout:
+    while True:
+      check_start_time = time.time()
+
+      if (
+          len(good_slice_indices := self.get_slice_availability())
+          >= slice_count
+      ):
+        _logger.info(
+            "%s/%s slices are available",
+            len(good_slice_indices),
+            self.total_slice_count,
+        )
+        return good_slice_indices
+
+      _logger.info(
+          "%s/%s slices available. Wanting at least %s/%s.",
+          len(good_slice_indices),
+          self.total_slice_count,
+          slice_count,
+          self.total_slice_count,
+      )
+
+      time_to_sleep = max(0, poll_interval - (time.time() - check_start_time))
+
+      if (
+          timeout is not None
+          and (elapsed_time := time.time() - start_time) + time_to_sleep
+          >= timeout
+      ):
         raise TimeoutError(
             f"Timed out waiting for {slice_count} slices. Only"
             f" {len(good_slice_indices)} available after"
@@ -682,29 +707,15 @@ class Manager:
             " seconds."
         )
 
-      _logger.info(
-          "%s/%s slices available. Wanting at least %s/%s. Sleeping for %s"
-          " seconds.",
-          len(good_slice_indices),
-          self.total_slice_count,
-          slice_count,
-          self.total_slice_count,
-          wait_period,
-      )
-      time.sleep(wait_period)
+      if time_to_sleep > 0:
+        _logger.info("Sleeping for %s seconds.", time_to_sleep)
 
-    _logger.info(
-        "%s/%s slices are available",
-        len(good_slice_indices),
-        self.total_slice_count,
-    )
-
-    return good_slice_indices
+        time.sleep(time_to_sleep)
 
   def pause_resume(
       self,
       max_retries: int,
-      wait_period: float | int = 10,
+      poll_interval: float | int = 10,
       timeout: float | None = None,
   ) -> Any:
     """Retries a function with pause/resume fault tolerance.
@@ -723,7 +734,7 @@ class Manager:
 
     Args:
       max_retries: The maximum number of times to retry the function.
-      wait_period: The number of seconds to wait between availability checks.
+      poll_interval: The number of seconds to wait between availability checks.
         Defaults to 10 seconds.
       timeout: The maximum number of seconds to wait for slices to become
         available before each retry attempt. If None, there is no timeout.
@@ -745,7 +756,7 @@ class Manager:
                 "Elastic attempt %d out of %d", retry_index + 1, max_retries
             )
 
-            self.wait_for_slices(wait_period=wait_period, timeout=timeout)
+            self.wait_for_slices(poll_interval=poll_interval, timeout=timeout)
 
             return func(*args, **kwargs)
           except jax.errors.JaxRuntimeError as error:
