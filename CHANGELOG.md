@@ -23,8 +23,15 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
-## [0.1.1] - 2025-04-25
+## [0.1.2] - 2025-08-25
+* Updates to Pathways orbax handler. In https://github.com/AI-Hypercomputer/pathways-utils/pull/81 https://github.com/AI-Hypercomputer/pathways-utils/pull/89 https://github.com/AI-Hypercomputer/pathways-utils/pull/90
+* Improvements to pathwaysutils/elastic by @copybara-service[bot] inhttps://github.com/AI-Hypercomputer/pathways-utils/pull/72  https://github.com/AI-Hypercomputer/pathways-utils/pull/84 https://github.com/AI-Hypercomputer/pathways-utils/pull/85 https://github.com/AI-Hypercomputer/pathways-utils/pull/86 https://github.com/AI-Hypercomputer/pathways-utils/pull/99 https://github.com/AI-Hypercomputer/pathways-utils/pull/100 https://github.com/AI-Hypercomputer/pathways-utils/pull/102
+* Handle JAX API interface compatibility by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/88 https://github.com/AI-Hypercomputer/pathways-utils/pull/93 https://github.com/AI-Hypercomputer/pathways-utils/pull/95
+* Adding jax version to the github actions matrix by @lukebaumann in https://github.com/AI-Hypercomputer/pathways-utils/pull/94
+* Added LRU cache and tests to pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/83
+* Moving initialization logic into its own module by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/96
 
+## [0.1.1] - 2025-04-25
 * Port the `collect_profile` script from JAX to PathwaysUtils
 * Remove support for legacy initialize
 * Add collect_profile as a script of pathwaysutils

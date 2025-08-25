@@ -18,4 +18,4 @@ initialize = _initialize.initialize
 del _initialize
 
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.1.1"
+__version__ = "v0.1.2"
