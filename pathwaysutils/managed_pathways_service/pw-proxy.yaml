@@ -1,0 +1,56 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: ${PROXY_NAME}
+spec:
+  coordinator:
+    replicatedJob: pathways-head
+  failurePolicy:
+    maxRestarts: 1
+    restartStrategy: Recreate
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+  - name: pathways-head
+    replicas: 1
+    template:
+      metadata:
+        annotations:
+          alpha.jobset.sigs.k8s.io/exclusive-topology: kubernetes.io/hostname
+      spec:
+        backoffLimit: 0
+        completionMode: Indexed
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              kueue.x-k8s.io/podset: pathways-head
+          spec:
+            containers:
+            - args:
+              - --server_port=29000
+              - --resource_manager_address=${PATHWAYS_HEAD}:${PATHWAYS_HEAD_PORT}
+              - --gcs_scratch_location=${GCS_BUCKET}
+              - --virtual_slices=${EXPECTED_INSTANCES}
+              env:
+              - name: PATHWAYS_HEAD
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+              image: us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_proxy_server:latest
+              imagePullPolicy: Always
+              name: pathways-proxy
+              ports:
+              - containerPort: 29000
+                protocol: TCP
+              resources:
+                limits:
+                  cpu: "16"
+                  memory: 100G
+            nodeSelector:
+              cloud.google.com/gke-nodepool: cpu-np
+            dnsPolicy: ClusterFirstWithHostNet
+            hostNetwork: true
+            restartPolicy: OnFailure
