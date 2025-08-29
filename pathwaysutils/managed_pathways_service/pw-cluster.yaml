@@ -1,0 +1,152 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: pathways-akshu-s4-rw7
+spec:
+  coordinator:
+    replicatedJob: pathways-head
+  failurePolicy:
+    maxRestarts: 1
+    restartStrategy: Recreate
+  network:
+    enableDNSHostnames: true
+    publishNotReadyAddresses: true
+  replicatedJobs:
+  - name: pathways-head
+    replicas: 1
+    template:
+      metadata:
+        annotations:
+          alpha.jobset.sigs.k8s.io/exclusive-topology: kubernetes.io/hostname
+      spec:
+        backoffLimit: 0
+        completionMode: Indexed
+        completions: 1
+        parallelism: 1
+        template:
+          metadata:
+            labels:
+              kueue.x-k8s.io/podset: pathways-head
+          spec:
+            containers:
+            - args:
+              - --server_port=29001
+              - --gcs_scratch_location=gs://akshu-v5e
+              - --node_type=resource_manager
+              - --instance_count=4
+              - --instance_type=tpuv5e:4x8
+              - --xla_tpu_use_enhanced_launch_barrier=true
+              - --logtostderr
+              - --stderrthreshold=0
+              - --v=1
+              env:
+              - name: REPLICATED_JOB_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']
+              - name: JOBSET_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+              - name: HOST_ADDRESS
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+              - name: TPU_SKIP_MDS_QUERY
+                value: "true"
+              image: us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_server:latest
+              imagePullPolicy: Always
+              name: pathways-rm
+              ports:
+              - containerPort: 29001
+                protocol: TCP
+              - containerPort: 29002
+                protocol: TCP
+              resources:
+                limits:
+                  cpu: "8"
+                  memory: 16G
+            nodeSelector:
+              cloud.google.com/gke-nodepool: cpu-np
+            dnsPolicy: ClusterFirstWithHostNet
+            hostNetwork: true
+            restartPolicy: OnFailure
+  - name: worker
+    replicas: 4
+    template:
+      metadata: {}
+      spec:
+        backoffLimit: 64
+        completionMode: Indexed
+        completions: 8
+        parallelism: 8
+        template:
+          metadata:
+            annotations:
+              alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+            labels:
+              kueue.x-k8s.io/podset: worker
+          spec:
+            containers:
+            - args:
+              - --server_port=29005
+              - --resource_manager_address=$(PATHWAYS_HEAD):29001
+              - --gcs_scratch_location=gs://akshu-v5e
+              - --xla_tpu_use_enhanced_launch_barrier=true
+              - --logtostderr
+              - --stderrthreshold=0
+              - --v=1
+              env:
+              - name: TPU_MIN_LOG_LEVEL
+                value: "0"
+              - name: TF_CPP_MIN_LOG_LEVEL
+                value: "0"
+              - name: XCLOUD_ENVIRONMENT
+                value: GCP
+              - name: MEGASCALE_GRPC_ENABLE_XOR_TRACER
+                value: "false"
+              - name: MEGASCALE_NUM_SLICES
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/replicatedjob-replicas']
+              - name: JOBSET_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+              - name: REPLICATED_JOB_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']
+              - name: MEGASCALE_SLICE_ID
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/job-index']
+              - name: PATHWAYS_HEAD
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+              - name: MEGASCALE_COORDINATOR_ADDRESS
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+              image: us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_server:latest
+              imagePullPolicy: Always
+              name: pathways-worker
+              ports:
+              - containerPort: 29005
+                protocol: TCP
+              - containerPort: 29006
+                protocol: TCP
+              - containerPort: 8471
+                protocol: TCP
+              - containerPort: 8080
+                protocol: TCP
+              resources:
+                limits:
+                  google.com/tpu: "4"
+            dnsPolicy: ClusterFirstWithHostNet
+            hostNetwork: true
+            nodeSelector:
+              cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
+              cloud.google.com/gke-tpu-topology: 4x8
+            restartPolicy: OnFailure
