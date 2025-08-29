@@ -708,7 +708,7 @@ class Manager:
         )
 
       if time_to_sleep > 0:
-        _logger.info("Sleeping for %s seconds.", time_to_sleep)
+        _logger.info("Sleeping for %.2f seconds.", time_to_sleep)
 
         time.sleep(time_to_sleep)
 
