@@ -15,6 +15,8 @@
 from pathwaysutils import _initialize
 
 initialize = _initialize.initialize
+is_pathways_backend_used = _initialize.is_pathways_backend_used
+
 del _initialize
 
 # When changing this, also update the CHANGELOG.md.
