@@ -10,7 +10,7 @@ from absl.testing import absltest
 
 
 class PersistenceTest(absltest.TestCase):
-  location = "/cns/path/to/location"
+  location = "/path/to/location"
   name = "name"
   dtype = np.dtype(np.int32)
   shape = [8, 4]
