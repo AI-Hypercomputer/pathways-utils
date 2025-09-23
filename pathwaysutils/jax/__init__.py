@@ -18,6 +18,32 @@ This introduces an abstrction layer some JAX APIs that have changed over
 """
 
 from typing import Any
+import jax
+
+
+class _FakeJaxModule:
+  """A fake module that raises an ImportError when accessed.
+
+  This is used to provide a placeholder for JAX modules that are not available
+  in older versions of JAX, raising a helpful error message if they are
+  inadvertently used.
+  """
+
+  def __init__(self, name, version):
+    self.__name__ = name
+    self.version = version
+    self.error_message = (
+        f"Module {self.__name__} does not exist until JAX {self.version}. "
+        f"The current version of JAX is {jax.__version__}. "
+        "Using this modules results in this runtime error."
+    )
+
+  def __getattr__(self, name):
+    raise ImportError(self.error_message)
+
+  def __call__(self, *args, **kwargs):
+    raise ImportError(self.error_message)
+
 
 try:
   # jax>=0.7.0
@@ -47,3 +73,18 @@ except AttributeError:
 
   ifrt_proxy = xla_extension.ifrt_proxy
   del xla_extension
+
+
+try:
+  # jax>=0.7.2
+  from jax.jaxlib import _pathways  # pylint: disable=g-import-not-at-top
+
+  jaxlib_pathways = _pathways
+  del _pathways
+except (ModuleNotFoundError, AttributeError):
+  # jax<0.7.2
+
+  jaxlib_pathways = _FakeJaxModule("jax.jaxlib._pathways", "0.7.2")
+
+
+del _FakeJaxModule
