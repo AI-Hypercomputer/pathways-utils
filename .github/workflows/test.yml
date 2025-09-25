@@ -23,12 +23,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12']
-        jax-version: ['0.5.3', '0.6.0', '0.6.1', '0.6.2', '0.7.0']
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+        jax-version: ['0.5.3', '0.6.0', '0.6.1', '0.6.2', '0.7.0', '0.7.1', '0.7.2', 'nightly']
 
         exclude:
           - python-version: '3.10'
             jax-version: '0.7.0'
+          - python-version: '3.10'
+            jax-version: '0.7.1'
+          - python-version: '3.10'
+            jax-version: '0.7.2'
+          - python-version: '3.10'
+            jax-version: 'nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -40,11 +46,14 @@ jobs:
     - uses: actions/checkout@v4
 
     # Install deps
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
     - run: pip --version
-    - run: pip install -e . "jax==${{ matrix.jax-version }}"
+    - if: ${{ matrix.jax-version == 'nightly' }}
+      run: pip install -e . -U --pre jax jaxlib -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+    - if: ${{ matrix.jax-version != 'nightly' }}
+      run: pip install -e . "jax==${{ matrix.jax-version }}"
     - run: pip freeze
 
     # Run tests
