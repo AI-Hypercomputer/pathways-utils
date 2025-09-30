@@ -18,6 +18,7 @@ import logging
 import os
 
 import jax
+from orbax.checkpoint._src.metadata import array_metadata_store as array_metadata_store_lib
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
 from pathwaysutils.persistence import orbax_handler
@@ -92,7 +93,10 @@ def initialize() -> None:
     profiling.monkey_patch_jax()
     # TODO: b/365549911 - Remove when OCDBT-compatible
     if _is_persistence_enabled():
-      orbax_handler.register_pathways_handlers(datetime.timedelta(hours=1))
+      orbax_handler.register_pathways_handlers(
+          timeout=datetime.timedelta(hours=1),
+          array_metadata_store=array_metadata_store_lib.Store(),
+      )
 
     # Turn off JAX compilation cache because Pathways handles its own
     # compilation cache.
