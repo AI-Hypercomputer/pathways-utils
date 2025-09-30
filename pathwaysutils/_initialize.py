@@ -92,7 +92,9 @@ def initialize() -> None:
     profiling.monkey_patch_jax()
     # TODO: b/365549911 - Remove when OCDBT-compatible
     if _is_persistence_enabled():
-      orbax_handler.register_pathways_handlers(datetime.timedelta(hours=1))
+      orbax_handler.register_pathways_handlers(
+          timeout=datetime.timedelta(hours=1),
+      )
 
     # Turn off JAX compilation cache because Pathways handles its own
     # compilation cache.
