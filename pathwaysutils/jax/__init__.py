@@ -77,14 +77,14 @@ except AttributeError:
 
 try:
   # jax>=0.8.0
-  from jax.jaxlib import _pathways  # pylint: disable=g-import-not-at-top
+  from jaxlib import _pathways as jaxlib_pathways  # pylint: disable=g-import-not-at-top
 
-  jaxlib_pathways = _pathways
-  del _pathways
-except ModuleNotFoundError:
+except ImportError:
   # jax<0.8.0
 
   jaxlib_pathways = _FakeJaxModule("jax.jaxlib._pathways", "0.8.0")
 
 
+del jax
+del Any
 del _FakeJaxModule
