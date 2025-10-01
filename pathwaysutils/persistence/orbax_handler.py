@@ -49,16 +49,19 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
   def __init__(
       self,
-      read_timeout: datetime.timedelta | None = None,
+      timeout: datetime.timedelta | None = None,
       use_ocdbt: bool = False,
   ):
-    """Constructor.
+    """Orbax array handler for Pathways on Cloud with Persistence API.
 
     Args:
-      read_timeout: Duration indicating the timeout for reading arrays
+      timeout: Duration indicating the timeout for reading and writing arrays.
+        Default is 1 hour.
       use_ocdbt: allows using Tensorstore OCDBT driver.
     """
-    self._read_timeout = read_timeout
+    if timeout is None:
+      timeout = datetime.timedelta(hours=1)
+    self.timeout = timeout
 
     if use_ocdbt:
       raise ValueError("OCDBT not supported for Pathways.")
@@ -92,7 +95,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
     self._wait_for_directory_creation_signals()
     locations, names = extract_parent_dir_and_name(infos)
-    f = functools.partial(helper.write_one_array, timeout=self._read_timeout)
+    f = functools.partial(helper.write_one_array, timeout=self.timeout)
     futures_results = list(map(f, locations, names, values))
 
     return [
@@ -181,7 +184,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
           grouped_global_shapes,
           grouped_shardings,
           global_mesh.devices,
-          timeout=self._read_timeout,
+          timeout=self.timeout,
       )
       # each persistence call is awaited serially.
       read_future.result()
@@ -191,7 +194,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
 
 def register_pathways_handlers(
-    read_timeout: datetime.timedelta | None = None,
+    timeout: datetime.timedelta | None = None,
 ):
   """Function that must be called before saving or restoring with Pathways."""
   logger.debug(
@@ -200,7 +203,7 @@ def register_pathways_handlers(
   type_handlers.register_type_handler(
       jax.Array,
       CloudPathwaysArrayHandler(
-          read_timeout=read_timeout,
+          timeout=timeout,
       ),
       override=True,
   )
