@@ -23,6 +23,15 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.3] - 2025-10-08
+* Update the github action for PyPI by @lukebaumann in https://github.com/AI-Hypercomputer/pathways-utils/pull/105
+* Expose `is_pathways_backend_used` in `pathwaysutils`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/107
+* Treat additional error types as potential slice down issues. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/109
+* Adding split_by_mesh_axis to experimental for use by a new experimental reshard. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/112
+* Update pathways.experimental.reshard so that PyTrees with arrays that have different device sets can be resharded. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/113
+* Update GitHub action unittest matrix by @lukebaumann in https://github.com/AI-Hypercomputer/pathways-utils/pull/111
+* Handle new style PRNG keys in `reshard` and `CloudPathwaysArrayHandler`
+
 ## [0.1.2] - 2025-08-25
 * Updates to Pathways orbax handler. In https://github.com/AI-Hypercomputer/pathways-utils/pull/81 https://github.com/AI-Hypercomputer/pathways-utils/pull/89 https://github.com/AI-Hypercomputer/pathways-utils/pull/90
 * Improvements to pathwaysutils/elastic by @copybara-service[bot] inhttps://github.com/AI-Hypercomputer/pathways-utils/pull/72  https://github.com/AI-Hypercomputer/pathways-utils/pull/84 https://github.com/AI-Hypercomputer/pathways-utils/pull/85 https://github.com/AI-Hypercomputer/pathways-utils/pull/86 https://github.com/AI-Hypercomputer/pathways-utils/pull/99 https://github.com/AI-Hypercomputer/pathways-utils/pull/100 https://github.com/AI-Hypercomputer/pathways-utils/pull/102
