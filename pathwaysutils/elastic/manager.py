@@ -44,6 +44,10 @@ PyTree: TypeAlias = Any
 _logger = logging.getLogger(__name__)
 
 
+def _plus_one(x):
+  return x + 1
+
+
 class ElasticRuntimeError(RuntimeError):
   """Error raised when elasticity cannot continue.
 
@@ -234,7 +238,7 @@ class Manager:
         self._SIMPLE_EXECUTION_TEST_VALUE - 1
     )
 
-    return jax.pmap(lambda x: x + 1, devices=devices)(test_input)
+    return jax.pmap(_plus_one, devices=devices)(test_input)
 
   @timing.timeit
   def get_slice_availability(self) -> set[int]:
