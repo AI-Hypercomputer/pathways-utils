@@ -23,20 +23,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-        jax-version: ['0.5.3', '0.6.0', '0.6.1', '0.6.2', '0.7.0', '0.7.1', '0.7.2', '0.8.0', 'nightly']
+        python-version: ['3.11', '3.12', '3.13', '3.14']
+        jax-version: ['0.6.2', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', 'nightly']
 
         exclude:
-          - python-version: '3.10'
+          - python-version: '3.14'
+            jax-version: '0.6.2'
+          - python-version: '3.14'
             jax-version: '0.7.0'
-          - python-version: '3.10'
-            jax-version: '0.7.1'
-          - python-version: '3.10'
-            jax-version: '0.7.2'
-          - python-version: '3.10'
-            jax-version: '0.8.0'
-          - python-version: '3.10'
-            jax-version: 'nightly'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
