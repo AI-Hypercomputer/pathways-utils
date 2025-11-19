@@ -128,14 +128,14 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       )
       arrays.append(v)
 
-    metadata_coroutine = None
-    if any_random_key:
-      if self._array_metadata_store is None:
-        raise ValueError(
-            "Array metadata store is not set with a checkpoint that requires"
-            f" it. Array metadata: {array_metadatas}"
-        )
+    if any_random_key and self._array_metadata_store is None:
+      raise ValueError(
+          "Array metadata store is not set with a checkpoint that requires"
+          f" it. Array metadata: {array_metadatas}"
+      )
 
+    metadata_coroutine = None
+    if self._array_metadata_store is not None:
       metadata_coroutine = self._array_metadata_store.write(
           checkpoint_dir=infos[0].parent_dir,
           array_metadatas=array_metadatas,
