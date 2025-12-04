@@ -49,3 +49,6 @@ understanding.
    orig_matrix = jnp.zeros(5)
    ...
 ```
+
+The connect block will deploy a proxy pod to your GKE cluster and connect your local runtime environment to the proxy
+pod via port-forwarding.
