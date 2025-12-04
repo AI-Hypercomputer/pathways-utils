@@ -1,0 +1,13 @@
+apiVersion: pathways-job.pathways.domain/v1
+kind: PathwaysJob
+metadata:
+  name: pathways-cluster # jobset name
+spec:
+ maxRestarts: 1
+ workers: # Modify this section to use your TPU type, topology, number of slices and the GCS bucket.
+ - type: ct6e-standard-4t
+   topology: 2x2
+   numSlices: 2
+ pathwaysDir: "gs://pathways-bucket" # Pre-create this bucket.
+ controller:
+   deploymentMode: default

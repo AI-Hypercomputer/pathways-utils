@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${PROXY_JOB_NAME}
+spec:
+  backoffLimit: 0
+  completions: 1
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        app: pathways-proxy
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: pathways-proxy
+        image: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest
+        imagePullPolicy: Always
+        args:
+        - --server_port=${PROXY_SERVER_PORT}
+        - --resource_manager_address=${PATHWAYS_HEAD_HOSTNAME}:${PATHWAYS_HEAD_PORT}
+        - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
+        - --virtual_slices=${EXPECTED_INSTANCES}
+        ports:
+        - containerPort: ${PROXY_SERVER_PORT}
+          protocol: TCP
+        resources:
+          limits:
+            cpu: "16"
+            memory: 100G
+        securityContext:
+          runAsUser: 1000  # go/gke-shipshape#rootless
+          runAsGroup: 1000  # go/gke-shipshape#rootless
+          readOnlyRootFilesystem: true  # go/gke-shipshape#readonlyrootfs
+          capabilities:  # go/gke-shipshape#capabilities
+            drop:
+            - ALL
+          seccompProfile:  # go/gke-shipshape#seccomp
+            type: RuntimeDefault
+          allowPrivilegeEscalation: false  # go/gke-shipshape#allowprivilegeescalation
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      restartPolicy: OnFailure
