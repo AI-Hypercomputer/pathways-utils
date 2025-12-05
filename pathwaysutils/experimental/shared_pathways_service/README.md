@@ -1,15 +1,18 @@
 # Shared Pathways Service
 
-Shared pathways service is a multi-tenant Pathways cluster with dedicated TPU
-resources. This eliminates the need for complex cloud setup, allowing you to
-get started from a familiar local environment (like a laptop or cloud VM) with
-minimal overhead: Just wrap your Python entrypoint in a
-`with isc_pathways.connect():` block!.
+The Shared Pathways Service accelerates developer iteration by providing a
+persistent, multi-tenant TPU environment. This decouples service creation from
+the development loop, allowing JAX clients to connect on-demand from a familiar
+local environment (like a laptop or cloud VM) to a long-running Pathways
+service that manages scheduling and error handling.
 
 ## Requirements
 
-Make sure that your cluster is running the Resource Manager and Worker pods.
-If not, you can use [pw-service-example.yaml](yamls/pw-service-example.yaml).
+Make sure that your GKE cluster is running the Resource Manager and Worker pods.
+You can follow the steps
+[here](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring)
+to confirm the status of these pods. If you haven't started the Pathways pods
+yet, you can use [pw-service-example.yaml](yamls/pw-service-example.yaml).
 Make sure to modify the following values to deploy these pods:
 
 - A unique Jobset name for the cluster's Pathways pods
@@ -50,5 +53,5 @@ understanding.
    ...
 ```
 
-The connect block will deploy a proxy pod to your GKE cluster and connect your local runtime environment to the proxy
-pod via port-forwarding.
+The connect block will deploy a proxy pod dedicated to your client and connect
+your local runtime environment to the proxy pod via port-forwarding.
