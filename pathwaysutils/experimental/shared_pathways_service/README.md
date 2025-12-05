@@ -26,7 +26,7 @@ understanding.
 
 `git clone https://github.com/AI-Hypercomputer/pathways-utils.git`
 
-2. Import `isc_pathways.py` and move your workload under
+2. Import `isc_pathways` and move your workload under
 `with isc_pathways.connect()` statement. Refer to
 [run_connect_example.py](run_connect_example.py) for reference. Example code:
 
