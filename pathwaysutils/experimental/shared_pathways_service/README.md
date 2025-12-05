@@ -10,7 +10,7 @@ service that manages scheduling and error handling.
 
 Make sure that your GKE cluster is running the Resource Manager and Worker pods.
 You can follow the steps
-[here](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring)
+<a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>
 to confirm the status of these pods. If you haven't started the Pathways pods
 yet, you can use [pw-service-example.yaml](yamls/pw-service-example.yaml).
 Make sure to modify the following values to deploy these pods:
