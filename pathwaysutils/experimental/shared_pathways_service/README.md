@@ -29,7 +29,11 @@ understanding.
 
 `git clone https://github.com/AI-Hypercomputer/pathways-utils.git`
 
-2. Import `isc_pathways` and move your workload under
+2. Install portpicker
+
+`pip install portpicker`
+
+3. Import `isc_pathways` and move your workload under
 `with isc_pathways.connect()` statement. Refer to
 [run_connect_example.py](run_connect_example.py) for reference. Example code:
 
@@ -37,12 +41,12 @@ understanding.
  from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
  with isc_pathways.connect(
-     "my-cluster",
-     "my-project",
-     "region",
-     "gs://user-bucket",
-     "pathways-cluster-pathways-head-0-0.pathways-cluster:29001",
-     {"tpuv6e:2x2": 2},
+     cluster="my-cluster",
+     project="my-project",
+     region="region",
+     gcs_bucket="gs://user-bucket",
+     pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001",
+     expected_tpu_instances={"tpuv6e:2x2": 2},
  ) as tm:
    import jax.numpy as jnp
    import pathwaysutils
