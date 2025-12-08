@@ -47,6 +47,7 @@ def _validate_tpu_supported(tpu_instance_with_topology: str) -> None:
   Raises ValueError if the instance is not a valid TPU host.
   """
   # Mapping from Cloud TPU type prefix to max chips per host.
+  # Make sure to edit the project README if you update this mapping.
   single_host_max_chips = {
       "tpuv6e": 8,  # Cloud TPU v6e (2x4)
   }
