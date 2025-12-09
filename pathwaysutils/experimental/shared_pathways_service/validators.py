@@ -51,33 +51,20 @@ def _validate_tpu_supported(tpu_instance_with_topology: str) -> None:
   # tpuv6e:2x4 -> type='tpuv6e', topology='2x4'
   # tpuv5p:2x2x1 -> type='tpuv5p', topology='2x2x1'
   match = re.match(
-      r"^(?P<type>tpuv(?:5e|5p|6e)):(?P<topology>\d+(?:x\d+)*)$",
+      r"^(?:tpuv(?:5e|5p|6e)):(?P<topology>\d+(?:x\d+){1,2})$",
       tpu_instance_with_topology,
   )
 
   if match:
-    tpu_base_type = match.group("type")
     topology_str = match.group("topology")
 
-    if not tpu_base_type:
-      raise ValueError(
-          f"Unknown TPU type '{type}' from '{tpu_instance_with_topology}'."
-      )
-
     try:
-      dims = [int(d) for d in topology_str.split("x")]
-      if len(dims) < 2 or len(dims) > 3:
-        raise ValueError(
-            f"Error: Invalid topology format '{topology_str}', Expected either"
-            " 2 or 3 dimensions."
-        )
-      num_chips = 1
-      for dim in dims:
-        num_chips *= dim
+      _ = [int(d) for d in topology_str.split("x")]
     except ValueError as exc:
       raise ValueError(
           f"Error: Invalid topology format '{topology_str}' in"
-          f" '{tpu_instance_with_topology}'."
+          f" '{tpu_instance_with_topology}'. Expected all numbers, e.g., 2x4"
+          " for 2d topologies or 2x2x2 for 3-d topologies."
       ) from exc
 
     return
