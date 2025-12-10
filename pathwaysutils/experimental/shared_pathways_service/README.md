@@ -11,6 +11,7 @@ service that manages scheduling and error handling.
 1. You have a GKE cluster with atleast 1 slice of `v6e-4` or `v6e-8`. Note that the Shared Pathways Service supports
 single-host Trillium slices only, this support will be extended soon.
 
+<a name="pw-service-yaml"></a>
 2. Start the Shared Pathways Service by using [pw-service-example.yaml](yamls/pw-service-example.yaml).
 Make sure to modify the following values to deploy the Pathways pods:
 
@@ -35,53 +36,29 @@ $ gcloud container clusters get-credentials $CLUSTER_NAME --region $REGION --pro
 # Check the status of RM and Worker pods.
 $ kubectl get pods
 
-# Sample expected output
+# Sample expected output (1 Head pod and 1 or more Worker pods)
 NAME                                       READY   STATUS    RESTARTS   AGE
-pathways-cluster-pathways-head-0-0-zzmn2   2/2     Running   0          3m49s
-pathways-cluster-worker-0-0-bdzq4          1/1     Running   0          3m36s
-pathways-cluster-worker-1-0-km2rf          1/1     Running   0          3m36s
+pathways-cluster-pathways-head-0-0-zzmn2   2/2     Running   0          3m49s   # HEAD POD
+pathways-cluster-worker-0-0-bdzq4          1/1     Running   0          3m36s   # WORKER 0
+pathways-cluster-worker-1-0-km2rf          1/1     Running   0          3m36s   # WORKER 1
 ```
 
-You can also verify the pod status by looking at the project logs. Look for the below substring for the respective pod
-type.
-
-(Detailed instructions are <a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>)
+You can also verify the pod status by running below commands or by checking the project logs (Detailed instructions
+for the logs are <a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>).
 
 ```
-# Set the environment variables
-$ HEAD_POD_NAME=pathways-cluster-pathways-head-0-0-zzmn2
-$ WORKER0_POD_NAME=pathways-cluster-worker-0-0-bdzq4
-$ WORKER1_POD_NAME=pathways-cluster-worker-1-0-km2rf
-```
+# e.g., pathways-cluster
+$ JOBSET_NAME=<your-jobset-name>  # same as you used in [pw-service-example.yaml](#pw-service-yaml)
 
-- RM
-```
-$ kubectl logs $HEAD_POD_NAME --container pathways-rm
-...
-I1208 20:10:04.992524       ...] Pathways Server serving on [::]:29001
-...
-I1208 20:10:23.848070       ...] *** 2/2 Pathways Slices Now Ready
-```
+# e.g., pathways-cluster-pathways-head-0-0-zzmn2
+$ HEAD_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep head)
 
-- Worker
-```
-$ kubectl logs $WORKER0_POD_NAME --container pathways-worker
-...
-I1208 20:10:23.838022       ...] Pathways Server serving on [::]:29005
-...
-I1208 20:10:25.249167       ...] MegaScale transport initialized.
-I1208 20:10:25.249172       ...] MegaScale transport init succeeded.
-
-$ kubectl logs $WORKER1_POD_NAME --container pathways-worker
-...
-I1208 20:10:23.579361       ...] Pathways Server serving on [::]:29005
-I1208 20:10:24.994411       ...] MegaScale transport initialized.
-I1208 20:10:24.994416       ...] MegaScale transport init succeeded.
-...
+# e.g., pathways-cluster-worker-0-0-bdzq4
+$ WORKER0_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep 'worker-0-0-')
 ```
 
 <a name="find-pw-service"></a>
-4. Find the address of the Pathways service.
+4. Find the address of the Pathways service from the logs. We check the worker pod logs in the below command.
 ```
 $ kubectl logs $WORKER0_POD_NAME --container pathways-worker | grep "\-\-resource_manager_address"
 I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-cluster-pathways-head-0-0.pathways-cluster:29001'
