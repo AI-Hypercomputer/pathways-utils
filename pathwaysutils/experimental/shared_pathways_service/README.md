@@ -8,11 +8,16 @@ service that manages scheduling and error handling.
 
 ## Requirements
 
-1. You have a GKE cluster with atleast 1 slice of `v6e-4` or `v6e-8`. Note that the Shared Pathways Service supports
+### 1. Create a GKE cluster with TPUs
+
+You have a GKE cluster with atleast 1 slice of `v6e-4` or `v6e-8`. Note that the Shared Pathways Service supports
 single-host Trillium slices only, this support will be extended soon.
 
 <a name="pw-service-yaml"></a>
-2. Start the Shared Pathways Service by using [pw-service-example.yaml](yamls/pw-service-example.yaml).
+
+### 2. Deploy the Pathways head pod
+
+Start the Shared Pathways Service by using [pw-service-example.yaml](yamls/pw-service-example.yaml).
 Make sure to modify the following values to deploy the Pathways pods:
 
 - A unique Jobset name for the cluster's Pathways pods
@@ -20,10 +25,11 @@ Make sure to modify the following values to deploy the Pathways pods:
 - TPU type and topology
 - Number of slices
 
-3. Verify that the Shared Pathways Service components are started, specifically the Resource Manager (RM) and Worker
+### 3. Verify that the pods created in Step#2 are running
+
+Verify that the Shared Pathways Service components are started, specifically the Resource Manager (RM) and Worker
 pods.
 
-Check that the required pods are running.
 ```
 # Set the environment variables.
 $ PROJECT=<your-project>
@@ -32,8 +38,11 @@ $ REGION=<cluster-region>  # e.g., us-central2
 
 # Get credentials for your cluster.
 $ gcloud container clusters get-credentials $CLUSTER_NAME --region $REGION --project=$PROJECT && kubectl config view && kubectl config set-context --current --namespace=default
+```
 
-# Check the status of RM and Worker pods.
+#### Option 1: List all pods
+
+```
 $ kubectl get pods
 
 # Sample expected output (1 Head pod and 1 or more Worker pods)
@@ -43,8 +52,7 @@ pathways-cluster-worker-0-0-bdzq4          1/1     Running   0          3m36s   
 pathways-cluster-worker-1-0-km2rf          1/1     Running   0          3m36s   # WORKER 1
 ```
 
-You can also verify the pod status by running below commands or by checking the project logs (Detailed instructions
-for the logs are <a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>).
+#### Option 2: Check the status of the specific pods that belong to your Pathways Service
 
 ```
 # e.g., pathways-cluster
@@ -57,8 +65,14 @@ $ HEAD_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${J
 $ WORKER0_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep 'worker-0-0-')
 ```
 
+#### Option 3: Check project logs
+
+Find the detailed instructions
+<a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>).
+
 <a name="find-pw-service"></a>
-4. Find the address of the Pathways service from the logs. We check the worker pod logs in the below command.
+### 4. Find the Pathways service address
+Find the address of the Pathways service from the logs. We check the worker pod logs in the below command.
 ```
 $ kubectl logs $WORKER0_POD_NAME --container pathways-worker | grep "\-\-resource_manager_address"
 I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-cluster-pathways-head-0-0.pathways-cluster:29001'
@@ -66,46 +80,47 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 
 ## Instructions
 
-1. Clone `pathwaysutils`.
+### 1. Clone `pathwaysutils`.
 
 ```
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
 ```
 
-2. Install `portpicker`.
+### 2. Install `portpicker`.
 
 ```
 pip install portpicker
 ```
 
-3. In your script,
+### 3. Use the `isc_pathways` Context Manager
 
-    - Import `isc_pathways`
-    - Add `with isc_pathways.connect(...)` statement. The function takes the below values:
-        - Cluster name
-        - Project name
-        - Region
-        - GCS bucket name
-        - Pathways Service (See instructions to find the Pathways address [here](#find-pw-service))
-    - Write your ML code under this `with` block to run it on the underlying TPUs.
+In your script,
+
+1.  Import `isc_pathways`
+2. Add `with isc_pathways.connect(...)` statement. The function takes the below values:
+    - Cluster name
+    - Project name
+    - Region
+    - GCS bucket name
+    - Pathways Service (See instructions to find the Pathways address [here](#find-pw-service))
+3. Write your ML code under this `with` block to run it on the underlying TPUs.
 
 See [run_connect_example.py](run_connect_example.py) for reference. Example code:
 
 ```
- from pathwaysutils.experimental.shared_pathways_service import isc_pathways
+from pathwaysutils.experimental.shared_pathways_service import isc_pathways
+import jax.numpy as jnp
+import pathwaysutils
+import pprint
 
- with isc_pathways.connect(
-     cluster="my-cluster",
-     project="my-project",
-     region="region",
-     gcs_bucket="gs://user-bucket",
-     pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001",
+with isc_pathways.connect(
+    cluster="my-cluster",
+    project="my-project",
+    region="region",
+    gcs_bucket="gs://user-bucket",
+    pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001",
      expected_tpu_instances={"tpuv6e:2x2": 2},
- ) as tm:
-   import jax.numpy as jnp
-   import pathwaysutils
-   import pprint
-
+) as tm:
    pathwaysutils.initialize()
    orig_matrix = jnp.zeros(5)
    ...
