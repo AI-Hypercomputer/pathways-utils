@@ -3,3 +3,4 @@ jax>=0.5.1
 tensorflow-datasets
 tiktoken
 grain-nightly>=0.0.1
+portpicker
