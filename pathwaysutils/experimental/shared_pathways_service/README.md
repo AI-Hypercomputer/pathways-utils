@@ -10,8 +10,7 @@ service that manages scheduling and error handling.
 
 ### 1. Create a GKE cluster with TPUs
 
-You have a GKE cluster with atleast 1 slice of `v6e-4` or `v6e-8`. Note that the Shared Pathways Service supports
-single-host Trillium slices only, this support will be extended soon.
+You have a GKE cluster with at least 1 TPU slice (v5e, v5p or v6e).
 
 <a name="pw-service-yaml"></a>
 
@@ -20,17 +19,17 @@ single-host Trillium slices only, this support will be extended soon.
 Start the Shared Pathways Service by using [pw-service-example.yaml](yamls/pw-service-example.yaml).
 Make sure to modify the following values to deploy the Pathways pods:
 
-- A unique Jobset name for the cluster's Pathways pods
+- A unique Jobset name for the head pod
 - GCS bucket path
 - TPU type and topology
 - Number of slices
 
-### 3. Verify that the pods created in Step#2 are running
+### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
-Verify that the Shared Pathways Service components are started, specifically the Resource Manager (RM) and Worker
-pods.
+Verify that the Shared Pathways Service components are started, specifically the Pathways resource manager (RM) and
+Pathways workers.
 
-```
+```shell
 # Set the environment variables.
 $ PROJECT=<your-project>
 $ CLUSTER_NAME=<your-cluster>
@@ -42,7 +41,7 @@ $ gcloud container clusters get-credentials $CLUSTER_NAME --region $REGION --pro
 
 #### Option 1: List all pods
 
-```
+```shell
 $ kubectl get pods
 
 # Sample expected output (1 Head pod and 1 or more Worker pods)
@@ -54,7 +53,7 @@ pathways-cluster-worker-1-0-km2rf          1/1     Running   0          3m36s   
 
 #### Option 2: Check the status of the specific pods that belong to your Pathways Service
 
-```
+```shell
 # e.g., pathways-cluster
 $ JOBSET_NAME=<your-jobset-name>  # same as you used in [pw-service-example.yaml](#pw-service-yaml)
 
@@ -73,8 +72,9 @@ Find the detailed instructions
 <a name="find-pw-service"></a>
 ### 4. Find the Pathways service address
 Find the address of the Pathways service from the logs. We check the worker pod logs in the below command.
-```
+```shell
 $ kubectl logs $WORKER0_POD_NAME --container pathways-worker | grep "\-\-resource_manager_address"
+
 I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-cluster-pathways-head-0-0.pathways-cluster:29001'
 ```
 
@@ -82,17 +82,11 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 
 ### 1. Clone `pathwaysutils`.
 
-```
+```shell
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
 ```
 
-### 2. Install `portpicker`.
-
-```
-pip install portpicker
-```
-
-### 3. Use the `isc_pathways` Context Manager
+### 2. Use the `isc_pathways` Context Manager
 
 In your script,
 
@@ -102,16 +96,16 @@ In your script,
     - Project name
     - Region
     - GCS bucket name
-    - Pathways Service (See instructions to find the Pathways address [here](#find-pw-service))
-3. Write your ML code under this `with` block to run it on the underlying TPUs.
+    - Pathways Service (See instructions to find the RM address [here](#4-find-the-pathways-service-address))
+<a name="ml-code"></a>
+3. Write your ML code under this context manager (the `with` block) to run your JAX code on the underlying TPUs.
 
 See [run_connect_example.py](run_connect_example.py) for reference. Example code:
 
-```
+```shell
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 import jax.numpy as jnp
 import pathwaysutils
-import pprint
 
 with isc_pathways.connect(
     cluster="my-cluster",
@@ -129,9 +123,9 @@ with isc_pathways.connect(
 The connect block will deploy a proxy pod dedicated to your client and connect
 your local runtime environment to the proxy pod via port-forwarding.
 
-4. You can start another client that uses the same `pathways_service` (similar to Step#3). If the Shared Pathways
-Service finds free TPU(s) that match your request, your workload will start running on the free resources. However,
-if all TPUs are occupied, you can expect your script to fail.
+4. You can start another client that uses the same `pathways_service` (similar to [Step#3](#ml-code)). If the Shared Pathways
+Service finds available TPU(s) that match your request, your workload will start running on these available resources.
+However, if all TPUs are occupied, you can expect your script to halt until the TPUs are available again.
 
 ## Troubleshooting
 Refer to [this guide](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways)
