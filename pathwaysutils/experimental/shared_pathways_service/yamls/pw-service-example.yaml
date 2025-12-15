@@ -4,6 +4,11 @@ metadata:
   name: pathways-cluster # jobset name
 spec:
  maxRestarts: 1
+ customComponents:
+ - componentType: pathways_server
+   image: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.8.0@sha256:ccbdf86d185654f8fb749f51ca7dcc8178377b583d75f74180eb936a8f808050
+ - componentType: worker
+   image: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.8.0@sha256:ccbdf86d185654f8fb749f51ca7dcc8178377b583d75f74180eb936a8f808050
  workers: # Modify this section to use your TPU type, topology, number of slices and the GCS bucket.
  - type: ct6e-standard-4t
    topology: 2x2

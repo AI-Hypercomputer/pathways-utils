@@ -14,7 +14,7 @@ spec:
       automountServiceAccountToken: false
       containers:
       - name: pathways-proxy
-        image: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest
+        image: us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.8.0@sha256:5296fa0819d8cbdfbcf951ffca2072128255411557240624ff4011522a6a2abe
         imagePullPolicy: Always
         args:
         - --server_port=${PROXY_SERVER_PORT}
