@@ -322,7 +322,12 @@ class ProfilingTest(parameterized.TestCase):
         profiling, "start_trace", autospec=True
     ) as mock_pw_start_trace:
       jax.profiler.start_trace("gs://bucket/dir")
-      mock_pw_start_trace.assert_called_once_with("gs://bucket/dir")
+      mock_pw_start_trace.assert_called_once_with(
+          "gs://bucket/dir",
+          create_perfetto_link=False,
+          create_perfetto_trace=False,
+          profiler_options=None,
+      )
 
     with mock.patch.object(
         profiling, "stop_trace", autospec=True

@@ -104,6 +104,7 @@ def start_trace(
     *,
     create_perfetto_link: bool = False,
     create_perfetto_trace: bool = False,
+    profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
 ) -> None:
   """Starts a profiler trace.
 
@@ -131,6 +132,8 @@ def start_trace(
       want to generate a Perfetto-compatible trace without blocking the process.
       This feature is experimental for Pathways on Cloud and may not be fully
       supported.
+    profiler_options: Profiler options to configure the profiler for collection.
+      Options are not currently supported and ignored.
   """
   if not str(log_dir).startswith("gs://"):
     raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
@@ -270,11 +273,17 @@ def monkey_patch_jax():
 
   def start_trace_patch(
       log_dir,
-      create_perfetto_link: bool = False,  # pylint: disable=unused-argument
-      create_perfetto_trace: bool = False,  # pylint: disable=unused-argument
+      create_perfetto_link: bool = False,
+      create_perfetto_trace: bool = False,
+      profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
-    return start_trace(log_dir)
+    return start_trace(
+        log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=profiler_options,
+    )
 
   jax.profiler.start_trace = start_trace_patch
 
