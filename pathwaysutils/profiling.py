@@ -286,12 +286,14 @@ def monkey_patch_jax():
     )
 
   jax.profiler.start_trace = start_trace_patch
+  jax._src.profiler.start_trace = start_trace_patch  # pylint: disable=protected-access
 
   def stop_trace_patch() -> None:
     _logger.debug("jax.profile.stop_trace patched with pathways' stop_trace")
     return stop_trace()
 
   jax.profiler.stop_trace = stop_trace_patch
+  jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
 
   def start_server_patch(port: int):
     _logger.debug(
