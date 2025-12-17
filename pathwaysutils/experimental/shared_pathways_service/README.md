@@ -103,21 +103,15 @@ In your script,
 See [run_connect_example.py](run_connect_example.py) for reference. Example code:
 
 ```shell
-from pathwaysutils.experimental.shared_pathways_service import isc_pathways
-import jax.numpy as jnp
-import pathwaysutils
 
-with isc_pathways.connect(
-    cluster="my-cluster",
-    project="my-project",
-    region="region",
-    gcs_bucket="gs://user-bucket",
-    pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001",
-     expected_tpu_instances={"tpuv6e:2x2": 2},
-) as tm:
-   pathwaysutils.initialize()
-   orig_matrix = jnp.zeros(5)
-   ...
+python3 pathwaysutils/experimental/shared_pathways_service/run_connect_example.py \
+--cluster="my-cluster" \
+--project="my-project" \
+--region="cluster-region" \
+--gcs_bucket="gs://user-bucket" \
+--pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001" \
+--tpu_type="tpuv6e:2x2" \
+--tpu_count=1
 ```
 
 The connect block will deploy a proxy pod dedicated to your client and connect
@@ -128,5 +122,8 @@ Service finds available TPU(s) that match your request, your workload will start
 However, if all TPUs are occupied, you can expect your script to halt until the TPUs are available again.
 
 ## Troubleshooting
-Refer to [this guide](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways)
+- Refer to [this guide](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways)
 if your Pathways pods do not come up!
+
+- Known errors: The cleanup process of the service is not as clean right now. You can safely ignore the
+`Segmentation fault` error, if you see any, after your ML job completes.
