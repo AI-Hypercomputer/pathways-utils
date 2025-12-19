@@ -80,11 +80,11 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 
 ## Instructions
 
-### 1. Clone `pathwaysutils` and install the
-+[listed requirements](https://github.com/AI-Hypercomputer/pathways-utils/blob/main/requirements.txt).
+### 1. Clone `pathwaysutils` and install the requirements.
 
 ```shell
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
+pip install ./pathways-utils
 ```
 
 ### 2. Use the `isc_pathways` Context Manager
