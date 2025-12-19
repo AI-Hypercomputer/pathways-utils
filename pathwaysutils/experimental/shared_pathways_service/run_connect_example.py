@@ -23,7 +23,7 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "tpu_type", "tpuv6e:2x2", "The TPU machine type and topology."
 )
-flags.DEFINE_integer("tpu_count", 1, "The number of TPU instances.")
+flags.DEFINE_integer("tpu_count", 1, "The number of TPU slices.")
 
 flags.mark_flags_as_required([
     "cluster",
