@@ -21,21 +21,21 @@ from typing import Any
 import jax
 
 
-class _FakeJaxModule:
-  """A fake module that raises an ImportError when accessed.
+class _FakeJaxFunction:
+  """An object that raises an ImportError for __getattr__ and __call__.
 
-  This is used to provide a placeholder for JAX modules that are not available
-  in older versions of JAX, raising a helpful error message if they are
-  inadvertently used.
+  This is used to provide a placeholder for JAX functions that are not
+  available in older versions of JAX, raising a helpful error message if they
+  are inadvertently used.
   """
 
   def __init__(self, name, version):
     self.__name__ = name
     self.version = version
     self.error_message = (
-        f"Module {self.__name__} does not exist until JAX {self.version}. "
+        f"Function {self.__name__} does not exist until JAX {self.version}. "
         f"The current version of JAX is {jax.__version__}. "
-        "Using this modules results in this runtime error."
+        "Using this function results in this runtime error."
     )
 
   def __getattr__(self, name):
@@ -77,14 +77,20 @@ except AttributeError:
 
 try:
   # jax>=0.8.0
-  from jaxlib import _pathways as jaxlib_pathways  # pylint: disable=g-import-not-at-top
+  from jaxlib import _pathways  # pylint: disable=g-import-not-at-top
+
+  split_by_mesh_axis = _pathways._split_by_mesh_axis
+  del _pathways
 
 except ImportError:
   # jax<0.8.0
 
-  jaxlib_pathways = _FakeJaxModule("jax.jaxlib._pathways", "0.8.0")
+  split_by_mesh_axis = _FakeJaxFunction(
+      "jax.jaxlib._pathways._split_by_mesh_axis",
+      "0.8.0",
+  )
 
 
 del jax
 del Any
-del _FakeJaxModule
+del _FakeJaxFunction

@@ -161,7 +161,7 @@ def split_by_mesh_axis(
       for x in flat_arrays
   ]
 
-  flat_split_arrays = pw_jax.jaxlib_pathways._split_by_mesh_axis(  # pylint: disable=protected-access
+  flat_split_arrays = pw_jax.split_by_mesh_axis(
       arrays=flat_arrays,
       sharded_dim_idxs=sharded_dim_idxs,
       mesh_axis_sizes=mesh.axis_sizes,
