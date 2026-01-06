@@ -17,7 +17,9 @@ This introduces an abstrction layer some JAX APIs that have changed over
 `pathwaysutils`'s compatibility window.
 """
 
+import functools
 from typing import Any
+
 import jax
 
 
@@ -91,6 +93,43 @@ except ImportError:
   )
 
 
+try:
+  # jax>=0.8.3
+  # The import may fail if the JAX version is not new enough.
+  from jaxlib import _pathways as jaxlib_pathways  # pylint: disable=g-import-not-at-top
+
+  transfer_to_shardings = jaxlib_pathways._transfer_to_shardings
+
+  del jaxlib_pathways
+
+except ImportError:
+  # jax<0.8.3
+  transfer_to_shardings = _FakeJaxFunction(
+      "jax.jaxlib._pathways._transfer_to_shardings",
+      "0.8.3",
+  )
+
+
+@functools.lru_cache(maxsize=1)
+def ifrt_reshard_available() -> bool:
+  """Checks if transfer_to_shardings is available."""
+  try:
+    import jax  # pylint: disable=g-import-not-at-top
+
+    transfer_to_shardings(
+        [jax.numpy.array([0])],
+        [jax.sharding.SingleDeviceSharding(jax.devices()[0])],
+    )
+
+  except (ImportError, NameError, jax.errors.JaxRuntimeError):
+    return False
+  else:
+    return True
+  finally:
+    del jax
+
+
 del jax
 del Any
 del _FakeJaxFunction
+del functools

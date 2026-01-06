@@ -16,9 +16,10 @@
 import base64
 import collections
 import json
-from typing import Any, Dict, Sequence
+from typing import Any, Callable, Dict, Mapping, Sequence
 
 import jax
+from pathwaysutils import jax as pw_jax
 from pathwaysutils import lru_cache
 from pathwaysutils import plugin_executable
 
@@ -99,37 +100,16 @@ def _get_resharding_plan(
 _get_resharding_plan_cached = lru_cache.lru_cache()(_get_resharding_plan)
 
 
-def reshard(
+def _reshard(
     x: Any,
     sharding: jax.sharding.Sharding | Any,
     *,
     donate: bool = False,
-    may_alias: bool | None = None,  # pylint: disable=unused-argument
-    cache_resharding_plans: bool = False,
+    may_alias: bool | None,
+    jax_array_reshard_fn: Callable[..., Any],
+    **kwargs,
 ) -> Any:
-  """Reshards `x` to `sharding`.
-
-  Args:
-    x: An array, scalar, or (nested) standard Python container thereof.
-    sharding: A `Sharding` or a (nested) `Sharding` in standard Python container
-      (must be a tree prefix of `x`), representing the device(s) and sharding to
-      which `x` should be sharded to. The result will be committed to the
-      device(s) of the sharding.
-    donate: If `True`, donate all input arrays, which may reduce the amount of
-      memory needed for resharding. Buffers donated to resharding should not be
-      reused.
-    may_alias: If `True`, may alias the input array with the output array. May
-      reduce the amount of memory needed for resharding. Not used at the moment.
-    cache_resharding_plans: If `True`, uses a resharding plan cache to avoid
-      recreating plans for the same resharding operation. May improve
-      performance for use cases where the same resharding operation is done many
-      times. May degrade performance if most reshardings operations are
-      different, since the cache will cause Pathways Components to remain loaded
-      for each cached plan. `False` by default.
-
-  Returns:
-    A copy of `x` whose sharding is `sharding`.
-  """
+  """Reshards `x` to `sharding`."""
   flat_x, tree_def = jax.tree.flatten(x)
   flat_sharding = jax.api_util.flatten_axes(
       "reshard sharding", tree_def, sharding
@@ -176,17 +156,9 @@ def reshard(
     )
 
   for array_info in jax_arrays.values():
-    get_resharding_plan_func = (
-        _get_resharding_plan_cached
-        if cache_resharding_plans
-        else _get_resharding_plan
+    array_info["arrays"] = jax_array_reshard_fn(
+        array_info, donate=donate, **kwargs
     )
-    array_info["arrays"] = get_resharding_plan_func(
-        tuple(arr.aval for arr in array_info["arrays"]),
-        tuple(arr.sharding for arr in array_info["arrays"]),
-        tuple(array_info["dst_shardings"]),
-        donate,
-    ).execute(tuple(array_info["arrays"]))
 
   result = [None] * len(flat_x)
   for arr, idx in zip(
@@ -198,3 +170,80 @@ def reshard(
       result[idx] = arr
 
   return jax.tree.unflatten(tree_def, result)
+
+
+def _sidechannel_jax_array_reshard(
+    array_info: Mapping[str, Any], *, donate: bool, cache_resharding_plans: bool
+) -> Sequence[jax.Array]:
+  get_resharding_plan_func = (
+      _get_resharding_plan_cached
+      if cache_resharding_plans
+      else _get_resharding_plan
+  )
+  return get_resharding_plan_func(
+      tuple(arr.aval for arr in array_info["arrays"]),
+      tuple(arr.sharding for arr in array_info["arrays"]),
+      tuple(array_info["dst_shardings"]),
+      donate,
+  ).execute(tuple(array_info["arrays"]))
+
+
+def _ifrt_jax_array_reshard(
+    array_info: Mapping[str, Any], *, donate: bool
+) -> Sequence[jax.Array]:
+  return pw_jax.transfer_to_shardings(
+      tuple(arr for arr in array_info["arrays"]),
+      tuple(array_info["dst_shardings"]),
+      donate,
+  )
+
+
+def reshard(
+    x: Any,
+    sharding: jax.sharding.Sharding | Any,
+    *,
+    donate: bool = False,
+    may_alias: bool | None = None,
+    cache_resharding_plans: bool = False,
+) -> Any:
+  """Reshards `x` to `sharding`.
+
+  Args:
+    x: An array, scalar, or (nested) standard Python container thereof.
+    sharding: A `Sharding` or a (nested) `Sharding` in standard Python container
+      (must be a tree prefix of `x`), representing the device(s) and sharding to
+      which `x` should be sharded to. The result will be committed to the
+      device(s) of the sharding.
+    donate: If `True`, donate all input arrays, which may reduce the amount of
+      memory needed for resharding. Buffers donated to resharding should not be
+      reused.
+    may_alias: If `True`, may alias the input array with the output array. May
+      reduce the amount of memory needed for resharding. Not used at the moment.
+    cache_resharding_plans: If `True`, uses a resharding plan cache to avoid
+      recreating plans for the same resharding operation. May improve
+      performance for use cases where the same resharding operation is done many
+      times. May degrade performance if most reshardings operations are
+      different, since the cache will cause Pathways Components to remain loaded
+      for each cached plan. `False` by default. Only used when IFRT resharding
+      is not available.
+
+  Returns:
+    A copy of `x` whose sharding is `sharding`.
+  """
+  if pw_jax.ifrt_reshard_available():
+    return _reshard(
+        x,
+        sharding,
+        donate=donate,
+        may_alias=may_alias,
+        jax_array_reshard_fn=_ifrt_jax_array_reshard,
+    )
+  else:
+    return _reshard(
+        x,
+        sharding,
+        donate=donate,
+        may_alias=may_alias,
+        jax_array_reshard_fn=_sidechannel_jax_array_reshard,
+        cache_resharding_plans=cache_resharding_plans,
+    )
