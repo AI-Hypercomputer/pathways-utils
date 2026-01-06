@@ -3,9 +3,9 @@
 These should not exercise a specific feature that uses side channel, but rather
 the general logic of the class.
 """
+from absl.testing import absltest
 import jax
 from pathwaysutils import plugin_executable
-from absl.testing import absltest
 
 PluginExecutable = plugin_executable.PluginExecutable
 XlaRuntimeError = jax.errors.JaxRuntimeError

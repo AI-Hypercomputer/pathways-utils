@@ -15,12 +15,11 @@
 
 from unittest import mock
 
+from absl.testing import absltest
 import jax
 from jax.extend import backend
 from pathwaysutils import jax as pw_jax
 from pathwaysutils import proxy_backend
-
-from absl.testing import absltest
 
 
 class ProxyBackendTest(absltest.TestCase):

@@ -14,11 +14,10 @@
 
 import os
 
-import jax
-from pathwaysutils import _initialize
-
 from absl.testing import absltest
 from absl.testing import parameterized
+import jax
+from pathwaysutils import _initialize
 
 
 class InitializeTest(parameterized.TestCase):
