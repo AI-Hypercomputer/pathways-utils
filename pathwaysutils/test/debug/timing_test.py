@@ -17,10 +17,9 @@ import logging
 import time
 from unittest import mock
 
-from pathwaysutils.debug import timing
-
 from absl.testing import absltest
 from absl.testing import parameterized
+from pathwaysutils.debug import timing
 
 
 class TimingTest(parameterized.TestCase):

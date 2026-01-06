@@ -2,11 +2,10 @@
 
 import datetime
 
+from absl.testing import absltest
 import jax
 import numpy as np
 from pathwaysutils.persistence import helper
-
-from absl.testing import absltest
 
 
 class PersistenceTest(absltest.TestCase):

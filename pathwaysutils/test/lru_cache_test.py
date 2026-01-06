@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from absl.testing import absltest
 import jax.extend
 from pathwaysutils import lru_cache
-from absl.testing import absltest
 
 
 class LruCacheTest(absltest.TestCase):

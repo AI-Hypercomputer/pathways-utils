@@ -16,12 +16,11 @@ import json
 import logging
 from unittest import mock
 
+from absl.testing import absltest
+from absl.testing import parameterized
 import jax
 from pathwaysutils import profiling
 import requests
-
-from absl.testing import absltest
-from absl.testing import parameterized
 
 
 class ProfilingTest(parameterized.TestCase):

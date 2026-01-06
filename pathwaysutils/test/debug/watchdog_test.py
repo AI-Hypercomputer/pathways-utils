@@ -19,11 +19,9 @@ import threading
 import traceback
 from unittest import mock
 
-from pathwaysutils.debug import watchdog
-
 from absl.testing import absltest
 from absl.testing import parameterized
-
+from pathwaysutils.debug import watchdog
 
 class WatchdogTest(parameterized.TestCase):
   def test_watchdog_start_join(self):
