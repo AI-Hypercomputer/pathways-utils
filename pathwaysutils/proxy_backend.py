@@ -15,15 +15,15 @@
 
 import jax
 from jax.extend import backend
-from pathwaysutils import jax as pw_jax
+from jax.extend.backend import ifrt_proxy
 
 
 def register_backend_factory():
   backend.register_backend_factory(
       "proxy",
-      lambda: pw_jax.ifrt_proxy.get_client(
+      lambda: ifrt_proxy.get_client(
           jax.config.read("jax_backend_target"),
-          pw_jax.ifrt_proxy.ClientConnectionOptions(),
+          ifrt_proxy.ClientConnectionOptions(),
       ),
       priority=-1,
   )
