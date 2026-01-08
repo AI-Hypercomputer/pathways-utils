@@ -5,13 +5,13 @@ the general logic of the class.
 """
 import jax
 from pathwaysutils import plugin_executable
-from absl.testing import absltest
+from google3.testing.pybase import googletest
 
 PluginExecutable = plugin_executable.PluginExecutable
 XlaRuntimeError = jax.errors.JaxRuntimeError
 
 
-class PluginExecutableTest(absltest.TestCase):
+class PluginExecutableTest(googletest.TestCase):
 
   def setUp(self):
     jax.config.update("jax_platforms", "cpu")
@@ -26,4 +26,4 @@ class PluginExecutableTest(absltest.TestCase):
       PluginExecutable("this is not json")
 
 if __name__ == "__main__":
-  absltest.main()
+  googletest.main()

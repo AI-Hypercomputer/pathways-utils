@@ -21,8 +21,8 @@ from unittest import mock
 
 from pathwaysutils.debug import watchdog
 
-from absl.testing import absltest
-from absl.testing import parameterized
+from google3.testing.pybase import googletest
+from google3.testing.pybase import parameterized
 
 
 class WatchdogTest(parameterized.TestCase):
@@ -93,4 +93,4 @@ class WatchdogTest(parameterized.TestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+  googletest.main()

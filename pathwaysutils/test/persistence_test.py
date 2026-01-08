@@ -6,10 +6,10 @@ import jax
 import numpy as np
 from pathwaysutils.persistence import helper
 
-from absl.testing import absltest
+from google3.testing.pybase import googletest
 
 
-class PersistenceTest(absltest.TestCase):
+class PersistenceTest(googletest.TestCase):
   location = "/path/to/location"
   name = "name"
   dtype = np.dtype(np.int32)
@@ -106,4 +106,4 @@ class PersistenceTest(absltest.TestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+  googletest.main()

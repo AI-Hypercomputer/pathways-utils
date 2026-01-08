@@ -17,8 +17,8 @@ import os
 import jax
 from pathwaysutils import _initialize
 
-from absl.testing import absltest
-from absl.testing import parameterized
+from google3.testing.pybase import googletest
+from google3.testing.pybase import parameterized
 
 
 class InitializeTest(parameterized.TestCase):
@@ -89,4 +89,4 @@ class InitializeTest(parameterized.TestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+  googletest.main()

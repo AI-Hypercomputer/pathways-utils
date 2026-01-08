@@ -14,10 +14,10 @@
 
 import jax.extend
 from pathwaysutils import lru_cache
-from absl.testing import absltest
+from google3.testing.pybase import googletest
 
 
-class LruCacheTest(absltest.TestCase):
+class LruCacheTest(googletest.TestCase):
 
   def test_cache_hits(self):
     x = [100]
@@ -82,4 +82,4 @@ class LruCacheTest(absltest.TestCase):
 
 
 if __name__ == "__main__":
-  absltest.main()
+  googletest.main()
