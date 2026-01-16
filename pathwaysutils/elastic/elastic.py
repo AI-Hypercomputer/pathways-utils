@@ -106,7 +106,13 @@ def get_active_slice_indices(
     A set of integers representing the indices of the active slices.
   """
   if slice_to_devices is None:
+    _logger.debug("slice_to_devices is None. Getting from jax.devices().")
     slice_to_devices = get_slice_to_devices(tuple(jax.devices()))
+
+  _logger.debug(
+      "Getting active slice indices for slices: %s",
+      sorted(list(slice_to_devices.keys())),
+  )
 
   active_slice_indices = set()
 
@@ -116,17 +122,19 @@ def get_active_slice_indices(
   }
 
   for slice_index, x in results.items():
-    _logger.info("Checking slice_index=%s", slice_index)
+    _logger.debug("Checking slice_index=%s", slice_index)
     expected = (
         np.zeros(len(slice_to_devices[slice_index]), dtype=float)
         + _SIMPLE_EXECUTION_TEST_VALUE
     )
     try:
       with timing.Timer(f"Checking {slice_index=}"):
+        _logger.debug("Blocking until ready for slice_index=%s", slice_index)
         jax.block_until_ready(x)
+        _logger.debug("Execution finished for slice_index=%s", slice_index)
         if np.allclose(x, expected):
           active_slice_indices.add(slice_index)
-          _logger.info("slice_index=%s active", slice_index)
+          _logger.debug("slice_index=%s active", slice_index)
         else:
           _logger.error(
               "Error with _simple_execution for slice_index=%s. "
@@ -139,11 +147,15 @@ def get_active_slice_indices(
               f"Error with _simple_execution for slice_index={slice_index}."
           )
     except jax.errors.JaxRuntimeError as error:
+      _logger.debug(
+          "Caught JaxRuntimeError for slice_index=%s: %s", slice_index, error
+      )
       if not is_error_due_to_slice_down(error):
+        _logger.info("Re-raising error for slice_index=%s", slice_index)
         raise
-      _logger.info("slice_index=%s bad", slice_index)
+      _logger.debug("slice_index=%s bad", slice_index)
 
-  _logger.info("active_slice_indices=%s", active_slice_indices)
+  _logger.debug("active_slice_indices=%s", active_slice_indices)
 
   return active_slice_indices
 
@@ -174,22 +186,36 @@ def wait_for_slices(
       active.
   """
   if slice_to_devices is None:
+    _logger.debug("slice_to_devices is None. Getting from jax.devices().")
     slice_to_devices = get_slice_to_devices(jax.devices())
 
+  _logger.info(
+      "Waiting for %s slices. Poll interval: %s, Timeout: %s",
+      slice_count,
+      poll_interval,
+      timeout,
+  )
   start_time = time.time()
 
   while True:
     check_start_time = time.time()
 
+    _logger.debug("Checking active slices...")
     active_slice_indices = get_active_slice_indices(slice_to_devices)
     if len(active_slice_indices) >= slice_count:
-      _logger.info("%s slices active.", len(active_slice_indices))
+      _logger.info(
+          "Sufficient slices active: %s >= %s. Active indices: %s",
+          len(active_slice_indices),
+          slice_count,
+          active_slice_indices,
+      )
       return active_slice_indices
 
     _logger.info(
-        "%s slices active. Wanting at least %s.",
+        "%s slices active. Wanting at least %s. Active indices: %s",
         len(active_slice_indices),
         slice_count,
+        active_slice_indices,
     )
 
     time_to_sleep = max(0, poll_interval - (time.time() - check_start_time))
@@ -206,7 +232,7 @@ def wait_for_slices(
         )
 
     if time_to_sleep > 0:
-      _logger.info("Sleeping for %.2f seconds.", time_to_sleep)
+      _logger.debug("Sleeping for %.2f seconds.", time_to_sleep)
 
       time.sleep(time_to_sleep)
 
@@ -228,10 +254,14 @@ def is_error_due_to_slice_down(error: Exception) -> bool:
   traceback_logging_level = logging.DEBUG
 
   if isinstance(error, jax.errors.JaxRuntimeError):
+    _logger.debug("Checking if JaxRuntimeError is due to slice down: %s", error)
     if any(
         error_type in str(error) for error_type in _ELASTIC_DOWN_ERROR_TYPES
     ):
-      _logger.info("Caught an error due to slice down")
+      _logger.debug(
+          "Caught an error due to slice down (matched"
+          " _ELASTIC_DOWN_ERROR_TYPES)"
+      )
 
       error_due_to_slice_down = True
 
@@ -240,15 +270,16 @@ def is_error_due_to_slice_down(error: Exception) -> bool:
         for error_type in _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES
     ):
       _logger.warning(
-          "Caught an error due that may or may not be due to slice down. This"
-          " error will be treated as due to slice down."
+          "Caught an error that may or may not be due to slice down (matched"
+          " _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES). This error will be treated"
+          " as due to slice down."
       )
       traceback_logging_level = logging.WARNING
 
       error_due_to_slice_down = True
 
   if not error_due_to_slice_down:
-    _logger.info("Caught an error not due to slice down")
+    _logger.debug("Caught an error not due to slice down")
 
   _logger.log(traceback_logging_level, "Error details:", exc_info=True)
 
