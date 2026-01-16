@@ -15,15 +15,14 @@
 
 from unittest import mock
 
+from absl.testing import absltest
 import jax
 from jax.extend import backend
 from pathwaysutils import jax as pw_jax
 from pathwaysutils import proxy_backend
 
-from google3.testing.pybase import googletest
 
-
-class ProxyBackendTest(googletest.TestCase):
+class ProxyBackendTest(absltest.TestCase):
 
   def setUp(self):
     super().setUp()
@@ -31,7 +30,7 @@ class ProxyBackendTest(googletest.TestCase):
     jax.config.update("jax_backend_target", "grpc://localhost:12345")
     backend.clear_backends()
 
-  @googletest.skip("b/408025233")
+  @absltest.skip("b/408025233")
   def test_no_proxy_backend_registration_raises_error(self):
     self.assertRaises(RuntimeError, backend.backends)
 
@@ -48,4 +47,4 @@ class ProxyBackendTest(googletest.TestCase):
 
 
 if __name__ == "__main__":
-  googletest.main()
+  absltest.main()

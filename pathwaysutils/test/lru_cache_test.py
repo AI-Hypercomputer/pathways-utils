@@ -12,12 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from absl.testing import absltest
 import jax.extend
 from pathwaysutils import lru_cache
-from google3.testing.pybase import googletest
 
 
-class LruCacheTest(googletest.TestCase):
+class LruCacheTest(absltest.TestCase):
 
   def test_cache_hits(self):
     x = [100]
@@ -82,4 +82,4 @@ class LruCacheTest(googletest.TestCase):
 
 
 if __name__ == "__main__":
-  googletest.main()
+  absltest.main()

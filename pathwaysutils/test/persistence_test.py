@@ -2,14 +2,13 @@
 
 import datetime
 
+from absl.testing import absltest
 import jax
 import numpy as np
 from pathwaysutils.persistence import helper
 
-from google3.testing.pybase import googletest
 
-
-class PersistenceTest(googletest.TestCase):
+class PersistenceTest(absltest.TestCase):
   location = "/path/to/location"
   name = "name"
   dtype = np.dtype(np.int32)
@@ -106,4 +105,4 @@ class PersistenceTest(googletest.TestCase):
 
 
 if __name__ == "__main__":
-  googletest.main()
+  absltest.main()

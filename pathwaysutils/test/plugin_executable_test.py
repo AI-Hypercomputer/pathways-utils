@@ -3,15 +3,15 @@
 These should not exercise a specific feature that uses side channel, but rather
 the general logic of the class.
 """
+from absl.testing import absltest
 import jax
 from pathwaysutils import plugin_executable
-from google3.testing.pybase import googletest
 
 PluginExecutable = plugin_executable.PluginExecutable
 XlaRuntimeError = jax.errors.JaxRuntimeError
 
 
-class PluginExecutableTest(googletest.TestCase):
+class PluginExecutableTest(absltest.TestCase):
 
   def setUp(self):
     jax.config.update("jax_platforms", "cpu")
@@ -26,4 +26,4 @@ class PluginExecutableTest(googletest.TestCase):
       PluginExecutable("this is not json")
 
 if __name__ == "__main__":
-  googletest.main()
+  absltest.main()

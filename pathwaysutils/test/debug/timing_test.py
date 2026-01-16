@@ -17,10 +17,9 @@ import logging
 import time
 from unittest import mock
 
+from absl.testing import absltest
+from absl.testing import parameterized
 from pathwaysutils.debug import timing
-
-from google3.testing.pybase import googletest
-from google3.testing.pybase import parameterized
 
 
 class TimingTest(parameterized.TestCase):
@@ -83,4 +82,4 @@ class TimingTest(parameterized.TestCase):
 
 
 if __name__ == "__main__":
-  googletest.main()
+  absltest.main()
