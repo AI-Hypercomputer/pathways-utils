@@ -17,6 +17,7 @@ import base64
 import collections
 import json
 from typing import Any, Callable, Dict, Mapping, Sequence
+import warnings
 
 import jax
 from pathwaysutils import jax as pw_jax
@@ -104,7 +105,7 @@ def _reshard(
     x: Any,
     sharding: jax.sharding.Sharding | Any,
     *,
-    donate: bool = False,
+    donate: bool,
     may_alias: bool | None,
     jax_array_reshard_fn: Callable[..., Any],
     **kwargs,
@@ -198,6 +199,61 @@ def _ifrt_jax_array_reshard(
   )
 
 
+def _reshard_with_sidechannel(
+    x: Any,
+    sharding: jax.sharding.Sharding | Any,
+    *,
+    donate: bool,
+    may_alias: bool | None,
+    cache_resharding_plans: bool,
+) -> Any:
+  """Reshards `x` to `sharding` using sidechannel."""
+  return _reshard(
+      x,
+      sharding,
+      donate=donate,
+      may_alias=may_alias,
+      jax_array_reshard_fn=_sidechannel_jax_array_reshard,
+      cache_resharding_plans=cache_resharding_plans,
+  )
+
+
+def _reshard_with_ifrt(
+    x: Any,
+    sharding: jax.sharding.Sharding | Any,
+    *,
+    donate: bool,
+    may_alias: bool | None,
+) -> Any:
+  """Reshards `x` to `sharding` using IFRT.
+
+  Note: Resharding plan caching is not applicable to the IFRT implementation
+  and is not supported by this function.
+
+  Args:
+    x: An array, scalar, or (nested) standard Python container thereof.
+    sharding: A `Sharding` or a (nested) `Sharding` in standard Python container
+      (must be a tree prefix of `x`), representing the device(s) and sharding to
+      which `x` should be sharded to. The result will be committed to the
+      device(s) of the sharding.
+    donate: If `True`, donate all input arrays, which may reduce the amount of
+      memory needed for resharding. Buffers donated to resharding should not be
+      reused.
+    may_alias: If `True`, may alias the input array with the output array. May
+      reduce the amount of memory needed for resharding. Not used at the moment.
+
+  Returns:
+    A copy of `x` whose sharding is `sharding`.
+  """
+  return _reshard(
+      x,
+      sharding,
+      donate=donate,
+      may_alias=may_alias,
+      jax_array_reshard_fn=_ifrt_jax_array_reshard,
+  )
+
+
 def reshard(
     x: Any,
     sharding: jax.sharding.Sharding | Any,
@@ -221,29 +277,34 @@ def reshard(
       reduce the amount of memory needed for resharding. Not used at the moment.
     cache_resharding_plans: If `True`, uses a resharding plan cache to avoid
       recreating plans for the same resharding operation. May improve
-      performance for use cases where the same resharding operation is done many
-      times. May degrade performance if most reshardings operations are
-      different, since the cache will cause Pathways Components to remain loaded
-      for each cached plan. `False` by default. Only used when IFRT resharding
-      is not available.
+      performance for use cases where the same resharding operation is done
+      many times. May degrade performance if most reshardings operations are
+      different, since the cache will cause Pathways Components to remain
+      loaded for each cached plan. `False` by default. This parameter is only
+      used when `pw_jax.ifrt_reshard_available()` is false.
 
   Returns:
     A copy of `x` whose sharding is `sharding`.
   """
   if pw_jax.ifrt_reshard_available():
-    return _reshard(
+    if cache_resharding_plans:
+      warnings.warn(
+          "`cache_resharding_plans` is only applicable when using the"
+          " sidechannel resharding implementation, but IFRT resharding is"
+          " available and will be used. The `cache_resharding_plans` argument"
+          " will be ignored."
+      )
+    return _reshard_with_ifrt(
         x,
         sharding,
         donate=donate,
         may_alias=may_alias,
-        jax_array_reshard_fn=_ifrt_jax_array_reshard,
     )
   else:
-    return _reshard(
+    return _reshard_with_sidechannel(
         x,
         sharding,
         donate=donate,
         may_alias=may_alias,
-        jax_array_reshard_fn=_sidechannel_jax_array_reshard,
         cache_resharding_plans=cache_resharding_plans,
     )
