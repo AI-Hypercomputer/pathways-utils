@@ -23,6 +23,16 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-01-26
+* Extract lambda to a named function to ensure cache hits. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/127
+* Always write array metadata if self._array_metadata_store is not None. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/125
+* Add "Shared Pathways Service" for Pathways-on-Cloud by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/128
+* Exposes `pathwaysutils.profiling._start_trace_from_profile_request` as `pathwaysutils.experimental.profiling.start_trace`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/141
+* Patch internal JAX profiler functions (enabling `jax.profiler.trace`) and add a test for `jax.profiler.trace`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/140
+* Expose `_split_by_mesh_axis` directly in `pw_jax`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/147
+* Use Pathways `_transfer_to_sharding` for resharding in experimental reshard API. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/148
+* Allow specifying a custom proxy job name in _ISCPathways by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/157
+
 ## [0.1.3] - 2025-10-08
 * Update the github action for PyPI by @lukebaumann in https://github.com/AI-Hypercomputer/pathways-utils/pull/105
 * Expose `is_pathways_backend_used` in `pathwaysutils`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/107
