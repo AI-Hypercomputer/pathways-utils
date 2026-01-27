@@ -20,4 +20,4 @@ is_pathways_backend_used = _initialize.is_pathways_backend_used
 del _initialize
 
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.1.3"
+__version__ = "v0.1.4"
