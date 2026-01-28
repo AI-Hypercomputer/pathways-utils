@@ -15,8 +15,8 @@
 
 This module provides a simulated manager for elastic training. It can be used
 to test elastic training without needing to actually trigger elastic events.
-Instead, the user can control which slices are available at what times by
-calling `update_good_slice_indices`.
+Instead, the user can control which slices are active at what times by
+calling `update_active_slice_indices`.
 """
 
 import logging
@@ -31,69 +31,49 @@ _logger = logging.getLogger(__name__)
 
 
 class SimulatedManager(manager.Manager):
-  """An elastic manager with settable slice availability.
+  """An elastic manager with settable slice activity.
 
-  This class can be used to modify which slices are marked as available by
-  overloading the `get_slice_availability` function.
+  This class can be used to modify which slices are marked as active by
+  overloading the `get_active_slice_indices` function.
   """
 
-  _simulated_good_slice_indices: set[int]
+  _simulated_active_slice_indices: set[int]
 
-  def __init__(
-      self,
-      devices: Sequence[jax.Device],
-      reshard_check_period: int = 1,
-      snapshot_period: int = 1,
-      max_elastic_down_event_count: int | None = None,
-      max_reshard_retry_count: int | None = None,
-  ) -> None:
+  def __init__(self, devices: Sequence[jax.Device]) -> None:
     """Initializes the simulated manager.
 
     Args:
       devices: The devices to use. If None, jax.devices() is used.
-      reshard_check_period: The number of steps between reshard checks after a
-        slice down event has occurred.
-      snapshot_period: The number of steps between snapshots.
-      max_elastic_down_event_count: The maximum number of elastic down events.
-        If None, there is no limit.
-      max_reshard_retry_count: The maximum number of consequetive reshard
-        retries. If None, there is no limit.
     """
-    self._simulated_good_slice_indices = set(d.slice_index for d in devices)
+    self._simulated_active_slice_indices = set(d.slice_index for d in devices)
 
-    super().__init__(
-        devices,
-        snapshot_period,
-        reshard_check_period,
-        max_elastic_down_event_count,
-        max_reshard_retry_count,
-    )
+    super().__init__(devices)
 
-  def update_good_slice_indices(self, good_slice_indices: set[int]) -> None:
-    """Sets the good slice indices.
+  def update_active_slice_indices(self, active_slice_indices: set[int]) -> None:
+    """Sets the active slice indices.
 
-    Subsequent calls to `get_slice_availability` will return these indices.
+    Subsequent calls to `get_active_slice_indices` will return these indices.
 
     Args:
-      good_slice_indices: The simulated good slice indices.
+      active_slice_indices: The simulated active slice indices.
     """
-    self._simulated_good_slice_indices = good_slice_indices
+    self._simulated_active_slice_indices = active_slice_indices
     _logger.debug(
-        "Updated: simumlated_good_slice_indices=%s",
-        self._simulated_good_slice_indices,
+        "Updated: simumlated_active_slice_indices=%s",
+        self._simulated_active_slice_indices,
     )
 
   @timing.timeit
-  def get_slice_availability(self) -> set[int]:
-    """Returns the set of good slice indices.
+  def get_active_slice_indices(self) -> set[int]:
+    """Returns the set of active slice indices.
 
     Returns:
-      The set of good slice indices from the last call to
-      update_good_slice_indices. Returns an empty set if
-      update_good_slice_indices has not been called.
+      The set of active slice indices from the last call to
+      update_active_slice_indices. Returns an empty set if
+      update_active_slice_indices has not been called.
     """
-    good_slice_indices = self._simulated_good_slice_indices
+    active_slice_indices = self._simulated_active_slice_indices
 
-    _logger.debug("good_slice_indices=%s", good_slice_indices)
+    _logger.debug("active_slice_indices=%s", active_slice_indices)
 
-    return good_slice_indices
+    return active_slice_indices
