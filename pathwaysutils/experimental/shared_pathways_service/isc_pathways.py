@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Mapping
 import contextlib
+import gc
 import logging
 import os
 import random
@@ -10,6 +11,7 @@ import subprocess
 from typing import Any
 
 import jax
+import jax.extend.backend as jax_backend
 import pathwaysutils
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
 from pathwaysutils.experimental.shared_pathways_service import validators
@@ -177,7 +179,16 @@ class _ISCPathways:
 
   def _cleanup(self):
     """Cleans up resources created by the ISCPathways context."""
+    # 1. Clear JAX caches and run garbage collection.
+    _logger.info("Starting Pathways proxy cleanup.")
+    jax_backend.clear_backends()
+    jax.clear_caches()
+    gc.collect()
+    _logger.info("Cleared JAX caches and ran garbage collection.")
+
+    # 2. Terminate the port forwarding process.
     if self._port_forward_process:
+      _logger.info("Terminating port forwarding process...")
       self._port_forward_process.terminate()
       try:
         self._port_forward_process.wait(timeout=10)
@@ -188,8 +199,10 @@ class _ISCPathways:
             e,
         )
 
-    _logger.info("Deleting Pathways proxy")
+    # 3. Delete the proxy GKE job.
+    _logger.info("Deleting Pathways proxy...")
     gke_utils.delete_gke_job(self._proxy_job_name)
+    _logger.info("Pathways proxy GKE job deletion complete.")
 
 
 @contextlib.contextmanager
