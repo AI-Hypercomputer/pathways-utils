@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Mapping
 import contextlib
+import gc
 import logging
 import os
 import random
@@ -10,6 +11,7 @@ import subprocess
 from typing import Any
 
 import jax
+import jax.extend.backend as jax_backend
 import pathwaysutils
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
 from pathwaysutils.experimental.shared_pathways_service import validators
@@ -27,6 +29,7 @@ _JAX_PLATFORMS_KEY = "jax_platforms"
 _JAX_PLATFORM_PROXY = "proxy"
 _JAX_BACKEND_TARGET_KEY = "jax_backend_target"
 _JAX_BACKEND_TARGET_HOSTNAME = "grpc://localhost"
+_DEFAULT_PROXY_IMAGE = "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
 
 _logger = logging.getLogger(__name__)
 
@@ -36,6 +39,7 @@ def _deploy_pathways_proxy_server(
     proxy_job_name: str,
     expected_instances: Mapping[Any, Any],
     gcs_scratch_location: str,
+    proxy_server_image: str,
 ) -> None:
   """Deploys the Pathways proxy pods to the GKE cluster.
 
@@ -45,6 +49,7 @@ def _deploy_pathways_proxy_server(
     expected_instances: A dictionary mapping instance types to the number of
       instances.
     gcs_scratch_location: The Google Cloud Storage location to use.
+    proxy_server_image: The image to use for the proxy server.
 
   Raises:
     subprocess.CalledProcessError: If the kubectl command fails.
@@ -70,6 +75,7 @@ def _deploy_pathways_proxy_server(
       PATHWAYS_HEAD_PORT=pathways_head_port,
       EXPECTED_INSTANCES=instances_str,
       GCS_SCRATCH_LOCATION=gcs_scratch_location,
+      PROXY_SERVER_IMAGE=proxy_server_image,
   )
 
   _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
@@ -89,6 +95,8 @@ class _ISCPathways:
     pathways_service: The service name and port of the Pathways head pod.
     expected_tpu_instances: A dictionary mapping TPU machine types to the number
       of instances.
+    proxy_job_name: The name to use for the deployed proxy.
+    proxy_server_image: The image to use for the proxy server.
   """
 
   def __init__(
@@ -99,7 +107,8 @@ class _ISCPathways:
       gcs_bucket: str,
       pathways_service: str,
       expected_tpu_instances: Mapping[Any, Any],
-      proxy_job_name: str | None,
+      proxy_job_name: str,
+      proxy_server_image: str,
   ):
     """Initializes the TPU manager."""
     self.cluster = cluster
@@ -108,13 +117,10 @@ class _ISCPathways:
     self.bucket = gcs_bucket
     self.pathways_service = pathways_service
     self.expected_tpu_instances = expected_tpu_instances
-    suffix = "".join(
-        random.choices(string.ascii_lowercase + string.digits, k=5)
-    )
-    user = os.environ.get("USER", "user")
-    self._proxy_job_name = proxy_job_name or f"isc-proxy-{user}-{suffix}"
+    self._proxy_job_name = proxy_job_name
     self._port_forward_process = None
     self._proxy_port = None
+    self.proxy_server_image = proxy_server_image
 
   def __repr__(self):
     return (
@@ -133,6 +139,7 @@ class _ISCPathways:
           proxy_job_name=self._proxy_job_name,
           expected_instances=self.expected_tpu_instances,
           gcs_scratch_location=self.bucket,
+          proxy_server_image=self.proxy_server_image,
       )
       # Print a link to Cloud Logging
       cloud_logging_link = gke_utils.get_log_link(
@@ -172,7 +179,16 @@ class _ISCPathways:
 
   def _cleanup(self):
     """Cleans up resources created by the ISCPathways context."""
+    # 1. Clear JAX caches and run garbage collection.
+    _logger.info("Starting Pathways proxy cleanup.")
+    jax_backend.clear_backends()
+    jax.clear_caches()
+    gc.collect()
+    _logger.info("Cleared JAX caches and ran garbage collection.")
+
+    # 2. Terminate the port forwarding process.
     if self._port_forward_process:
+      _logger.info("Terminating port forwarding process...")
       self._port_forward_process.terminate()
       try:
         self._port_forward_process.wait(timeout=10)
@@ -183,19 +199,23 @@ class _ISCPathways:
             e,
         )
 
-    _logger.info("Deleting Pathways proxy")
+    # 3. Delete the proxy GKE job.
+    _logger.info("Deleting Pathways proxy...")
     gke_utils.delete_gke_job(self._proxy_job_name)
+    _logger.info("Pathways proxy GKE job deletion complete.")
 
 
 @contextlib.contextmanager
 def connect(
-    *, cluster: str,
+    *,
+    cluster: str,
     project: str,
     region: str,
     gcs_bucket: str,
     pathways_service: str,
     expected_tpu_instances: Mapping[str, int],
     proxy_job_name: str | None = None,
+    proxy_server_image: str = _DEFAULT_PROXY_IMAGE,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
 
@@ -209,6 +229,8 @@ def connect(
       of instances. For example: {"tpuv6e:2x2": 2}
     proxy_job_name: The name to use for the deployed proxy. If not provided, a
       random name will be generated.
+    proxy_server_image: The proxy server image to use. If not provided, a
+      default will be used.
 
   Yields:
     The Pathways manager.
@@ -216,10 +238,17 @@ def connect(
   _logger.info("Validating Pathways service and TPU instances...")
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
+  validators.validate_proxy_server_image(proxy_server_image)
   _logger.info("Validation complete.")
   gke_utils.fetch_cluster_credentials(
       cluster_name=cluster, project_id=project, location=region
   )
+  proxy_job_name = (
+      proxy_job_name or f"isc-proxy-{os.environ.get('USER', 'user')}-{''.join(
+          random.choices(string.ascii_lowercase + string.digits, k=5)
+      )}"
+  )
+
   _logger.info("Starting ISCPathways context.")
   with _ISCPathways(
       cluster=cluster,
@@ -229,5 +258,6 @@ def connect(
       pathways_service=pathways_service,
       expected_tpu_instances=expected_tpu_instances,
       proxy_job_name=proxy_job_name,
+      proxy_server_image=proxy_server_image,
   ) as t:
     yield t
