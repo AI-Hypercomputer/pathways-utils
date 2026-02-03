@@ -59,7 +59,7 @@ class SimulatedManager(manager.Manager):
     """
     self._simulated_active_slice_indices = active_slice_indices
     _logger.debug(
-        "Updated: simumlated_active_slice_indices=%s",
+        "Updated: simulated_active_slice_indices=%s",
         self._simulated_active_slice_indices,
     )
 
