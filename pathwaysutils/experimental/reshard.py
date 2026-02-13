@@ -570,7 +570,8 @@ def reshard_with_intermediate_sharding(
     out_sharding: jax.sharding.Sharding,
     *,
     donate: bool = False,
-    may_alias: bool | None = None,  # pylint: disable=unused-argument
+    may_alias: bool | None = None,
+    cache_resharding_plans: bool = False,
 ) -> Any:
   """Reshards `x` to `out_sharding`, using an intermediate sharding if possible.
 
@@ -589,6 +590,9 @@ def reshard_with_intermediate_sharding(
       reused.
     may_alias: If `True`, may alias the input array with the output array. May
       reduce the amount of memory needed for resharding. Not used at the moment.
+    cache_resharding_plans: Only used when resharding with sidechannel. If
+      `True`, uses a resharding plan cache to avoid recreating plans for the
+      same resharding operation.
 
   Returns:
     A copy of `x` whose sharding is `out_sharding`.
@@ -613,4 +617,10 @@ def reshard_with_intermediate_sharding(
           donate=donate,
       )
 
-  return reshard(x_to_reshard, out_sharding, donate=donate, may_alias=may_alias)
+  return reshard(
+      x_to_reshard,
+      out_sharding,
+      donate=donate,
+      may_alias=may_alias,
+      cache_resharding_plans=cache_resharding_plans,
+  )
