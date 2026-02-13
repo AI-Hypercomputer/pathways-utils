@@ -31,7 +31,7 @@ spec:
         securityContext:
           runAsUser: 1000  # go/gke-shipshape#rootless
           runAsGroup: 1000  # go/gke-shipshape#rootless
-          readOnlyRootFilesystem: true  # go/gke-shipshape#readonlyrootfs
+          readOnlyRootFilesystem: false
           capabilities:  # go/gke-shipshape#capabilities
             drop:
             - ALL
