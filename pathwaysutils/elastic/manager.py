@@ -293,7 +293,7 @@ class Manager:
         timeout.
 
     Returns:
-      The good slice indices
+      The active slice indices
 
     Raises:
       TimeoutError: If the timeout is reached before the slices become
@@ -388,7 +388,9 @@ class Manager:
                 "Elastic attempt %d out of %d", retry_index + 1, max_retries
             )
 
-            self.wait_for_slices(poll_interval=poll_interval, timeout=timeout)
+            self.active_slice_indices = self.wait_for_slices(
+                poll_interval=poll_interval, timeout=timeout
+            )
 
             return func(*args, **kwargs)
           except jax.errors.JaxRuntimeError as error:
