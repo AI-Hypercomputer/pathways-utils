@@ -49,10 +49,5 @@ pyink-use-majority-quotes = true
 requires = ["flit_core >=3.8,<4"]
 build-backend = "flit_core.buildapi"
 
-[tool.flit.sdist]
-exclude = [
-  "**/test",
-]
-
 [project.scripts]
 collect_profile = "pathwaysutils.collect_profile:main"
