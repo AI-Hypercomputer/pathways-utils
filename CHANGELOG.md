@@ -23,6 +23,16 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-02-27
+* Refactor: Simplify Elasticity Manager to focus on slice availability. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/167
+* Make Pathways proxy server image user-configurable by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/159
+* This change introduces reshard_with_intermediate_sharding which will first look for intermediate shardings, perform all intermediate resharding, and then perform the final reshard into the out sharding. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/145
+* Update active_slice_indices after waiting for slices within pause-resume. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/174
+* Add cleanup to restore JAX config and environment variables in tests. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/185
+* Change Pathways backend target from `localhost` to `127.0.0.1` by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/186
+* Move ifrt based reshard out of experimental. Leaving intermediate resharding and sidechannel resharding in experimental. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/176
+* Add support for passing environment variables to the Pathways proxy by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/187
+
 ## [0.1.4] - 2026-01-26
 * Extract lambda to a named function to ensure cache hits. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/127
 * Always write array metadata if self._array_metadata_store is not None. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/125
