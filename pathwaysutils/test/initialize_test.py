@@ -22,6 +22,19 @@ from pathwaysutils import _initialize
 
 class InitializeTest(parameterized.TestCase):
 
+  def setUp(self):
+    super().setUp()
+
+    orig_jax_platforms = getattr(jax.config, "jax_platforms", None)
+    self.addCleanup(jax.config.update, "jax_platforms", orig_jax_platforms)
+
+    self._orig_environ = os.environ.copy()
+    self.addCleanup(self._restore_environ)
+
+  def _restore_environ(self):
+    os.environ.clear()
+    os.environ.update(self._orig_environ)
+
   def test_first_initialize(self):
     jax.config.update("jax_platforms", "proxy")
     _initialize._initialization_count = 0
