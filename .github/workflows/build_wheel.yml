@@ -42,7 +42,9 @@ jobs:
       run: pip install build
     - name: Clone pathwaysutils from tag
       if: github.event_name == 'workflow_dispatch'
-      run: git clone --branch=${{inputs.tag}} https://github.com/AI-Hypercomputer/pathways-utils.git
+      run: git clone --branch=${INPUTS_TAG} https://github.com/AI-Hypercomputer/pathways-utils.git
+      env:
+        INPUTS_TAG: ${{inputs.tag}}
     - name: Enter directory
       if: github.event_name == 'workflow_dispatch'
       run: cd pathways-utils
