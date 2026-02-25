@@ -26,6 +26,15 @@ class ProxyBackendTest(absltest.TestCase):
 
   def setUp(self):
     super().setUp()
+    orig_jax_platforms = getattr(jax.config, "jax_platforms", None)
+    orig_jax_backend_target = getattr(jax.config, "jax_backend_target", None)
+
+    self.addCleanup(jax.config.update, "jax_platforms", orig_jax_platforms)
+    self.addCleanup(
+        jax.config.update, "jax_backend_target", orig_jax_backend_target
+    )
+    self.addCleanup(backend.clear_backends)
+
     jax.config.update("jax_platforms", "proxy")
     jax.config.update("jax_backend_target", "grpc://localhost:12345")
     backend.clear_backends()
