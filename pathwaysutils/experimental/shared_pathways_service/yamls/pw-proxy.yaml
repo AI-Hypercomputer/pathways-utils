@@ -16,6 +16,9 @@ spec:
       - name: pathways-proxy
         image: ${PROXY_SERVER_IMAGE}
         imagePullPolicy: Always
+        env:
+        - name: IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS
+          value: "true"
         args:
         - --server_port=${PROXY_SERVER_PORT}
         - --resource_manager_address=${PATHWAYS_HEAD_HOSTNAME}:${PATHWAYS_HEAD_PORT}
