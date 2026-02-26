@@ -34,56 +34,6 @@ _DEFAULT_PROXY_IMAGE = "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_ser
 _logger = logging.getLogger(__name__)
 
 
-def _deploy_pathways_proxy_server(
-    *, pathways_service: str,
-    proxy_job_name: str,
-    expected_instances: Mapping[Any, Any],
-    gcs_scratch_location: str,
-    proxy_server_image: str,
-) -> None:
-  """Deploys the Pathways proxy pods to the GKE cluster.
-
-  Args:
-    pathways_service: The service name and port of the Pathways head.
-    proxy_job_name: The name to use for the deployed proxy.
-    expected_instances: A dictionary mapping instance types to the number of
-      instances.
-    gcs_scratch_location: The Google Cloud Storage location to use.
-    proxy_server_image: The image to use for the proxy server.
-
-  Raises:
-    subprocess.CalledProcessError: If the kubectl command fails.
-  """
-  try:
-    with open(PROXY_FILEPATH, "r") as f:
-      yaml_template = f.read()
-  except OSError as err:
-    raise ValueError("Could not read file: " + PROXY_FILEPATH) from err
-
-  pathways_head_hostname, pathways_head_port = pathways_service.split(":")
-
-  # Take the first instance type and count since we only support a single
-  # instance type for now.
-  instance_type, count = next(iter(expected_instances.items()))
-  instances_str = ",".join(instance_type for _ in range(count))
-
-  template = string.Template(yaml_template)
-  substituted_yaml = template.substitute(
-      PROXY_JOB_NAME=proxy_job_name,
-      PROXY_SERVER_PORT=PROXY_SERVER_PORT,
-      PATHWAYS_HEAD_HOSTNAME=pathways_head_hostname,
-      PATHWAYS_HEAD_PORT=pathways_head_port,
-      EXPECTED_INSTANCES=instances_str,
-      GCS_SCRATCH_LOCATION=gcs_scratch_location,
-      PROXY_SERVER_IMAGE=proxy_server_image,
-  )
-
-  _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
-  gke_utils.deploy_gke_yaml(substituted_yaml)
-
-  _logger.info("Successfully deployed Pathways proxy.")
-
-
 class _ISCPathways:
   """Class for managing TPUs for interactive supercomputing.
 
@@ -121,6 +71,7 @@ class _ISCPathways:
     self._port_forward_process = None
     self._proxy_port = None
     self.proxy_server_image = proxy_server_image
+    self._run_cleanup = True
 
   def __repr__(self):
     return (
@@ -128,13 +79,81 @@ class _ISCPathways:
         f"region='{self.region}', bucket='{self.bucket}', "
         f"pathways_service='{self.pathways_service}', "
         f"expected_tpu_instances={self.expected_tpu_instances}, "
-        f"_proxy_job_name='{self._proxy_job_name}')"
+        f"_proxy_job_name='{self._proxy_job_name}', "
+        f"proxy_server_image='{self.proxy_server_image}')"
     )
+
+  def _deploy_pathways_proxy_server(
+      self, pathways_service: str,
+      proxy_job_name: str,
+      expected_instances: Mapping[Any, Any],
+      gcs_scratch_location: str,
+      proxy_server_image: str,
+  ) -> None:
+    """Deploys the Pathways proxy pods to the GKE cluster.
+
+    Args:
+      pathways_service: The service name and port of the Pathways head.
+      proxy_job_name: The name to use for the deployed proxy.
+      expected_instances: A dictionary mapping instance types to the number of
+        instances.
+      gcs_scratch_location: The Google Cloud Storage location to use.
+      proxy_server_image: The image to use for the proxy server.
+
+    Raises:
+      subprocess.CalledProcessError: If the kubectl command fails.
+      RuntimeError: If a proxy with the given name already exists.
+    """
+    try:
+      with open(PROXY_FILEPATH, "r") as f:
+        yaml_template = f.read()
+    except OSError as err:
+      raise ValueError("Could not read file: " + PROXY_FILEPATH) from err
+
+    pathways_head_hostname, pathways_head_port = pathways_service.split(":")
+
+    # Take the first instance type and count since we only support a single
+    # instance type for now.
+    instance_type, count = next(iter(expected_instances.items()))
+    instances_str = ",".join(instance_type for _ in range(count))
+
+    template = string.Template(yaml_template)
+    substituted_yaml = template.substitute(
+        PROXY_JOB_NAME=proxy_job_name,
+        PROXY_SERVER_PORT=PROXY_SERVER_PORT,
+        PATHWAYS_HEAD_HOSTNAME=pathways_head_hostname,
+        PATHWAYS_HEAD_PORT=pathways_head_port,
+        EXPECTED_INSTANCES=instances_str,
+        GCS_SCRATCH_LOCATION=gcs_scratch_location,
+        PROXY_SERVER_IMAGE=proxy_server_image,
+    )
+
+    # In _deploy_pathways_proxy_server
+    if gke_utils.job_exists(proxy_job_name):
+      _logger.info(
+          "Proxy job '%s' already exists. Skipping deployment.", proxy_job_name
+      )
+      # Prevent cleanup since the existing proxy may be in use.
+      self._run_cleanup = False
+      # Potentially raise a specific error or handle appropriately
+      raise RuntimeError(
+          f"A proxy with the name '{proxy_job_name}' already exists. Please "
+          "choose a different name and try again."
+      )
+
+    _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
+    try:
+      gke_utils.deploy_gke_yaml(substituted_yaml)
+    except subprocess.CalledProcessError as e:
+      _logger.exception("Failed to deploy Pathways proxy.")
+      raise e
+
+    _logger.info("Successfully deployed Pathways proxy.")
 
   def __enter__(self):
     """Enters the context manager, ensuring cluster exists."""
     try:
-      _deploy_pathways_proxy_server(
+      self._deploy_pathways_proxy_server(
           pathways_service=self.pathways_service,
           proxy_job_name=self._proxy_job_name,
           expected_instances=self.expected_tpu_instances,
@@ -168,8 +187,9 @@ class _ISCPathways:
       return self
     except Exception as e:
       _logger.exception("Error setting up Pathways proxy: %r", e)
-      # If any part of setup fails after deployment, cleanup.
-      self._cleanup()
+      if self._run_cleanup:
+        # If any part of setup fails after deployment, cleanup.
+        self._cleanup()
       raise
 
   def __exit__(self, exc_type, exc_value, traceback):
@@ -199,10 +219,11 @@ class _ISCPathways:
             e,
         )
 
-    # 3. Delete the proxy GKE job.
-    _logger.info("Deleting Pathways proxy...")
-    gke_utils.delete_gke_job(self._proxy_job_name)
-    _logger.info("Pathways proxy GKE job deletion complete.")
+    # 3. Delete the proxy GKE job ONLY if this process created it.
+    if self._run_cleanup:
+      _logger.info("Deleting Pathways proxy...")
+      gke_utils.delete_gke_job(self._proxy_job_name)
+      _logger.info("Pathways proxy GKE job deletion complete.")
 
 
 @contextlib.contextmanager
