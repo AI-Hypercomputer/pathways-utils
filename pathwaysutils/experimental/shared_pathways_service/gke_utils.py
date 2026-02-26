@@ -41,6 +41,68 @@ def fetch_cluster_credentials(
     raise
 
 
+def job_exists(job_name: str, namespace: str = "default") -> bool:
+  """Checks if a Kubernetes Job with the given name exists in the namespace.
+
+  Args:
+    job_name: The name of the Job.
+    namespace: The Kubernetes namespace to check in. Defaults to "default".
+
+  Returns:
+    True if the Job exists, False otherwise.
+  """
+  command = [
+      "kubectl",
+      "get",
+      "job",
+      job_name,
+      "-n",
+      namespace,
+      "-o",
+      "name",
+  ]
+
+  try:
+    _logger.debug(
+        "Checking if job '%s' exists in namespace '%s'", job_name, namespace
+    )
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _logger.debug("kubectl get job output: %s", result.stdout.strip())
+    # If the command succeeds and returns the name, the job exists.
+    return job_name in result.stdout
+  except subprocess.CalledProcessError as e:
+    if "NotFound" in e.stderr:
+      _logger.debug(
+          "Job '%s' not found in namespace '%s': %s",
+          job_name,
+          namespace,
+          e.stderr,
+      )
+      return False
+    else:
+      _logger.exception(
+          "Error checking if job '%s' exists in namespace '%s': %s",
+          job_name,
+          namespace,
+          e.stderr,
+      )
+      raise  # Re-raise unexpected errors
+  except subprocess.TimeoutExpired:
+    _logger.error("Timeout checking if job '%s' exists.", job_name)
+    raise
+  except Exception as e:
+    _logger.exception(
+        "Unexpected error checking job existence for '%s': %r", job_name, e
+    )
+    raise
+
+
 def deploy_gke_yaml(yaml: str) -> None:
   """Deploys the given YAML to the GKE cluster.
 
