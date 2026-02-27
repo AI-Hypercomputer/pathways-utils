@@ -9,6 +9,8 @@ import jax.numpy as jnp
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
 
+from google3.pyglib.flags.contrib import dict_flag
+
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("cluster", None, "The name of the GKE cluster.")
@@ -35,6 +37,12 @@ flags.DEFINE_string(
     None,
     "The proxy server image to use. If not provided, a default will be used.",
 )
+dict_flag.DEFINE_dict(
+    "proxy_options",
+    None,
+    "Configuration options for the Pathways proxy. Specify entries in the form"
+    ' "key:value". For example: --proxy_options=use_insecure_credentials:true',
+)
 
 flags.mark_flags_as_required([
     "cluster",
@@ -49,11 +57,7 @@ def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 
-  kwargs = {}
-  if FLAGS.proxy_job_name:
-    kwargs["proxy_job_name"] = FLAGS.proxy_job_name
-  if FLAGS.proxy_server_image:
-    kwargs["proxy_server_image"] = FLAGS.proxy_server_image
+  proxy_options = isc_pathways.ProxyOptions.from_dict(FLAGS.proxy_options)
 
   with isc_pathways.connect(
       cluster=FLAGS.cluster,
@@ -62,7 +66,10 @@ def main(argv: Sequence[str]) -> None:
       gcs_bucket=FLAGS.gcs_bucket,
       pathways_service=FLAGS.pathways_service,
       expected_tpu_instances={FLAGS.tpu_type: FLAGS.tpu_count},
-      **kwargs,
+      proxy_job_name=FLAGS.proxy_job_name,
+      proxy_server_image=FLAGS.proxy_server_image
+      or isc_pathways.DEFAULT_PROXY_IMAGE,
+      proxy_options=proxy_options,
   ):
     orig_matrix = jnp.zeros(5)
     result_matrix = orig_matrix + 1
