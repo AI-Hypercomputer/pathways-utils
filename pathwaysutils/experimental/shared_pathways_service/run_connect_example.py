@@ -9,8 +9,6 @@ import jax.numpy as jnp
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
 
-from google3.pyglib.flags.contrib import dict_flag
-
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string("cluster", None, "The name of the GKE cluster.")
@@ -37,7 +35,7 @@ flags.DEFINE_string(
     None,
     "The proxy server image to use. If not provided, a default will be used.",
 )
-dict_flag.DEFINE_dict(
+flags.DEFINE_list(
     "proxy_options",
     None,
     "Configuration options for the Pathways proxy. Specify entries in the form"
@@ -57,7 +55,7 @@ def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 
-  proxy_options = isc_pathways.ProxyOptions.from_dict(FLAGS.proxy_options)
+  proxy_options = isc_pathways.ProxyOptions.from_list(FLAGS.proxy_options)
 
   with isc_pathways.connect(
       cluster=FLAGS.cluster,

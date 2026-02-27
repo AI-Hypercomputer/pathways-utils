@@ -1,6 +1,6 @@
 """Module for connecting to a Pathways server for interactive supercomputing."""
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 import contextlib
 import dataclasses
 import gc
@@ -48,12 +48,14 @@ class ProxyOptions:
   use_insecure_credentials: bool = False
 
   @classmethod
-  def from_dict(cls, options: Mapping[str, str] | None) -> "ProxyOptions":
-    """Creates a ProxyOptions object from a dictionary of options."""
-    options = options or {}
-    use_insecure = (
-        options.get("use_insecure_credentials", "false").lower() == "true"
-    )
+  def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
+    """Creates a ProxyOptions object from a list of 'key:value' strings."""
+    use_insecure = False
+    for option in options or []:
+      if ":" in option:
+        key, value = option.split(":", 1)
+        if key.strip().lower() == "use_insecure_credentials":
+          use_insecure = value.strip().lower() == "true"
     return cls(use_insecure_credentials=use_insecure)
 
 
@@ -96,10 +98,12 @@ def _deploy_pathways_proxy_server(
 
   proxy_options = proxy_options or ProxyOptions()
 
-  proxy_env_str = (
-      '        - name: IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS\n'
-      '          value: "true"\n'
-  ) if proxy_options.use_insecure_credentials else ""
+  proxy_env_str = ""
+  if proxy_options.use_insecure_credentials:
+    proxy_env_str = (
+        '        - name: IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS\n'
+        '          value: "true"\n'
+    )
 
   template = string.Template(yaml_template)
   substituted_yaml = template.substitute(
