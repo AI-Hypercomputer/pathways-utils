@@ -23,6 +23,9 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-02-27
+* Fix --proxy_options to use flags.DEFINE_list by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/191
+
 ## [0.1.5] - 2026-02-27
 * Refactor: Simplify Elasticity Manager to focus on slice availability. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/167
 * Make Pathways proxy server image user-configurable by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/159
