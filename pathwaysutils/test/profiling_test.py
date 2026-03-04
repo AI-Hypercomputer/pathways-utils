@@ -186,7 +186,11 @@ class ProfilingTest(parameterized.TestCase):
       profiling.start_trace(log_dir)
 
   def test_lock_released_on_success(self):
-    """Tests that the lock is released after successful start_trace and stop_trace."""
+    """Tests lock release after successful start and stop trace.
+
+    Verifies that the profiling lock is released after both a successful
+    `start_trace` and `stop_trace` calls.
+    """
     profiling.start_trace("gs://test_bucket/test_dir")
     self.assertFalse(profiling._profile_state.lock.locked())
     profiling.stop_trace()
@@ -198,7 +202,9 @@ class ProfilingTest(parameterized.TestCase):
         self.mock_plugin_executable_cls.return_value.call.return_value[1]
     )
     mock_result.result.side_effect = RuntimeError("start failed")
-    with self.assertRaisesRegex(RuntimeError, "start failed"):
+    with self.assertRaisesRegex(
+        RuntimeError, "start failed"
+    ), mock.patch.object(profiling._logger, "exception"):
       profiling.start_trace("gs://test_bucket/test_dir2")
     self.assertFalse(profiling._profile_state.lock.locked())
 

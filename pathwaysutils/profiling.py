@@ -13,6 +13,7 @@
 # limitations under the License.
 """Profiling Utilities."""
 
+import asyncio
 import dataclasses
 import json
 import logging
@@ -93,7 +94,7 @@ def _start_pathways_trace_from_profile_request(
     try:
       _, result_future = _profile_state.executable.call()
       result_future.result()
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception:  # pylint: disable=broad-except
       _logger.exception("Failed to start trace")
       _profile_state.reset()
       raise
@@ -194,9 +195,9 @@ def start_server(port: int):
     async def profiling(pc: ProfilingConfig):  # pylint: disable=unused-variable
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       _logger.debug("Writing profiling data to %s", pc.repository_path)
-      jax.profiler.start_trace(pc.repository_path)
-      time.sleep(pc.duration_ms / 1e3)
-      jax.profiler.stop_trace()
+      await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
+      await asyncio.sleep(pc.duration_ms / 1e3)
+      await asyncio.to_thread(jax.profiler.stop_trace)
       return {"response": "profiling completed"}
 
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")
@@ -210,7 +211,7 @@ def start_server(port: int):
 
 
 def stop_server():
-  """Raises an error if there is not an active profiler server but otherwise does nothing.
+  """Raises an error if there is no active profiler server.
 
   Pathways profiling servers are not stoppable at this time.
   """
