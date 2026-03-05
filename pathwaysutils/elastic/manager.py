@@ -18,10 +18,10 @@ retries a function in case of `jax.errors.JaxRuntimeError` caused by slice down
 events. It also provides a utility for waiting for slices to become active.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import functools
 import logging
-from typing import Any
+from typing import Any, TypeVar
 
 import jax
 from pathwaysutils.elastic import elastic
@@ -32,6 +32,25 @@ _logger = logging.getLogger(__name__)
 
 class ElasticRuntimeError(RuntimeError):
   """Error raised when elasticity cannot continue."""
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _elastic_event_cleanup() -> None:
+  """Cleans up JAX profiles, caches, and live arrays."""
+  try:
+    _logger.info("Cleaning up any ongoing traces")
+    jax.profiler.stop_trace()
+  except (RuntimeError, ValueError) as e:
+    _logger.info("No ongoing traces to clean up")
+  except Exception:
+    _logger.exception("Error cleaning up ongoing traces")
+    raise
+
+  jax.clear_caches()
+  for array in jax.live_arrays():
+    array.delete()
 
 
 class Manager:
@@ -95,12 +114,64 @@ class Manager:
     else:
       raise ValueError(f"Unsupported type: {type(x)=}")
 
+  def _elasticity_retry_decorator(
+      self,
+      max_retries: int,
+      pre_callback: Callable[..., Any] | None = None,
+      on_elastic_event_callback: Callable[..., Any] | None = None,
+  ) -> Callable[[_F], _F]:
+    """Retries a function with elasticity fault tolerance.
+
+    Args:
+      max_retries: The maximum number of times to retry the function.
+      pre_callback: A callback to call before each attempt of the wrapped
+        function.
+      on_elastic_event_callback: A callback to call after an elastic failure
+        occurs.
+
+    Returns:
+      A function decorator.
+    """
+
+    if max_retries <= 0:
+      raise ValueError("max_retries must be positive.")
+    def decorator(func: _F) -> _F:
+      @functools.wraps(func)
+      def wrapper(*args: Any, **kwargs: Any) -> Any:
+        for retry_index in range(max_retries):
+          try:
+            _logger.info(
+                "Elastic attempt %d out of %d", retry_index + 1, max_retries
+            )
+            if pre_callback is not None:
+              pre_callback()
+
+            with jax.default_device(self.default_device):
+              return func(*args, **kwargs)
+          except jax.errors.JaxRuntimeError as error:
+            if not elastic.is_error_due_to_slice_down(error):
+              raise
+
+            _elastic_event_cleanup()
+
+            if on_elastic_event_callback is not None:
+              on_elastic_event_callback()
+        else:
+          raise ElasticRuntimeError(
+              f"Elastic attempt {max_retries} out of {max_retries} failed."
+          )
+
+      return wrapper
+    return decorator
+
   def pause_resume(
       self,
       max_retries: int,
       poll_interval: float | int = 10,
       timeout: float | None = None,
-  ) -> Any:
+      pre_callback: Callable[..., Any] | None = None,
+      on_elastic_event_callback: Callable[..., Any] | None = None,
+  ) -> Callable[[_F], _F]:
     """Retries a function with pause/resume fault tolerance.
 
     This decorator wraps a function to automatically retry execution in case of
@@ -121,6 +192,9 @@ class Manager:
         Defaults to 10 seconds.
       timeout: The maximum number of seconds to wait for slices to become
         active before each retry attempt. If None, there is no timeout.
+      pre_callback: A callback to call before the function is attempted.
+      on_elastic_event_callback: A callback to call after an elastic failure
+        occurs.
 
     Returns:
       The result of the wrapped function.
@@ -130,42 +204,18 @@ class Manager:
       Exception: Any other exception raised by the wrapped function that is not
         due to a slice down event.
     """
-    def decorator(func):
-      @functools.wraps(func)
-      def wrapper(*args, **kwargs):
-        for retry_index in range(max_retries):
-          try:
-            _logger.info(
-                "Elastic attempt %d out of %d", retry_index + 1, max_retries
-            )
+    def internal_pre_callback():
+      self.active_slice_indices = elastic.wait_for_slices(
+          slice_count=self.total_slice_count,
+          slice_to_devices=self.slice_to_devices,
+          poll_interval=poll_interval,
+          timeout=timeout,
+      )
+      if pre_callback is not None:
+        pre_callback()
 
-            self.active_slice_indices = elastic.wait_for_slices(
-                slice_count=self.total_slice_count,
-                slice_to_devices=self.slice_to_devices,
-                poll_interval=poll_interval,
-                timeout=timeout,
-            )
-
-            return func(*args, **kwargs)
-          except jax.errors.JaxRuntimeError as error:
-            if not elastic.is_error_due_to_slice_down(error):
-              raise
-
-            try:
-              _logger.info("Cleaning up any ongoing traces")
-              jax.profiler.stop_trace()
-            except (RuntimeError, ValueError) as e:
-              _logger.info("No ongoing traces to clean up")
-            except Exception:
-              _logger.exception("Error cleaning up ongoing traces")
-              raise
-
-            jax.clear_caches()
-            for array in jax.live_arrays():
-              array.delete()
-        raise ElasticRuntimeError(
-            f"Elastic attempt {max_retries} out of {max_retries} failed."
-        )
-
-      return wrapper
-    return decorator
+    return self._elasticity_retry_decorator(
+        max_retries=max_retries,
+        pre_callback=internal_pre_callback,
+        on_elastic_event_callback=on_elastic_event_callback,
+    )
