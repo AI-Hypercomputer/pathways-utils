@@ -167,7 +167,7 @@ def get_log_link(*, cluster: str, project: str, job_name: str) -> str:
       'resource.type="k8s_container"\n'
       f'resource.labels.cluster_name="{cluster}"\n'
       'resource.labels.namespace_name="default"\n'
-      f'labels.k8s-pod/job-name="{job_name}"'
+      f'labels.k8s-pod/job-name:"{job_name}"'
   )
   encoded_filter = urllib.parse.quote(log_filter, safe="")
 
