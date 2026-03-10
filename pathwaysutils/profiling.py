@@ -93,7 +93,7 @@ def _start_pathways_trace_from_profile_request(
     try:
       _, result_future = _profile_state.executable.call()
       result_future.result()
-    except Exception:  # pylint: disable=broad-except
+    except Exception:
       _logger.exception("Failed to start trace")
       _profile_state.reset()
       raise
@@ -191,7 +191,7 @@ def start_server(port: int) -> None:
       repository_path: str
 
     @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig) -> dict[str, str]:  # pylint: disable=unused-variable
+    async def profiling(pc: ProfilingConfig) -> dict[str, str]:
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       _logger.debug("Writing profiling data to %s", pc.repository_path)
       await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
@@ -275,7 +275,7 @@ def monkey_patch_jax() -> None:
       log_dir,
       create_perfetto_link: bool = False,
       create_perfetto_trace: bool = False,
-      profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
+      profiler_options: jax.profiler.ProfileOptions | None = None,
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
     start_trace(
