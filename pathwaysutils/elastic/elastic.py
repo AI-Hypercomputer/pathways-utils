@@ -19,7 +19,7 @@ events. It also provides a utility for waiting for slices to become active.
 """
 
 import collections
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 import logging
 import time
 
@@ -83,7 +83,7 @@ def _simple_execution(devices: Sequence[jax.Device]) -> jax.Array:
 
 def get_slice_to_devices(
     devices: Sequence[jax.Device],
-) -> dict[int, Sequence[jax.Device]]:
+) -> Mapping[int, Sequence[jax.Device]]:
   """Returns the mapping from slice index to devices."""
   slice_to_devices = collections.defaultdict(list)
   for d in devices:
@@ -94,7 +94,7 @@ def get_slice_to_devices(
 @timing.timeit
 def get_active_slice_indices(
     slice_to_devices: Mapping[int, Sequence[jax.Device]] | None = None,
-) -> set[int]:
+) -> Set[int]:
   """Returns the set of active slices indices.
 
   Args:
@@ -153,7 +153,7 @@ def wait_for_slices(
     poll_interval: float | int = 10,
     timeout: float | int | None = None,
     slice_to_devices: Mapping[int, Sequence[jax.Device]] | None = None,
-) -> set[int]:
+) -> Set[int]:
   """Waits until after at least `slice_count` slices become active.
 
   Args:

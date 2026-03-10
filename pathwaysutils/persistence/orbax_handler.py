@@ -96,7 +96,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       values: Sequence[jax.Array],
       infos: Sequence[ParamInfo],
       args: Sequence[SaveArgs] | None = None,
-  ) -> list[future.Future]:
+  ) -> Sequence[future.Future]:
     """Uses Pathways Persistence API to serialize a jax array."""
     type_handlers.check_input_arguments(values, infos, args)
 
@@ -158,7 +158,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
       self,
       infos: Sequence[ParamInfo],
       args: Sequence[RestoreArgs] | None = None,
-  ) -> list[jax.Array]:
+  ) -> Sequence[jax.Array]:
     """Uses Pathways Persistence API to deserialize a jax array."""
     if args is None:
       raise ValueError("Must provide ArrayRestoreArgs to restore as jax.Array.")

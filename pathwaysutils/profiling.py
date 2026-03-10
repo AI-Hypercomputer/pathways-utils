@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import threading
-from typing import Any
+from typing import Any, Mapping
 import urllib.parse
 
 import fastapi
@@ -59,8 +59,8 @@ def toy_computation() -> None:
 
 def _create_profile_request(
     log_dir: os.PathLike[str] | str,
-) -> dict[str, Any]:
-  """Creates a profile request dictionary from the given options."""
+) -> Mapping[str, Any]:
+  """Creates a profile request mapping from the given options."""
   profile_request = {}
   profile_request["traceLocation"] = str(log_dir)
 
@@ -68,14 +68,14 @@ def _create_profile_request(
 
 
 def _start_pathways_trace_from_profile_request(
-    profile_request: dict[str, Any],
+    profile_request: Mapping[str, Any],
 ) -> None:
   """Starts a profiler trace on Pathways components from a profile request.
 
   This will only profile the Pathways components and not the JAX client code.
 
   Args:
-    profile_request: A dictionary containing the profile request options.
+    profile_request: A mapping containing the profile request options.
   """
   with _profile_state.lock:
     global _first_profile_start
@@ -93,7 +93,7 @@ def _start_pathways_trace_from_profile_request(
     try:
       _, result_future = _profile_state.executable.call()
       result_future.result()
-    except Exception:  # pylint: disable=broad-except
+    except Exception:
       _logger.exception("Failed to start trace")
       _profile_state.reset()
       raise
@@ -191,7 +191,7 @@ def start_server(port: int) -> None:
       repository_path: str
 
     @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig) -> dict[str, str]:  # pylint: disable=unused-variable
+    async def profiling(pc: ProfilingConfig) -> Mapping[str, str]:
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       _logger.debug("Writing profiling data to %s", pc.repository_path)
       await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
@@ -275,7 +275,7 @@ def monkey_patch_jax() -> None:
       log_dir,
       create_perfetto_link: bool = False,
       create_perfetto_trace: bool = False,
-      profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
+      profiler_options: jax.profiler.ProfileOptions | None = None,
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
     start_trace(
