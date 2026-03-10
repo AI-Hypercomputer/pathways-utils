@@ -56,7 +56,7 @@ class ReshardingPlanWrapper:
   ):
     def ifrt_hlo_sharding(
         aval: jax.core.ShapedArray, sharding: jax.sharding.Sharding
-    ) -> dict[str, Any]:
+    ) -> Mapping[str, Any]:
       result = {
           "devices": {
               "device_ids": [
@@ -190,7 +190,9 @@ class NoIntermediateShardingNeededError(NoIntermediateShardingError):
   """Raised when no intermediate sharding is needed for optimization."""
 
 
-def _get_sharding_spec_dims(sharding: jax.sharding.NamedSharding) -> list[int]:
+def _get_sharding_spec_dims(
+    sharding: jax.sharding.NamedSharding,
+) -> Sequence[int]:
   """Gets the sharding dimension sizes from a NamedSharding."""
   mesh = sharding.mesh
   dims = []
@@ -244,7 +246,7 @@ def _get_split_candidates(
     src_dims: Sequence[int],
     dst_dims: Sequence[int],
     gcd_shards: Sequence[int],
-) -> list[tuple[int, str]]:
+) -> Sequence[tuple[int, str]]:
   """Finds dimensions that are candidates for splitting."""
   split_candidates = []
   for i, spec in enumerate(in_sharding.spec):
@@ -271,8 +273,8 @@ def _build_intermediate_mesh_and_spec(
     in_spec: jax.sharding.PartitionSpec,
     src_dims: Sequence[int],
     dst_dims: Sequence[int],
-    split_candidates: list[tuple[int, str]],
-) -> tuple[jax.sharding.Mesh, jax.sharding.PartitionSpec, list[str]]:
+    split_candidates: Sequence[tuple[int, str]],
+) -> tuple[jax.sharding.Mesh, jax.sharding.PartitionSpec, Sequence[str]]:
   """Builds the intermediate Mesh and PartitionSpec."""
   # Build a map of mesh axis to split information: (dim_idx, replicas)
   mesh_axis_to_split_info = {}
@@ -321,7 +323,7 @@ def _build_intermediate_mesh_and_spec(
 
 def find_intermediate_sharding(
     in_sharding: jax.sharding.Sharding, out_sharding: jax.sharding.Sharding
-) -> tuple[jax.sharding.NamedSharding, list[str]]:
+) -> tuple[jax.sharding.NamedSharding, Sequence[str]]:
   """Finds an intermediate sharding to reshard to before target sharding.
 
   This function tries to find an intermediate sharding that can be used to
@@ -345,7 +347,8 @@ def find_intermediate_sharding(
   Returns:
     A tuple containing:
       - An intermediate sharding.
-      - A list of axis names that are replicated in the intermediate sharding.
+      - A sequence of axis names that are replicated in the intermediate
+      sharding.
 
   Raises:
     NoIntermediateShardingError: If no intermediate sharding is found.

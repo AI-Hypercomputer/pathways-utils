@@ -14,7 +14,7 @@
 """Helper functions for persistence."""
 
 import base64
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import concurrent.futures
 import datetime
 import json
@@ -94,7 +94,7 @@ def get_hlo_sharding_string(
 def get_shape_info(
     dtype: np.dtype,
     dimensions: Sequence[int],
-) -> dict[str, Sequence[int] | str]:
+) -> Mapping[str, Sequence[int] | str]:
   """Returns shape info in the format expected by read requests."""
   return {
       "xla_primitive_type_str": dtype_to_xla_primitive_type_str(dtype),
@@ -108,7 +108,7 @@ def get_write_request(
     jax_array: jax.Array,
     timeout: datetime.timedelta,
     return_dict: bool = False,
-) -> str | dict[str, Any]:
+) -> str | Mapping[str, Any]:
   """Returns a string representation of the plugin program which writes the given jax_array to the given location."""
   sharding = jax_array.sharding
   assert isinstance(sharding, jax.sharding.Sharding), sharding
@@ -172,7 +172,7 @@ def get_read_request(
     devices: Sequence[jax.Device],
     timeout: datetime.timedelta,
     return_dict: bool = False,
-) -> str | dict[str, Any]:
+) -> str | Mapping[str, Any]:
   """Returns a string representation of the plugin program which reads the given array from the given location into the provided sharding."""
   if not isinstance(devices, np.ndarray):
     devices = np.array(devices)

@@ -18,7 +18,7 @@ retries a function in case of `jax.errors.JaxRuntimeError` caused by slice down
 events. It also provides a utility for waiting for slices to become active.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set
 import functools
 import logging
 from typing import Any, TypeVar
@@ -58,7 +58,7 @@ class Manager:
 
   _total_slice_count: int | None = None
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
-  active_slice_indices: set[int]
+  active_slice_indices: Set[int]
 
   def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
     """Initializes the manager.

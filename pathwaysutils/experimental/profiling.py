@@ -13,13 +13,13 @@
 # limitations under the License.
 """Experimental profiling utilites."""
 
-from typing import Any
+from typing import Any, Mapping
 
 from pathwaysutils import profiling
 
 
 def start_trace(
-    profile_request: dict[str, Any],
+    profile_request: Mapping[str, Any],
     *,
     create_perfetto_link: bool = False,
     create_perfetto_trace: bool = False,
@@ -33,7 +33,7 @@ def start_trace(
   Use `jax.profiler.stop_trace` to end profiling.
 
   Args:
-    profile_request: A dictionary containing the profile request options.
+    profile_request: A mapping containing the profile request options.
     create_perfetto_link: A boolean which, if true, creates and prints link to
       the Perfetto trace viewer UI (https://ui.perfetto.dev). The program will
       block until the link is opened and Perfetto loads the trace. This feature
