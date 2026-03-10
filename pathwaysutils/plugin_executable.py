@@ -13,10 +13,9 @@
 # limitations under the License.
 """PluginExecutable is a class for executing plugin programs."""
 
+from collections.abc import Sequence
 import concurrent.futures
 import threading
-from typing import List, Sequence, Tuple, Union
-
 import jax
 from jax.extend import ifrt_programs
 from jax.interpreters import pxla
@@ -36,11 +35,11 @@ class PluginExecutable:
 
   def call(
       self,
-      in_arr: Sequence[Union[jax.Array, List[jax.Array]]] = (),
+      in_arr: Sequence[jax.Array | Sequence[jax.Array]] = (),
       out_shardings: Sequence[jax.sharding.Sharding] = (),
       out_avals: Sequence[jax.core.ShapedArray] = (),
       out_committed: bool = True,
-  ) -> Tuple[Sequence[jax.Array], concurrent.futures.Future[None]]:
+  ) -> tuple[Sequence[jax.Array], concurrent.futures.Future[None]]:
     """Runs the compiled IFRT program and returns the result and a future."""
     results_with_token = self.compiled.execute_sharded(in_arr, with_tokens=True)
 

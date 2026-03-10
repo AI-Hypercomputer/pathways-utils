@@ -26,7 +26,7 @@ _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
 
 
-_DESCRIPTION = """
+_DESCRIPTION: str = """
 To profile running JAX programs, you first need to start the profiler server
 in the program of interest. You can do this via
 `jax.profiler.start_server(<port>)`. Once the program is running and the
@@ -36,7 +36,7 @@ for a provided duration. The trace file will be dumped into a GCS bucket
 """
 
 
-def _get_parser():
+def _get_parser() -> argparse.ArgumentParser:
   """Returns an argument parser for the collect_profile script."""
   parser = argparse.ArgumentParser(description=_DESCRIPTION)
   parser.add_argument(
@@ -62,7 +62,7 @@ def _get_parser():
   return parser
 
 
-def main():
+def main() -> None:
   parser = _get_parser()
   args = parser.parse_args()
 

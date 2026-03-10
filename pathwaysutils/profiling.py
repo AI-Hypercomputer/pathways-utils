@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import threading
-import time
 from typing import Any
 import urllib.parse
 
@@ -38,11 +37,11 @@ class _ProfileState:
   executable: plugin_executable.PluginExecutable | None = None
   lock: threading.Lock
 
-  def __init__(self):
+  def __init__(self) -> None:
     self.executable = None
     self.lock = threading.Lock()
 
-  def reset(self):
+  def reset(self) -> None:
     self.executable = None
 
 
@@ -52,7 +51,7 @@ _original_start_trace = jax.profiler.start_trace
 _original_stop_trace = jax.profiler.stop_trace
 
 
-def toy_computation():
+def toy_computation() -> None:
   """A toy computation to run before the first profile."""
   x = jax.jit(lambda x: x + 1)(jnp.array(1))
   x.block_until_ready()
@@ -154,7 +153,7 @@ def start_trace(
   )
 
 
-def stop_trace():
+def stop_trace() -> None:
   """Stops the currently-running profiler trace."""
   try:
     with _profile_state.lock:
@@ -172,7 +171,7 @@ def stop_trace():
 _profiler_thread: threading.Thread | None = None
 
 
-def start_server(port: int):
+def start_server(port: int) -> None:
   """Starts the profiling server on port `port`.
 
   The signature is slightly different from `jax.profiler.start_server`
@@ -192,7 +191,7 @@ def start_server(port: int):
       repository_path: str
 
     @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig):  # pylint: disable=unused-variable
+    async def profiling(pc: ProfilingConfig) -> dict[str, str]:  # pylint: disable=unused-variable
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       _logger.debug("Writing profiling data to %s", pc.repository_path)
       await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
@@ -210,7 +209,7 @@ def start_server(port: int):
   _profiler_thread.start()
 
 
-def stop_server():
+def stop_server() -> None:
   """Raises an error if there is no active profiler server.
 
   Pathways profiling servers are not stoppable at this time.
@@ -257,7 +256,7 @@ def collect_profile(
   return True
 
 
-def monkey_patch_jax():
+def monkey_patch_jax() -> None:
   """Monkey patches JAX with Pathways versions of functions.
 
   The signatures in patched functions should match the original.
@@ -279,7 +278,7 @@ def monkey_patch_jax():
       profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
-    return start_trace(
+    start_trace(
         log_dir,
         create_perfetto_link=create_perfetto_link,
         create_perfetto_trace=create_perfetto_trace,
@@ -291,21 +290,21 @@ def monkey_patch_jax():
 
   def stop_trace_patch() -> None:
     _logger.debug("jax.profile.stop_trace patched with pathways' stop_trace")
-    return stop_trace()
+    stop_trace()
 
   jax.profiler.stop_trace = stop_trace_patch
   jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
 
-  def start_server_patch(port: int):
+  def start_server_patch(port: int) -> None:
     _logger.debug(
         "jax.profile.start_server patched with pathways' start_server"
     )
-    return start_server(port)
+    start_server(port)
 
   jax.profiler.start_server = start_server_patch
 
-  def stop_server_patch():
+  def stop_server_patch() -> None:
     _logger.debug("jax.profile.stop_server patched with pathways' stop_server")
-    return stop_server()
+    stop_server()
 
   jax.profiler.stop_server = stop_server_patch

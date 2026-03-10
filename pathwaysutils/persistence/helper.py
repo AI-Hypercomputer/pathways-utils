@@ -14,10 +14,11 @@
 """Helper functions for persistence."""
 
 import base64
+from collections.abc import Sequence
 import concurrent.futures
 import datetime
 import json
-from typing import Any, Sequence, Tuple, Union
+from typing import Any
 
 import jax
 from jax import core
@@ -93,7 +94,7 @@ def get_hlo_sharding_string(
 def get_shape_info(
     dtype: np.dtype,
     dimensions: Sequence[int],
-) -> dict[str, Union[Sequence[int], str]]:
+) -> dict[str, Sequence[int] | str]:
   """Returns shape info in the format expected by read requests."""
   return {
       "xla_primitive_type_str": dtype_to_xla_primitive_type_str(dtype),
@@ -107,7 +108,7 @@ def get_write_request(
     jax_array: jax.Array,
     timeout: datetime.timedelta,
     return_dict: bool = False,
-) -> Union[str, dict[str, Any]]:
+) -> str | dict[str, Any]:
   """Returns a string representation of the plugin program which writes the given jax_array to the given location."""
   sharding = jax_array.sharding
   assert isinstance(sharding, jax.sharding.Sharding), sharding
@@ -171,7 +172,7 @@ def get_read_request(
     devices: Sequence[jax.Device],
     timeout: datetime.timedelta,
     return_dict: bool = False,
-) -> Union[str, dict[str, Any]]:
+) -> str | dict[str, Any]:
   """Returns a string representation of the plugin program which reads the given array from the given location into the provided sharding."""
   if not isinstance(devices, np.ndarray):
     devices = np.array(devices)
@@ -256,9 +257,9 @@ def read_one_array(
     dtype: np.dtype,
     shape: Sequence[int],
     shardings: jax.sharding.Sharding,
-    devices: Union[Sequence[jax.Device], np.ndarray],
+    devices: Sequence[jax.Device] | np.ndarray,
     timeout: datetime.timedelta,
-):
+) -> jax.Array:
   """Creates the read array plugin program string, compiles it to an executable, calls it and returns the result."""
   read_request = get_read_request(
       location,
@@ -284,9 +285,9 @@ def read_arrays(
     dtypes: Sequence[np.dtype],
     shapes: Sequence[Sequence[int]],
     shardings: Sequence[jax.sharding.Sharding],
-    devices: Union[Sequence[jax.Device], np.ndarray],
+    devices: Sequence[jax.Device] | np.ndarray,
     timeout: datetime.timedelta,
-) -> Tuple[Sequence[jax.Array], concurrent.futures.Future[None]]:
+) -> tuple[Sequence[jax.Array], concurrent.futures.Future[None]]:
   """Creates the read array plugin program string, compiles it to an executable, calls it and returns the result."""
 
   bulk_read_request = get_bulk_read_request(

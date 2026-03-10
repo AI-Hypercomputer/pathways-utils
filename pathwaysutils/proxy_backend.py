@@ -18,7 +18,7 @@ from jax.extend import backend
 from pathwaysutils import jax as pw_jax
 
 
-def register_backend_factory():
+def register_backend_factory() -> None:
   backend.register_backend_factory(
       "proxy",
       lambda: pw_jax.ifrt_proxy.get_client(

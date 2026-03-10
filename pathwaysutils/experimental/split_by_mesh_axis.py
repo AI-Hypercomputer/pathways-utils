@@ -13,7 +13,8 @@
 # limitations under the License.
 """Experimental split by mesh axis API."""
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any, cast
 
 import jax
 from pathwaysutils import jax as pw_jax
@@ -167,7 +168,8 @@ def split_by_mesh_axis(
       mesh_axis_sizes=mesh.axis_sizes,
       mesh_axis_idx=mesh_axis_idx,
       mesh_axis_sections=mesh_axis_sections,
-      submesh_shardings=submesh_shardings,
+      # TODO: b/491156211 - Remove cast once type mismatch is fixed.
+      submesh_shardings=cast(Any, submesh_shardings),
       donate=donate,
   )
 

@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Package of Pathways-on-Cloud utilities."""
+from collections.abc import Callable
 from pathwaysutils import _initialize
 
-initialize = _initialize.initialize
-is_pathways_backend_used = _initialize.is_pathways_backend_used
+initialize: Callable[[], None] = _initialize.initialize
+is_pathways_backend_used: Callable[[], bool] = _initialize.is_pathways_backend_used
 
 del _initialize
 
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.1.5"
+__version__: str = "v0.1.5"

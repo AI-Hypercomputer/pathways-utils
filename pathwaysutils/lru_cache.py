@@ -13,15 +13,19 @@
 # limitations under the License.
 """An LRU cache that will be cleared when JAX clears its internal cache."""
 
+from collections.abc import Callable
 import functools
-from typing import Any, Callable
+from typing import Any, TypeVar
 
 from jax.extend import backend
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
 def lru_cache(
     maxsize: int = 4096,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+) -> Callable[[_F], _F]:
   """An LRU cache that will be cleared when JAX clears its internal cache.
 
   Args:
@@ -32,7 +36,7 @@ def lru_cache(
     A function that can be used to decorate a function to cache its results.
   """
 
-  def wrap(f):
+  def wrap(f: _F) -> _F:
     cached = functools.lru_cache(maxsize=maxsize)(f)
     wrapper = functools.wraps(f)(cached)
 

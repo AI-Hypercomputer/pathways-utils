@@ -14,13 +14,12 @@
 """Experimental resharding API for elastic device sets."""
 
 import base64
-import collections
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 import json
 import logging
 import math
 import operator
-from typing import Any, Callable, Dict, Mapping, Sequence
+from typing import Any
 
 import jax
 from pathwaysutils import jax as pw_jax
@@ -57,7 +56,7 @@ class ReshardingPlanWrapper:
   ):
     def ifrt_hlo_sharding(
         aval: jax.core.ShapedArray, sharding: jax.sharding.Sharding
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
       result = {
           "devices": {
               "device_ids": [
