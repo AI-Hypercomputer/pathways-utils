@@ -25,14 +25,16 @@ from pathwaysutils.debug import timing
 class TimingTest(parameterized.TestCase):
 
   def test_timer_context_manager(self):
-    with mock.patch.object(
-        time,
-        "time",
-        side_effect=[1, 8.9],
-        autospec=True,
-    ):
-      with timing.Timer("test_timer") as timer:
-        pass
+    self.enter_context(
+        mock.patch.object(
+            time,
+            "time",
+            side_effect=[1, 8.9],
+            autospec=True,
+        )
+    )
+    with timing.Timer("test_timer") as timer:
+      pass
 
     self.assertEqual(timer.name, "test_timer")
     self.assertEqual(timer.start, 1)
@@ -46,14 +48,16 @@ class TimingTest(parameterized.TestCase):
     def my_function():
       pass
 
-    with mock.patch.object(
-        time,
-        "time",
-        side_effect=[1, 8.9, 0],  # Third time is used for logging.
-        autospec=True,
-    ):
-      with self.assertLogs(timing._logger, logging.DEBUG) as log_output:
-        my_function()
+    self.enter_context(
+        mock.patch.object(
+            time,
+            "time",
+            side_effect=[1, 8.9, 0],  # Third time is used for logging.
+            autospec=True,
+        )
+    )
+    with self.assertLogs(timing._logger, logging.DEBUG) as log_output:
+      my_function()
 
     self.assertEqual(
         log_output.output,

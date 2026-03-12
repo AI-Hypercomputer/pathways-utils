@@ -43,12 +43,17 @@ def _log_thread_stack(thread: threading.Thread):
 
 
 @contextlib.contextmanager
-def watchdog(timeout: float, repeat: bool = True):
+def watchdog(
+    name: str,
+    timeout: float,
+    repeat: bool = True,
+    ):
   """Watchdog context manager.
 
   Prints the stack trace of all threads after `timeout` seconds.
 
   Args:
+    name: The name of the watchdog, used in log messages.
     timeout: The timeout in seconds. If the timeout is reached, the stack trace
       of all threads will be printed.
     repeat: Whether to repeat the watchdog after the timeout. If False, the
@@ -63,7 +68,10 @@ def watchdog(timeout: float, repeat: bool = True):
     count = 0
     while not event.wait(timeout):
       _logger.debug(
-          "Watchdog thread dump every %s seconds. Count: %s", timeout, count
+          "'%s' watchdog thread stack dump every %s seconds. Count: %s",
+          name,
+          timeout,
+          count,
       )
       try:
         for thread in threading.enumerate():
@@ -73,17 +81,22 @@ def watchdog(timeout: float, repeat: bool = True):
             _logger.debug("Error print traceback for thread: %s", thread.ident)
       finally:
         if not repeat:
-          _logger.critical("Timeout from watchdog!")
+          _logger.critical("Timeout from watchdog '%s'", name)
           os.abort()
 
       count += 1
 
-  _logger.debug("Registering watchdog")
-  watchdog_thread = threading.Thread(target=handler, name="watchdog")
+  _logger.debug(
+      "Registering '%s' watchdog with timeout %s seconds and repeat=%s",
+      name,
+      timeout,
+      repeat,
+  )
+  watchdog_thread = threading.Thread(target=handler, name=name)
   watchdog_thread.start()
   try:
     yield
   finally:
     event.set()
     watchdog_thread.join()
-    _logger.debug("Deregistering watchdog")
+    _logger.debug("Deregistering '%s' watchdog", name)
