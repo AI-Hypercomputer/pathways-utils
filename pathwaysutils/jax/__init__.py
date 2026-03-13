@@ -17,9 +17,8 @@ This introduces an abstrction layer some JAX APIs that have changed over
 `pathwaysutils`'s compatibility window.
 """
 
-import functools
 
-import jax
+import functools
 
 
 class _FakeJaxFunction:
@@ -44,20 +43,6 @@ class _FakeJaxFunction:
 
   def __call__(self, *args, **kwargs):
     raise ImportError(self.error_message)
-
-
-try:
-  # jax>=0.7.1
-  from jax.extend import backend  # pylint: disable=g-import-not-at-top
-
-  ifrt_proxy = backend.ifrt_proxy
-  del backend
-except AttributeError:
-  # jax<0.7.1
-  from jax.lib import xla_extension  # pylint: disable=g-import-not-at-top
-
-  ifrt_proxy = xla_extension.ifrt_proxy
-  del xla_extension
 
 
 try:
@@ -112,6 +97,5 @@ def ifrt_reshard_available() -> bool:
     del jax
 
 
-del jax
 del _FakeJaxFunction
 del functools
