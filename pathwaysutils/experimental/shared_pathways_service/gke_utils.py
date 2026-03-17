@@ -3,6 +3,7 @@
 import logging
 import socket
 import subprocess
+import time
 import urllib.parse
 
 import portpicker
@@ -189,6 +190,7 @@ def wait_for_pod(job_name: str) -> str:
     RuntimeError: If the pod is not ready.
   """
   _logger.info("Waiting for pod to be created...")
+  time.sleep(1)
   pod_name = get_pod_from_job(job_name)
 
   _logger.info(
