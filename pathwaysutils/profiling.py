@@ -59,10 +59,22 @@ def toy_computation() -> None:
 
 def _create_profile_request(
     log_dir: os.PathLike[str] | str,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ) -> Mapping[str, Any]:
   """Creates a profile request mapping from the given options."""
-  profile_request = {}
-  profile_request["traceLocation"] = str(log_dir)
+  if profiler_options is None:
+    profiler_options = jax.profiler.ProfileOptions()
+
+  profile_request = {
+      "traceLocation": str(log_dir),
+      "profilingStartTimeNs": profiler_options.start_timestamp_ns,
+      "profilingDurationMs": profiler_options.duration_ms,
+      "hostTraceLevel": profiler_options.host_tracer_level,
+      "pwTraceOptions": {
+          "advancedConfiguration": profiler_options.advanced_configuration,
+          "enablePythonTracer": bool(profiler_options.python_tracer_level),
+      },
+  }
 
   return profile_request
 
@@ -104,7 +116,7 @@ def start_trace(
     *,
     create_perfetto_link: bool = False,
     create_perfetto_trace: bool = False,
-    profiler_options: jax.profiler.ProfileOptions | None = None,  # pylint: disable=unused-argument
+    profiler_options: jax.profiler.ProfileOptions | None = None,
 ) -> None:
   """Starts a profiler trace.
 
@@ -133,7 +145,6 @@ def start_trace(
       This feature is experimental for Pathways on Cloud and may not be fully
       supported.
     profiler_options: Profiler options to configure the profiler for collection.
-      Options are not currently supported and ignored.
   """
   if not str(log_dir).startswith("gs://"):
     raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
@@ -144,7 +155,11 @@ def start_trace(
         "features for Pathways on Cloud and may not be fully supported."
     )
 
-  _start_pathways_trace_from_profile_request(_create_profile_request(log_dir))
+  profile_request = _create_profile_request(log_dir, profiler_options)
+
+  _logger.debug("Profile request: %s", profile_request)
+
+  _start_pathways_trace_from_profile_request(profile_request)
 
   _original_start_trace(
       log_dir=log_dir,
