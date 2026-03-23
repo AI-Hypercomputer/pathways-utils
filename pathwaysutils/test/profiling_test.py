@@ -14,12 +14,12 @@
 
 import json
 import logging
-import unittest
 from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+from jax import numpy as jnp
 from pathwaysutils import profiling
 import requests
 
@@ -213,10 +213,9 @@ class ProfilingTest(parameterized.TestCase):
     """Tests that the lock is released if stop_trace fails."""
     profiling.start_trace("gs://test_bucket/test_dir3")
     self.assertFalse(profiling._profile_state.lock.locked())
-    mock_result = (
-        self.mock_plugin_executable_cls.return_value.call.return_value[1]
+    self.mock_plugin_executable_cls.return_value.call.side_effect = (
+        RuntimeError("stop failed")
     )
-    mock_result.result.side_effect = RuntimeError("stop failed")
     with self.assertRaisesRegex(RuntimeError, "stop failed"):
       profiling.stop_trace()
     self.assertFalse(profiling._profile_state.lock.locked())
@@ -276,6 +275,34 @@ class ProfilingTest(parameterized.TestCase):
       self.mock_original_stop_trace.assert_called_once()
     with self.subTest("executable_is_none"):
       self.assertIsNone(profiling._profile_state.executable)
+
+  @absltest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  def test_stop_trace_with_xprof_options_passes_out_avals(self):
+    options = jax.profiler.ProfileOptions()
+    options.duration_ms = 2000
+
+    # Bypass start_trace and explicitly populate profile state
+    request = profiling._create_profile_request(
+        "gs://test_bucket/test_dir", options
+    )
+    profiling._profile_state.profile_request = request
+    profiling._profile_state.executable = (
+        self.mock_plugin_executable_cls.return_value
+    )
+
+    profiling.stop_trace()
+
+    self.mock_plugin_executable_cls.return_value.call.assert_called_once()
+    _, kwargs = self.mock_plugin_executable_cls.return_value.call.call_args
+    self.assertIn("out_avals", kwargs)
+    self.assertIn("out_shardings", kwargs)
+    self.assertLen(kwargs["out_avals"], 1)
+    # Check that it's an object dtype ShapedArray
+    self.assertEqual(kwargs["out_avals"][0].shape, (1,))
+    self.assertEqual(kwargs["out_avals"][0].dtype, jnp.object_)
 
   def test_stop_trace_before_start_error(self):
     with self.assertRaisesRegex(
@@ -406,7 +433,7 @@ class ProfilingTest(parameterized.TestCase):
         },
     )
 
-  @unittest.skipIf(
+  @absltest.skipIf(
       jax.version.__version_info__ < (0, 9, 2),
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
@@ -444,41 +471,45 @@ class ProfilingTest(parameterized.TestCase):
         },
     )
 
-  @unittest.skipIf(
+  @absltest.skipIf(
       jax.version.__version_info__ < (0, 9, 2),
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
   @parameterized.parameters(
       ({"traceLocation": "gs://test_bucket/test_dir"},),
-      ({
-          "traceLocation": "gs://test_bucket/test_dir",
-          "blockUntilStart": True,
-          "maxDurationSecs": 10.0,
-          "devices": {"deviceIds": [1, 2]},
-          "includeResourceManagers": True,
-          "maxNumHosts": 5,
-          "xprofTraceOptions": {
+      (
+          {
+              "traceLocation": "gs://test_bucket/test_dir",
               "blockUntilStart": True,
-              "traceDirectory": "gs://test_bucket/test_dir",
-          },
-      },),
-      ({
-          "traceLocation": "gs://bucket/dir",
-          "xprofTraceOptions": {
-              "hostTraceLevel": 0,
-              "traceOptions": {
-                  "traceMode": "TRACE_COMPUTE",
-                  "numSparseCoresToTrace": 1,
-                  "numSparseCoreTilesToTrace": 2,
-                  "numChipsToProfilePerTask": 3,
-                  "powerTraceLevel": 4,
-                  "enableFwThrottleEvent": True,
-                  "enableFwPowerLevelEvent": True,
-                  "enableFwThermalEvent": True,
+              "maxDurationSecs": 10.0,
+              "devices": {"deviceIds": [1, 2]},
+              "includeResourceManagers": True,
+              "maxNumHosts": 5,
+              "xprofTraceOptions": {
+                  "blockUntilStart": True,
+                  "traceDirectory": "gs://test_bucket/test_dir",
               },
-              "traceDirectory": "gs://bucket/dir",
           },
-      },),
+      ),
+      (
+          {
+              "traceLocation": "gs://bucket/dir",
+              "xprofTraceOptions": {
+                  "hostTraceLevel": 0,
+                  "traceOptions": {
+                      "traceMode": "TRACE_COMPUTE",
+                      "numSparseCoresToTrace": 1,
+                      "numSparseCoreTilesToTrace": 2,
+                      "numChipsToProfilePerTask": 3,
+                      "powerTraceLevel": 4,
+                      "enableFwThrottleEvent": True,
+                      "enableFwPowerLevelEvent": True,
+                      "enableFwThermalEvent": True,
+                  },
+                  "traceDirectory": "gs://bucket/dir",
+              },
+          },
+      ),
   )
 
   def test_start_pathways_trace_from_profile_request(self, profile_request):
@@ -496,10 +527,9 @@ class ProfilingTest(parameterized.TestCase):
     """Tests that original_stop_trace is called if pathways stop_trace fails."""
     profiling.start_trace("gs://test_bucket/test_dir")
     self.assertFalse(profiling._profile_state.lock.locked())
-    mock_result = (
-        self.mock_plugin_executable_cls.return_value.call.return_value[1]
+    self.mock_plugin_executable_cls.return_value.call.side_effect = (
+        RuntimeError("stop failed")
     )
-    mock_result.result.side_effect = RuntimeError("stop failed")
     with self.assertRaisesRegex(RuntimeError, "stop failed"):
       profiling.stop_trace()
     self.mock_original_stop_trace.assert_called_once()
