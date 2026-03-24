@@ -14,6 +14,7 @@
 
 import json
 import logging
+import unittest
 from unittest import mock
 
 from absl.testing import absltest
@@ -225,9 +226,11 @@ class ProfilingTest(parameterized.TestCase):
 
     self.mock_toy_computation.assert_called_once()
     self.mock_plugin_executable_cls.assert_called_once_with(
-        json.dumps(
-            {"profileRequest": {"traceLocation": "gs://test_bucket/test_dir"}}
-        )
+        json.dumps({
+            "profileRequest": {
+                "traceLocation": "gs://test_bucket/test_dir",
+            }
+        })
     )
     self.mock_plugin_executable_cls.return_value.call.assert_called_once()
     self.mock_original_start_trace.assert_called_once_with(
@@ -391,10 +394,60 @@ class ProfilingTest(parameterized.TestCase):
 
     mocks["stop_server"].assert_called_once()
 
-  def test_create_profile_request_no_options(self):
-    request = profiling._create_profile_request("gs://bucket/dir")
-    self.assertEqual(request, {"traceLocation": "gs://bucket/dir"})
+  @parameterized.parameters(None, jax.profiler.ProfileOptions())
+  def test_create_profile_request_default_options(self, profiler_options):
+    request = profiling._create_profile_request(
+        "gs://bucket/dir", profiler_options=profiler_options
+    )
+    self.assertEqual(
+        request,
+        {
+            "traceLocation": "gs://bucket/dir",
+        },
+    )
 
+  @unittest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  def test_create_profile_request_with_options(self):
+    options = jax.profiler.ProfileOptions()
+    options.host_tracer_level = 2
+    options.python_tracer_level = 1
+    options.duration_ms = 2000
+    options.start_timestamp_ns = 123456789
+    options.advanced_configuration = {
+        "tpu_num_chips_to_profile_per_task": 3,
+        "tpu_num_sparse_core_tiles_to_trace": 5,
+        "tpu_trace_mode": "TRACE_COMPUTE",
+    }
+
+    request = profiling._create_profile_request(
+        "gs://bucket/dir", profiler_options=options
+    )
+    self.assertEqual(
+        request,
+        {
+            "traceLocation": "gs://bucket/dir",
+            "maxDurationSecs": 2.0,
+            "xprofTraceOptions": {
+                "traceDirectory": "gs://bucket/dir",
+                "pwTraceOptions": {
+                    "enablePythonTracer": True,
+                    "advancedConfiguration": {
+                        "tpu_num_chips_to_profile_per_task": {"intValue": 3},
+                        "tpu_num_sparse_core_tiles_to_trace": {"intValue": 5},
+                        "tpu_trace_mode": {"stringValue": "TRACE_COMPUTE"},
+                    },
+                },
+            },
+        },
+    )
+
+  @unittest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
   @parameterized.parameters(
       ({"traceLocation": "gs://test_bucket/test_dir"},),
       ({
