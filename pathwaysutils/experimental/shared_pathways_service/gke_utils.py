@@ -3,6 +3,7 @@
 import logging
 import socket
 import subprocess
+import time
 import urllib.parse
 
 import portpicker
@@ -189,6 +190,7 @@ def wait_for_pod(job_name: str) -> str:
     RuntimeError: If the pod is not ready.
   """
   _logger.info("Waiting for pod to be created...")
+  time.sleep(1)
   pod_name = get_pod_from_job(job_name)
 
   _logger.info(
@@ -294,6 +296,33 @@ def enable_port_forwarding(
     raise
 
   return (port_available, port_forward_process)
+
+
+def stream_pod_logs(pod_name: str) -> subprocess.Popen[str]:
+  """Streams logs from the given pod.
+
+  Args:
+    pod_name: The name of the pod.
+
+  Returns:
+    The process for streaming the logs.
+
+  Raises:
+    Exception: If the log streaming fails.
+  """
+  command = ["kubectl", "logs", "-f", pod_name]
+  try:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,  # Line buffered
+    )
+    return process
+  except Exception as e:
+    _logger.exception("Error streaming logs for pod %s: %r", pod_name, e)
+    raise
 
 
 def delete_gke_job(job_name: str) -> None:
