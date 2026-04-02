@@ -14,12 +14,13 @@
 """Profiling Utilities."""
 
 import asyncio
+from collections.abc import Mapping
 import dataclasses
 import json
 import logging
 import os
 import threading
-from typing import Any, Mapping
+from typing import Any
 import urllib.parse
 
 import fastapi
@@ -35,14 +36,17 @@ _logger = logging.getLogger(__name__)
 
 class _ProfileState:
   executable: plugin_executable.PluginExecutable | None = None
+  profile_request: Mapping[str, Any] | None = None
   lock: threading.Lock
 
   def __init__(self) -> None:
     self.executable = None
+    self.profile_request = None
     self.lock = threading.Lock()
 
   def reset(self) -> None:
     self.executable = None
+    self.profile_request = None
 
 
 _first_profile_start = True
@@ -153,6 +157,7 @@ def _start_pathways_trace_from_profile_request(
     _profile_state.executable = plugin_executable.PluginExecutable(
         json.dumps({"profileRequest": profile_request})
     )
+    _profile_state.profile_request = profile_request
     try:
       _, result_future = _profile_state.executable.call()
       result_future.result()
@@ -233,7 +238,19 @@ def stop_trace() -> None:
       if _profile_state.executable is None:
         raise ValueError("stop_trace called before a trace is being taken!")
       try:
-        _, result_future = _profile_state.executable.call()
+        if (
+            _profile_state.profile_request is not None
+            and "xprofTraceOptions" in _profile_state.profile_request
+        ):
+          out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
+          out_shardings = [jax.sharding.SingleDeviceSharding(jax.devices()[0])]
+        else:
+          out_avals = ()
+          out_shardings = ()
+
+        _, result_future = _profile_state.executable.call(
+            out_avals=out_avals, out_shardings=out_shardings
+        )
         result_future.result()
       finally:
         _profile_state.reset()
