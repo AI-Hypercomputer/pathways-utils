@@ -192,8 +192,10 @@ class _ISCPathways:
 
   def __enter__(self):
     """Enters the context manager, ensuring cluster exists."""
-    self._old_jax_platforms = os.environ.get(_JAX_PLATFORMS_KEY)
-    self._old_jax_backend_target = os.environ.get(_JAX_BACKEND_TARGET_KEY)
+    self._old_jax_platforms = os.environ.get(_JAX_PLATFORMS_KEY.upper())
+    self._old_jax_backend_target = os.environ.get(
+        _JAX_BACKEND_TARGET_KEY.upper()
+    )
     self._old_jax_platforms_config = getattr(
         jax.config, _JAX_PLATFORMS_KEY, None
     )
@@ -224,16 +226,14 @@ class _ISCPathways:
       )
 
       # Update the JAX backend to use the proxy.
-      os.environ[_JAX_PLATFORMS_KEY] = _JAX_PLATFORM_PROXY
-      os.environ[
-          _JAX_BACKEND_TARGET_KEY
-      ] = f"{_JAX_BACKEND_TARGET_HOSTNAME}:{self._proxy_port}"
-
+      jax_backend_target = f"{_JAX_BACKEND_TARGET_HOSTNAME}:{self._proxy_port}"
+      # Update the JAX config for the inline mode of Shared Pathways Service.
       jax.config.update(_JAX_PLATFORMS_KEY, _JAX_PLATFORM_PROXY)
-      jax.config.update(
-          _JAX_BACKEND_TARGET_KEY,
-          f"{_JAX_BACKEND_TARGET_HOSTNAME}:{self._proxy_port}",
-      )
+      jax.config.update(_JAX_BACKEND_TARGET_KEY, jax_backend_target)
+      # Update the environment variables for the CLI mode of Shared Pathways
+      # Service.
+      os.environ[_JAX_PLATFORMS_KEY.upper()] = _JAX_PLATFORM_PROXY
+      os.environ[_JAX_BACKEND_TARGET_KEY.upper()] = jax_backend_target
 
       pathwaysutils.initialize()
       _logger.info(
@@ -281,8 +281,10 @@ class _ISCPathways:
 
     # 4. Restore JAX variables.
     _logger.info("Restoring JAX env and config variables...")
-    _restore_env_var(_JAX_PLATFORMS_KEY, self._old_jax_platforms)
-    _restore_env_var(_JAX_BACKEND_TARGET_KEY, self._old_jax_backend_target)
+    _restore_env_var(_JAX_PLATFORMS_KEY.upper(), self._old_jax_platforms)
+    _restore_env_var(
+        _JAX_BACKEND_TARGET_KEY.upper(), self._old_jax_backend_target
+    )
     jax.config.update(_JAX_PLATFORMS_KEY, self._old_jax_platforms_config)
     jax.config.update(
         _JAX_BACKEND_TARGET_KEY, self._old_jax_backend_target_config
