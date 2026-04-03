@@ -23,6 +23,17 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-04-03
+## What's Changed
+* Refactor elasticity retry logic into a reusable private method. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/177
+* Add a name parameter to the watchdog context manager. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/199
+* Use abstract types for return type hints in pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/198
+* Update environment variables for JAX backend by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/203
+* Enable Pathways profiling with jax.profiler.ProfileOptions. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/201
+* Refactor elastic retry decorators into a single elastic_retry method. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/202
+* Fix JaxRuntimeError during profiler stop_trace with profile options by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/205
+* Add CLI mode to Shared Pathways Service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/200
+
 ## [0.1.6] - 2026-02-27
 * Fix --proxy_options to use flags.DEFINE_list by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/191
 
