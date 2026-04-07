@@ -298,6 +298,32 @@ def enable_port_forwarding(
   return (port_available, port_forward_process)
 
 
+def stream_pod_logs(pod_name: str) -> subprocess.Popen[str]:
+  """Streams logs from the given pod.
+
+  Args:
+    pod_name: The name of the pod.
+
+  Returns:
+    The process for streaming the logs.
+
+  Raises:
+    Exception: If the log streaming fails.
+  """
+  command = ["kubectl", "logs", "-f", pod_name]
+  try:
+    return subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,  # Line buffered
+    )
+  except Exception as _:
+    _logger.exception("Error streaming logs for pod %s", pod_name)
+    raise
+
+
 def delete_gke_job(job_name: str) -> None:
   """Deletes the given job from the GKE cluster.
 
