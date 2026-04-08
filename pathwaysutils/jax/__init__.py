@@ -86,7 +86,7 @@ def ifrt_reshard_available() -> bool:
 
     transfer_to_shardings(
         [jax.numpy.array([0])],
-        [jax.sharding.SingleDeviceSharding(jax.devices()[0])],
+        [jax.sharding.make_single_device_sharding(jax.devices()[0])],
     )
 
   except (ImportError, NameError, jax.errors.JaxRuntimeError):
