@@ -67,6 +67,14 @@ _PROXY_OPTIONS = flags.DEFINE_list(
 _COMMAND = flags.DEFINE_string(
     "command", None, "The command to run on TPUs.", required=True
 )
+_COLLECT_SERVICE_METRICS = flags.DEFINE_bool(
+    "collect_service_metrics",
+    False,
+    "Whether to enable metrics collection for Shared Pathways Service. If"
+    " enabled, the service will collect usage metrics such as TPU assignment"
+    " time, active user count, capacity in use etc. The metrics will be"
+    " stored in Cloud Monitoring.",
+)
 
 flags.register_validator(
     "proxy_options",
@@ -93,6 +101,7 @@ def run_command(
     command: str,
     proxy_server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
+    collect_service_metrics: bool = False,
     connect_fn: Callable[..., ContextManager[Any]] = isc_pathways.connect,
 ) -> None:
   """Run the TPU workload within a Shared Pathways connection.
@@ -108,6 +117,8 @@ def run_command(
     command: The command to run on TPUs.
     proxy_server_image: The proxy server image to use.
     proxy_options: Configuration options for the Pathways proxy.
+    collect_service_metrics: Whether to collect usage metrics for Shared Pathways
+      Service. Defaults to False.
     connect_fn: The function to use for establishing the connection context,
       expected to be a callable that returns a context manager.
 
@@ -130,6 +141,7 @@ def run_command(
           else isc_pathways.DEFAULT_PROXY_IMAGE
       ),
       proxy_options=parsed_proxy_options,
+      collect_service_metrics=collect_service_metrics,
   ):
     logging.info("Connection established. Running command: %r", command)
     try:
@@ -160,6 +172,7 @@ def main(argv: Sequence[str]) -> None:
       command=_COMMAND.value,
       proxy_server_image=_PROXY_SERVER_IMAGE.value,
       proxy_options=_PROXY_OPTIONS.value,
+      collect_service_metrics=_COLLECT_SERVICE_METRICS.value,
   )
 
 
