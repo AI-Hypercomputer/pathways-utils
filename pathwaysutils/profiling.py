@@ -80,10 +80,12 @@ def _is_default_profile_options(
 def _create_profile_request(
     log_dir: os.PathLike[str] | str,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    max_num_hosts: int = 1,
 ) -> Mapping[str, Any]:
   """Creates a profile request mapping from the given options."""
   profile_request: dict[str, Any] = {
       "traceLocation": str(log_dir),
+      "maxNumHosts": max_num_hosts,
   }
 
   if profiler_options is None or _is_default_profile_options(profiler_options):
@@ -173,6 +175,7 @@ def start_trace(
     create_perfetto_link: bool = False,
     create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
+    max_num_hosts: int = 1,
 ) -> None:
   """Starts a profiler trace.
 
@@ -201,6 +204,8 @@ def start_trace(
       This feature is experimental for Pathways on Cloud and may not be fully
       supported.
     profiler_options: Profiler options to configure the profiler for collection.
+    max_num_hosts: An optional integer to limit the number of hosts profiled
+      (defaults to 1).
   """
   if not str(log_dir).startswith("gs://"):
     raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
@@ -218,7 +223,9 @@ def start_trace(
     )
     profiler_options = None
 
-  profile_request = _create_profile_request(log_dir, profiler_options)
+  profile_request = _create_profile_request(
+      log_dir, profiler_options, max_num_hosts=max_num_hosts
+  )
 
   _logger.debug("Profile request: %s", profile_request)
 
@@ -366,6 +373,7 @@ def monkey_patch_jax() -> None:
       create_perfetto_link: bool = False,
       create_perfetto_trace: bool = False,
       profiler_options: jax.profiler.ProfileOptions | None = None,
+      max_num_hosts: int = 1,
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
     start_trace(
@@ -373,6 +381,7 @@ def monkey_patch_jax() -> None:
         create_perfetto_link=create_perfetto_link,
         create_perfetto_trace=create_perfetto_trace,
         profiler_options=profiler_options,
+        max_num_hosts=max_num_hosts,
     )
 
   jax.profiler.start_trace = start_trace_patch
