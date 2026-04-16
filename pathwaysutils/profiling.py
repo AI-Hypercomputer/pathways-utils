@@ -250,7 +250,9 @@ def stop_trace() -> None:
             and "xprofTraceOptions" in _profile_state.profile_request
         ):
           out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
-          out_shardings = [jax.sharding.SingleDeviceSharding(jax.devices()[0])]
+          out_shardings = [
+              jax.sharding.make_single_device_sharding(jax.devices()[0])
+          ]
         else:
           out_avals = ()
           out_shardings = ()
