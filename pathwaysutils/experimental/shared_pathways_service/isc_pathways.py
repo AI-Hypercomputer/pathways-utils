@@ -155,8 +155,6 @@ def _wait_for_placement(
           f"STDERR: {stderr}"
       )
 
-    if metrics_collector_inst:
-      metrics_collector_inst.record_user_waiting(True)
     for line in log_process.stdout:
       line_lower = line.lower()
       if any(keyword.lower() in line_lower for keyword in keywords):
@@ -173,7 +171,6 @@ def _wait_for_placement(
         else:
           _logger.info("TPU placement for %d slice(s) complete!", num_slices)
           metrics_collector_inst.record_active_user(True)
-          metrics_collector_inst.record_user_waiting(False)
           metrics_collector_inst.record_capacity_in_use(total_chips)
           if start_time:
             duration = time.time() - start_time
