@@ -43,7 +43,7 @@ _GCS_BUCKET = flags.DEFINE_string(
 _TEMPLATE_FILE = flags.DEFINE_string(
     "template_file",
     os.path.join(
-        os.path.dirname(__file__), "yamls/pw-service-example.yaml",
+        os.path.dirname(__file__), "yamls/pw-service.yaml",
     ),
     "Path to the JobSet YAML template file",
 )
