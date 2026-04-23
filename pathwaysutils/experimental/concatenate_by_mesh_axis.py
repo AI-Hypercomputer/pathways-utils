@@ -117,7 +117,11 @@ def concatenate_by_mesh_axis(
   ) -> jax.sharding.NamedSharding:
     reference_sharding = _get_named_sharding(arrays[0])
     reference_spec = reference_sharding.spec
-    return jax.sharding.NamedSharding(concatenated_mesh, reference_spec)
+    return jax.sharding.NamedSharding(
+        concatenated_mesh,
+        reference_spec,
+        memory_kind=reference_sharding.memory_kind,
+    )
 
   def _sharded_dim_idx_for_sharding(
       sharding: jax.sharding.NamedSharding,
