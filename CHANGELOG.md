@@ -23,6 +23,17 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-04-24
+## What's Changed
+* Add background log streaming to detect TPU placement completion by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/204
+* Add a script to deploy Pathways service as a JobSet by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/211
+* Integrate metrics collection into ISC Pathways by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/214
+* add support for max_num_hosts in start_trace. the default now is to trace one host. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/213
+* Remove redundant user waiting metric update by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/215
+* Rename pw-service-example to pw-service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/219
+* Expose concatenate_by_mesh_axis in pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/217
+* Update concatenate_by_mesh_axis to preserve memory kind by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/220
+
 ## [0.1.7] - 2026-04-03
 ## What's Changed
 * Refactor elasticity retry logic into a reusable private method. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/177
