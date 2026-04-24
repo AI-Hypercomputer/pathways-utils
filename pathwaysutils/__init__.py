@@ -21,4 +21,4 @@ is_pathways_backend_used: Callable[[], bool] = _initialize.is_pathways_backend_u
 del _initialize
 
 # When changing this, also update the CHANGELOG.md.
-__version__ = "v0.1.8"
+__version__ = "v0.1.9"
