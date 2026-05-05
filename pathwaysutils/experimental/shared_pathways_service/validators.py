@@ -68,7 +68,7 @@ def _validate_tpu_supported(tpu_instance_with_topology: str) -> None:
   # tpuv6e:2x4 -> type='tpuv6e', topology='2x4'
   # tpuv5:2x2x1 -> type='tpuv5', topology='2x2x1'
   match = re.match(
-      r"^(?:tpuv(?:5e|5|6e)):(?P<topology>\d+(?:x\d+){1,2})$",
+      r"^(?:tpu(?:v5e|v5|v6e|7x)):(?P<topology>\d+(?:x\d+){1,2})$",
       tpu_instance_with_topology,
   )
 
