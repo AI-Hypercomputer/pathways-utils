@@ -45,19 +45,31 @@ class ProxyOptions:
   Attributes:
     use_insecure_credentials: Whether to use insecure gRPC credentials for the
       proxy server.
+    sidecar_name: The name of the colocated Python sidecar to register with the
+      proxy. When set (e.g. to "external"), the proxy passes
+      ``--sidecar_name=<value>`` so that ``jax.experimental.colocated_python``
+      can reach the sidecar containers running on the worker pods.  Leave as
+      ``None`` when no sidecar is deployed.
   """
   use_insecure_credentials: bool = False
+  sidecar_name: str | None = None
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
+    sidecar_name = None
     for option in options or []:
       if ":" in option:
         key, value = option.split(":", 1)
         if key.strip().lower() == "use_insecure_credentials":
           use_insecure = value.strip().lower() == "true"
-    return cls(use_insecure_credentials=use_insecure)
+        elif key.strip().lower() == "sidecar_name":
+          sidecar_name = value.strip()
+    return cls(
+        use_insecure_credentials=use_insecure,
+        sidecar_name=sidecar_name,
+    )
 
 
 def _deploy_pathways_proxy_server(
@@ -106,6 +118,12 @@ def _deploy_pathways_proxy_server(
         '          value: "true"\n'
     )
 
+  sidecar_args_str = ""
+  if proxy_options.sidecar_name:
+    sidecar_args_str = (
+        f"- --sidecar_name={proxy_options.sidecar_name}"
+    )
+
   template = string.Template(yaml_template)
   substituted_yaml = template.substitute(
       PROXY_JOB_NAME=proxy_job_name,
@@ -116,6 +134,7 @@ def _deploy_pathways_proxy_server(
       GCS_SCRATCH_LOCATION=gcs_scratch_location,
       PROXY_SERVER_IMAGE=proxy_server_image,
       PROXY_ENV=proxy_env_str,
+      SIDECAR_ARGS=sidecar_args_str,
   )
 
   _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
