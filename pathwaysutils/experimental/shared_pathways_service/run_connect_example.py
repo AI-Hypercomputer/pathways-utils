@@ -39,7 +39,14 @@ flags.DEFINE_list(
     "proxy_options",
     None,
     "Configuration options for the Pathways proxy. Specify entries in the form"
-    ' "key:value". For example: --proxy_options=use_insecure_credentials:true',
+    ' "key:value". For example: --proxy_options=use_insecure_credentials:true'
+    ' or --proxy_options=xla_flags:"--xla_flag1 --xla_flag2"',
+)
+
+flags.DEFINE_bool(
+    "collect_service_metrics",
+    False,
+    "Whether to enable metrics collection for Shared Pathways Service.",
 )
 
 flags.mark_flags_as_required([
@@ -55,8 +62,6 @@ def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
 
-  proxy_options = isc_pathways.ProxyOptions.from_list(FLAGS.proxy_options)
-
   with isc_pathways.connect(
       cluster=FLAGS.cluster,
       project=FLAGS.project,
@@ -67,7 +72,8 @@ def main(argv: Sequence[str]) -> None:
       proxy_job_name=FLAGS.proxy_job_name,
       proxy_server_image=FLAGS.proxy_server_image
       or isc_pathways.DEFAULT_PROXY_IMAGE,
-      proxy_options=proxy_options,
+      proxy_options=FLAGS.proxy_options,
+      collect_service_metrics=FLAGS.collect_service_metrics,
   ):
     orig_matrix = jnp.zeros(5)
     result_matrix = orig_matrix + 1

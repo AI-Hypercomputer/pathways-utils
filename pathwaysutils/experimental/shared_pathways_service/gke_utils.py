@@ -27,6 +27,7 @@ def fetch_cluster_credentials(
       cluster_name,
       f"--location={location}",
       f"--project={project_id}",
+      "--dns-endpoint"
   ]
   try:
     subprocess.run(

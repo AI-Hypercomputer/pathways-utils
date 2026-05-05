@@ -232,6 +232,7 @@ class ProfilingTest(parameterized.TestCase):
         json.dumps({
             "profileRequest": {
                 "traceLocation": "gs://test_bucket/test_dir",
+                "maxNumHosts": 1,
             }
         })
     )
@@ -242,6 +243,25 @@ class ProfilingTest(parameterized.TestCase):
         create_perfetto_trace=False,
     )
     self.assertIsNotNone(profiling._profile_state.executable)
+
+  def test_start_trace_with_max_num_hosts(self):
+    profiling.start_trace("gs://test_bucket/test_dir", max_num_hosts=10)
+
+    self.mock_toy_computation.assert_called_once()
+    self.mock_plugin_executable_cls.assert_called_once_with(
+        json.dumps({
+            "profileRequest": {
+                "traceLocation": "gs://test_bucket/test_dir",
+                "maxNumHosts": 10,
+            }
+        })
+    )
+    self.mock_plugin_executable_cls.return_value.call.assert_called_once()
+    self.mock_original_start_trace.assert_called_once_with(
+        log_dir="gs://test_bucket/test_dir",
+        create_perfetto_link=False,
+        create_perfetto_trace=False,
+    )
 
   def test_start_trace_no_toy_computation_second_time(self):
     profiling.start_trace("gs://test_bucket/test_dir")
@@ -408,6 +428,24 @@ class ProfilingTest(parameterized.TestCase):
         create_perfetto_link=False,
         create_perfetto_trace=False,
         profiler_options=None,
+        max_num_hosts=1,
+    )
+
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_start_trace_with_max_num_hosts(self, profiler_module):
+    mocks = self._setup_monkey_patch()
+
+    profiler_module.start_trace("gs://bucket/dir", max_num_hosts=3)
+
+    mocks["start_trace"].assert_called_once_with(
+        "gs://bucket/dir",
+        create_perfetto_link=False,
+        create_perfetto_trace=False,
+        profiler_options=None,
+        max_num_hosts=3,
     )
 
   @parameterized.named_parameters(
@@ -444,6 +482,19 @@ class ProfilingTest(parameterized.TestCase):
         request,
         {
             "traceLocation": "gs://bucket/dir",
+            "maxNumHosts": 1,
+        },
+    )
+
+  def test_create_profile_request_with_max_num_hosts(self):
+    request = profiling._create_profile_request(
+        "gs://bucket/dir", max_num_hosts=5
+    )
+    self.assertEqual(
+        request,
+        {
+            "traceLocation": "gs://bucket/dir",
+            "maxNumHosts": 5,
         },
     )
 
@@ -471,6 +522,7 @@ class ProfilingTest(parameterized.TestCase):
         {
             "traceLocation": "gs://bucket/dir",
             "maxDurationSecs": 2.0,
+            "maxNumHosts": 1,
             "xprofTraceOptions": {
                 "traceDirectory": "gs://bucket/dir",
                 "pwTraceOptions": {

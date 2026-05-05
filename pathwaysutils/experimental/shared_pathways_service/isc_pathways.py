@@ -10,12 +10,14 @@ import random
 import string
 import subprocess
 import threading
+import time
 from typing import Any
 
 import jax
 import jax.extend.backend as jax_backend
 import pathwaysutils
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
+from pathwaysutils.experimental.shared_pathways_service import metrics_collector
 from pathwaysutils.experimental.shared_pathways_service import validators
 
 
@@ -45,6 +47,7 @@ class ProxyOptions:
   Attributes:
     use_insecure_credentials: Whether to use insecure gRPC credentials for the
       proxy server.
+    xla_flags: A list of XLA flags to pass to the proxy server.
     sidecar_name: The name of the colocated Python sidecar to register with the
       proxy. When set (e.g. to "external"), the proxy passes
       ``--sidecar_name=<value>`` so that ``jax.experimental.colocated_python``
@@ -52,22 +55,40 @@ class ProxyOptions:
       ``None`` when no sidecar is deployed.
   """
   use_insecure_credentials: bool = False
+  xla_flags: list[str] = dataclasses.field(default_factory=list)
   sidecar_name: str | None = None
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
+    xla_flags = []
     sidecar_name = None
     for option in options or []:
       if ":" in option:
         key, value = option.split(":", 1)
-        if key.strip().lower() == "use_insecure_credentials":
+        key_strip = key.strip().lower()
+        if key_strip == "use_insecure_credentials":
           use_insecure = value.strip().lower() == "true"
         elif key.strip().lower() == "sidecar_name":
           sidecar_name = value.strip()
+        elif key_strip == "xla_flags":
+          val_strip = value.strip()
+          if (
+              val_strip
+              and val_strip.startswith(('"', "'"))
+              and val_strip.endswith(val_strip[0])
+          ):
+            val_to_split = val_strip[1:-1]
+          else:
+            val_to_split = val_strip
+          xla_flags = val_to_split.split()
+
+    if xla_flags:
+      validators.validate_xla_flags(xla_flags)
+
     return cls(
-        use_insecure_credentials=use_insecure,
+        use_insecure_credentials=use_insecure, xla_flags=xla_flags,
         sidecar_name=sidecar_name,
     )
 
@@ -118,6 +139,13 @@ def _deploy_pathways_proxy_server(
         '          value: "true"\n'
     )
 
+  proxy_args_str = ""
+  if proxy_options.xla_flags:
+    proxy_args_str = "\n".join(
+        f"        - {flag}" for flag in proxy_options.xla_flags
+    )
+    proxy_args_str = "\n" + proxy_args_str
+
   sidecar_args_str = ""
   if proxy_options.sidecar_name:
     sidecar_args_str = (
@@ -134,6 +162,7 @@ def _deploy_pathways_proxy_server(
       GCS_SCRATCH_LOCATION=gcs_scratch_location,
       PROXY_SERVER_IMAGE=proxy_server_image,
       PROXY_ENV=proxy_env_str,
+      PROXY_ARGS=proxy_args_str,
       SIDECAR_ARGS=sidecar_args_str,
   )
 
@@ -147,6 +176,9 @@ def _wait_for_placement(
     pod_name: str,
     num_slices: int,
     stream_logs_func=gke_utils.stream_pod_logs,
+    metrics_collector_inst: Any = None,
+    start_time: float | None = None,
+    total_chips: int = 0,
 ) -> None:
   """Waits for the placement to be complete by checking proxy logs."""
   _logger.info("Streaming proxy logs until the placement is complete...")
@@ -184,6 +216,12 @@ def _wait_for_placement(
           )
         else:
           _logger.info("TPU placement for %d slice(s) complete!", num_slices)
+          metrics_collector_inst.record_active_user(True)
+          metrics_collector_inst.record_capacity_in_use(total_chips)
+          if start_time:
+            duration = time.time() - start_time
+            metrics_collector_inst.record_assignment_time(duration)
+            metrics_collector_inst.record_successful_request()
           break
 
 
@@ -214,11 +252,15 @@ class _ISCPathways:
     proxy_pod_name: The name of the proxy pod, assigned during deployment.
     proxy_server_image: The image to use for the proxy server.
     proxy_options: Configuration options for the Pathways proxy.
+    metrics_collector: The metrics collector instance if enabled.
+    start_time: The start time of the TPU assignment.
+    total_chips: The total number of TPU chips expected across all instances.
   """
 
   def __init__(
       self,
-      *, cluster: str,
+      *,
+      cluster: str,
       project: str,
       region: str,
       gcs_bucket: str,
@@ -227,6 +269,7 @@ class _ISCPathways:
       proxy_job_name: str,
       proxy_server_image: str,
       proxy_options: ProxyOptions | None = None,
+      collect_service_metrics: bool = False,
   ):
     """Initializes the TPU manager."""
     self.cluster = cluster
@@ -242,9 +285,19 @@ class _ISCPathways:
     self.proxy_server_image = proxy_server_image
     self.proxy_options = proxy_options or ProxyOptions()
     self._old_jax_platforms = None
+    raw_collector = (
+        metrics_collector.MetricsCollector(self.project)
+        if collect_service_metrics
+        else None
+    )
+    self.metrics_collector = metrics_collector.SafeMetricsCollector(
+        raw_collector
+    )
+    self.start_time = None
     self._old_jax_backend_target = None
     self._old_jax_platforms_config = None
     self._old_jax_backend_target_config = None
+    self.total_chips = self._get_total_chips()
 
   def __repr__(self):
     return (
@@ -256,8 +309,23 @@ class _ISCPathways:
         f"proxy_options={self.proxy_options})"
     )
 
+  def _get_total_chips(self) -> int:
+    """Calculates total chips from expected_tpu_instances."""
+    total_chips = 0
+    for tpu_type, count in self.expected_tpu_instances.items():
+      parts = tpu_type.split(":")
+      topology = parts[1]
+      dimensions = [int(d) for d in topology.split("x")]
+      chips_per_instance = 1
+      for d in dimensions:
+        chips_per_instance *= d
+      total_chips += chips_per_instance * count
+    return total_chips
+
   def __enter__(self):
     """Enters the context manager, ensuring cluster exists."""
+    self.metrics_collector.record_requested_capacity(self.total_chips)
+
     self._old_jax_platforms = os.environ.get(_JAX_PLATFORMS_KEY.upper())
     self._old_jax_backend_target = os.environ.get(
         _JAX_BACKEND_TARGET_KEY.upper()
@@ -270,6 +338,7 @@ class _ISCPathways:
     )
 
     try:
+      self.start_time = time.time()
       _deploy_pathways_proxy_server(
           pathways_service=self.pathways_service,
           proxy_job_name=self._proxy_job_name,
@@ -278,7 +347,7 @@ class _ISCPathways:
           proxy_server_image=self.proxy_server_image,
           proxy_options=self.proxy_options,
       )
-      # Print a link to Cloud Logging
+      self.metrics_collector.record_user_waiting(True)
       cloud_logging_link = gke_utils.get_log_link(
           cluster=self.cluster,
           project=self.project,
@@ -322,14 +391,14 @@ class _ISCPathways:
 
   def _cleanup(self) -> None:
     """Cleans up resources created by the ISCPathways context."""
-    # 1. Clear JAX caches and run garbage collection.
+    # Clear JAX caches and run garbage collection.
     _logger.info("Starting Pathways proxy cleanup.")
     jax_backend.clear_backends()
     jax.clear_caches()
     gc.collect()
     _logger.info("Cleared JAX caches and ran garbage collection.")
 
-    # 2. Terminate the port forwarding process.
+    # Terminate the port forwarding process.
     if self._port_forward_process:
       _logger.info("Terminating port forwarding process...")
       self._port_forward_process.terminate()
@@ -342,12 +411,12 @@ class _ISCPathways:
             e,
         )
 
-    # 3. Delete the proxy GKE job.
+    # Delete the proxy GKE job.
     _logger.info("Deleting Pathways proxy...")
     gke_utils.delete_gke_job(self._proxy_job_name)
     _logger.info("Pathways proxy GKE job deletion complete.")
 
-    # 4. Restore JAX variables.
+    # Restore JAX variables.
     _logger.info("Restoring JAX env and config variables...")
     _restore_env_var(_JAX_PLATFORMS_KEY.upper(), self._old_jax_platforms)
     _restore_env_var(
@@ -372,6 +441,7 @@ def connect(
     proxy_job_name: str | None = None,
     proxy_server_image: str = DEFAULT_PROXY_IMAGE,
     proxy_options: ProxyOptions | None = None,
+    collect_service_metrics: bool = False,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
 
@@ -389,6 +459,8 @@ def connect(
       default will be used.
     proxy_options: Configuration options for the Pathways proxy. If not
       provided, no extra options will be used.
+    collect_service_metrics: Whether to collect usage metrics for Shared
+      Pathways Service.
 
   Yields:
     The Pathways manager.
@@ -397,6 +469,7 @@ def connect(
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
   validators.validate_proxy_server_image(proxy_server_image)
+  validators.validate_proxy_options(proxy_options)
   _logger.info("Validation complete.")
   gke_utils.fetch_cluster_credentials(
       cluster_name=cluster, project_id=project, location=region
@@ -406,6 +479,8 @@ def connect(
           random.choices(string.ascii_lowercase + string.digits, k=5)
       )}"
   )
+
+  proxy_options_obj = ProxyOptions.from_list(proxy_options)
 
   _logger.info("Starting ISCPathways context.")
   with _ISCPathways(
@@ -417,7 +492,8 @@ def connect(
       expected_tpu_instances=expected_tpu_instances,
       proxy_job_name=proxy_job_name,
       proxy_server_image=proxy_server_image,
-      proxy_options=proxy_options,
+      proxy_options=proxy_options_obj,
+      collect_service_metrics=collect_service_metrics,
   ) as t:
     if t.proxy_pod_name:
       num_slices = sum(t.expected_tpu_instances.values())
@@ -426,6 +502,10 @@ def connect(
           args=(
               t.proxy_pod_name,
               num_slices,
+              gke_utils.stream_pod_logs,
+              t.metrics_collector,
+              t.start_time,
+              t.total_chips,
           ),
           daemon=True,
       )

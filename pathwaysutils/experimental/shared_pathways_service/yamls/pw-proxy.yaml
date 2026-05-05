@@ -20,7 +20,7 @@ spec:
         - --server_port=${PROXY_SERVER_PORT}
         - --resource_manager_address=${PATHWAYS_HEAD_HOSTNAME}:${PATHWAYS_HEAD_PORT}
         - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
-        - --virtual_slices=${EXPECTED_INSTANCES}
+        - --virtual_slices=${EXPECTED_INSTANCES}${PROXY_ARGS}
         ${SIDECAR_ARGS}
         env:
 ${PROXY_ENV}

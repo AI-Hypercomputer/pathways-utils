@@ -28,7 +28,6 @@ from absl import flags
 from absl import logging
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
-
 _CLUSTER = flags.DEFINE_string(
     "cluster", None, "The name of the GKE cluster.", required=True
 )
@@ -62,23 +61,22 @@ _PROXY_OPTIONS = flags.DEFINE_list(
     "proxy_options",
     [],
     "Configuration options for the Pathways proxy. Specify entries in the form"
-    ' "key:value". For example: --proxy_options=use_insecure_credentials:true',
+    ' "key:value". For example: --proxy_options=use_insecure_credentials:true'
+    ' or --proxy_options=xla_flags:"--xla_flag1 --xla_flag2"',
 )
 _COMMAND = flags.DEFINE_string(
     "command", None, "The command to run on TPUs.", required=True
 )
-
-flags.register_validator(
-    "proxy_options",
-    lambda value: all(
-        ":" in item
-        and len(item.split(":")) > 1
-        and item.split(":", 1)[0]
-        and item.split(":", 1)[1]
-        for item in value
-    ),
-    message='--proxy_options must be in the format "key:value".',
+_COLLECT_SERVICE_METRICS = flags.DEFINE_bool(
+    "collect_service_metrics",
+    False,
+    "Whether to enable metrics collection for Shared Pathways Service. If"
+    " enabled, the service will collect usage metrics such as TPU assignment"
+    " time, active user count, capacity in use etc. The metrics will be"
+    " stored in Cloud Monitoring.",
 )
+
+
 
 
 def run_command(
@@ -93,6 +91,7 @@ def run_command(
     command: str,
     proxy_server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
+    collect_service_metrics: bool = False,
     connect_fn: Callable[..., ContextManager[Any]] = isc_pathways.connect,
 ) -> None:
   """Run the TPU workload within a Shared Pathways connection.
@@ -108,14 +107,14 @@ def run_command(
     command: The command to run on TPUs.
     proxy_server_image: The proxy server image to use.
     proxy_options: Configuration options for the Pathways proxy.
+    collect_service_metrics: Whether to collect usage metrics for Shared Pathways
+      Service. Defaults to False.
     connect_fn: The function to use for establishing the connection context,
       expected to be a callable that returns a context manager.
 
   Raises:
     subprocess.CalledProcessError: If the workload command fails.
   """
-  parsed_proxy_options = isc_pathways.ProxyOptions.from_list(proxy_options)
-
   logging.info("Connecting to Shared Pathways Service...")
   with connect_fn(
       cluster=cluster,
@@ -129,7 +128,8 @@ def run_command(
           if proxy_server_image
           else isc_pathways.DEFAULT_PROXY_IMAGE
       ),
-      proxy_options=parsed_proxy_options,
+      proxy_options=proxy_options,
+      collect_service_metrics=collect_service_metrics,
   ):
     logging.info("Connection established. Running command: %r", command)
     try:
@@ -160,6 +160,7 @@ def main(argv: Sequence[str]) -> None:
       command=_COMMAND.value,
       proxy_server_image=_PROXY_SERVER_IMAGE.value,
       proxy_options=_PROXY_OPTIONS.value,
+      collect_service_metrics=_COLLECT_SERVICE_METRICS.value,
   )
 
 

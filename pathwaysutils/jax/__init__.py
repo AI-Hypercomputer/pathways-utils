@@ -19,6 +19,7 @@ This introduces an abstrction layer some JAX APIs that have changed over
 
 
 import functools
+import jax
 
 
 class _FakeJaxFunction:
@@ -52,7 +53,7 @@ try:
   split_by_mesh_axis = _pathways._split_by_mesh_axis
   del _pathways
 
-except ImportError:
+except (ImportError, AttributeError):
   # jax<0.8.0
 
   split_by_mesh_axis = _FakeJaxFunction(
@@ -70,11 +71,28 @@ try:
 
   del jaxlib_pathways
 
-except ImportError:
+except (ImportError, AttributeError):
   # jax<0.8.3
   transfer_to_shardings = _FakeJaxFunction(
       "jax.jaxlib._pathways._transfer_to_shardings",
       "0.8.3",
+  )
+
+
+try:
+  # jax>=0.10.0
+  # The import may fail if the JAX version is not new enough.
+  from jaxlib import _pathways  # pylint: disable=g-import-not-at-top
+
+  concatenate_by_mesh_axis = _pathways._concatenate_by_mesh_axis
+
+  del _pathways
+
+except (ImportError, AttributeError):
+  # jax<0.10.0
+  concatenate_by_mesh_axis = _FakeJaxFunction(
+      "jax.jaxlib._pathways._concatenate_by_mesh_axis",
+      "0.10.0",
   )
 
 
@@ -86,7 +104,7 @@ def ifrt_reshard_available() -> bool:
 
     transfer_to_shardings(
         [jax.numpy.array([0])],
-        [jax.sharding.SingleDeviceSharding(jax.devices()[0])],
+        [jax.sharding.make_single_device_sharding(jax.devices()[0])],
     )
 
   except (ImportError, NameError, jax.errors.JaxRuntimeError):
