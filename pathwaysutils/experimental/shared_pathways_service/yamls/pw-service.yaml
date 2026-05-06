@@ -83,10 +83,34 @@ spec:
             - name: pathways-worker
               image: ${SERVER_IMAGE}
               imagePullPolicy: Always
-              args:
-              - --server_port=29005
-              - --resource_manager_address=$$(PATHWAYS_HEAD):29001
-              - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
+              command:
+              - /bin/sh
+              - -c
+              - |
+                while true; do
+                  echo "Spawning pathways server ..."
+                  TARGET_BIN=""
+                  for f in /usr/pathways/run/cloud_pathways_server*; do
+                    if [ -x "$$f" ]; then
+                      TARGET_BIN="$$f"
+                      break
+                    fi
+                  done
+                  if [ -z "$$TARGET_BIN" ]; then
+                    echo "Error: Could not find executable cloud_pathways_server* in /usr/pathways/run/"
+                    exit 1
+                  fi
+                  echo "Found pathways server binary: $$TARGET_BIN"
+                  $$TARGET_BIN --server_port=29005 --resource_manager_address=$$(PATHWAYS_HEAD):29001 --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
+                  ret_code=$$?
+                  if [ $$ret_code -eq 1 ]; then
+                    echo "Worker process exited with return code 1. Restarting the server..."
+                    continue
+                  else
+                    echo "Worker process terminated with unhandled return code: $$ret_code"
+                    exit $$ret_code
+                  fi
+                done
               env:
               - name: TPU_MIN_LOG_LEVEL
                 value: "0"
