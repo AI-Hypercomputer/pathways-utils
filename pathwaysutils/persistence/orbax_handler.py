@@ -29,7 +29,7 @@ from orbax.checkpoint._src.metadata import array_metadata_store as array_metadat
 from pathwaysutils.persistence import helper
 
 
-logger = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 ParamInfo = type_handlers.ParamInfo
 SaveArgs = type_handlers.SaveArgs
@@ -197,7 +197,7 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
         mesh_axes.append(sharding.spec)
         shardings.append(sharding)
       if arg.global_shape is None or arg.dtype is None:
-        logger.warning(
+        _logger.warning(
             "Shape or dtype not provided for restoration. Provide these"
             " properties for improved performance."
         )
@@ -279,7 +279,7 @@ def register_pathways_handlers(
     array_metadata_store: array_metadata_store_lib.Store | None = None,
 ):
   """Function that must be called before saving or restoring with Pathways."""
-  logger.debug(
+  _logger.debug(
       "Registering CloudPathwaysArrayHandler (Pathways Persistence API)."
   )
   type_handlers.register_type_handler(
