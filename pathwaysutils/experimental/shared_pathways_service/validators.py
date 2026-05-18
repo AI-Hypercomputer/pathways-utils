@@ -1,11 +1,28 @@
 """Validation functions for Shared Pathways Service."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import logging
 import re
 from typing import Any
+from absl import flags
 
 _logger = logging.getLogger(__name__)
+
+
+def validate_proxy_options(proxy_options: Iterable[str] | None) -> None:
+  """Validates that proxy options are in the format 'key:value'."""
+  if not proxy_options:
+    return
+  for item in proxy_options:
+    if (
+        ":" not in item
+        or len(item.split(":")) <= 1
+        or not item.split(":", 1)[0]
+        or not item.split(":", 1)[1]
+    ):
+      raise flags.ValidationError(
+          f'--proxy_options must be in the format "key:value". Got: {item}'
+      )
 
 
 def validate_pathways_service(pathways_service: str) -> None:
@@ -51,7 +68,7 @@ def _validate_tpu_supported(tpu_instance_with_topology: str) -> None:
   # tpuv6e:2x4 -> type='tpuv6e', topology='2x4'
   # tpuv5:2x2x1 -> type='tpuv5', topology='2x2x1'
   match = re.match(
-      r"^(?:tpuv(?:5e|5|6e)):(?P<topology>\d+(?:x\d+){1,2})$",
+      r"^(?:tpu(?:v5e|v5|v6e|7x)):(?P<topology>\d+(?:x\d+){1,2})$",
       tpu_instance_with_topology,
   )
 
@@ -105,3 +122,14 @@ def validate_proxy_server_image(proxy_server_image: str) -> None:
         f"Proxy server image '{proxy_server_image}' must contain a tag with ':'"
         " or a digest with '@'."
     )
+
+
+def validate_xla_flags(xla_flags: Iterable[str] | None) -> None:
+  """Validates that all XLA flags start with '--xla_'."""
+  if not xla_flags:
+    return
+  for flag in xla_flags:
+    if not flag.startswith("--xla_"):
+      raise flags.ValidationError(
+          f"XLA flag '{flag}' must start with '--xla_'."
+      )

@@ -37,7 +37,11 @@ class ReshardTest(parameterized.TestCase):
   ):
     x = jnp.array([1, 2])
     devices = jax.devices()
-    sharding = jax.sharding.SingleDeviceSharding(devices[0])
+    sharding = getattr(
+        jax.sharding,
+        "make_single_device_sharding",
+        lambda x: jax.sharding.SingleDeviceSharding(x),
+    )(devices[0])
 
     mock_pe = self.enter_context(
         mock.patch.object(plugin_executable, "PluginExecutable", autospec=True)
@@ -64,7 +68,11 @@ class ReshardTest(parameterized.TestCase):
   ):
     x = jnp.array([1, 2])
     devices = jax.devices()
-    sharding = jax.sharding.SingleDeviceSharding(devices[0])
+    sharding = getattr(
+        jax.sharding,
+        "make_single_device_sharding",
+        lambda x: jax.sharding.SingleDeviceSharding(x),
+    )(devices[0])
 
     mock_pe = self.enter_context(
         mock.patch.object(plugin_executable, "PluginExecutable")
@@ -92,7 +100,11 @@ class ReshardTest(parameterized.TestCase):
   def test_sidechannel_reshard_pytree(self):
     x = {"a": jnp.array([1]), "b": [jnp.array([2])]}
     devices = jax.devices()
-    sharding = jax.sharding.SingleDeviceSharding(devices[0])
+    sharding = getattr(
+        jax.sharding,
+        "make_single_device_sharding",
+        lambda x: jax.sharding.SingleDeviceSharding(x),
+    )(devices[0])
     # Tree prefix sharding
     tree_sharding = {"a": sharding, "b": [sharding]}
 

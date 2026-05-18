@@ -47,19 +47,38 @@ class ProxyOptions:
   Attributes:
     use_insecure_credentials: Whether to use insecure gRPC credentials for the
       proxy server.
+    xla_flags: A list of XLA flags to pass to the proxy server.
   """
   use_insecure_credentials: bool = False
+  xla_flags: list[str] = dataclasses.field(default_factory=list)
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
+    xla_flags = []
     for option in options or []:
       if ":" in option:
         key, value = option.split(":", 1)
-        if key.strip().lower() == "use_insecure_credentials":
+        key_strip = key.strip().lower()
+        if key_strip == "use_insecure_credentials":
           use_insecure = value.strip().lower() == "true"
-    return cls(use_insecure_credentials=use_insecure)
+        elif key_strip == "xla_flags":
+          val_strip = value.strip()
+          if (
+              val_strip
+              and val_strip.startswith(('"', "'"))
+              and val_strip.endswith(val_strip[0])
+          ):
+            val_to_split = val_strip[1:-1]
+          else:
+            val_to_split = val_strip
+          xla_flags = val_to_split.split()
+
+    if xla_flags:
+      validators.validate_xla_flags(xla_flags)
+
+    return cls(use_insecure_credentials=use_insecure, xla_flags=xla_flags)
 
 
 def _deploy_pathways_proxy_server(
@@ -108,6 +127,13 @@ def _deploy_pathways_proxy_server(
         '          value: "true"\n'
     )
 
+  proxy_args_str = ""
+  if proxy_options.xla_flags:
+    proxy_args_str = "\n".join(
+        f"        - {flag}" for flag in proxy_options.xla_flags
+    )
+    proxy_args_str = "\n" + proxy_args_str
+
   template = string.Template(yaml_template)
   substituted_yaml = template.substitute(
       PROXY_JOB_NAME=proxy_job_name,
@@ -118,6 +144,7 @@ def _deploy_pathways_proxy_server(
       GCS_SCRATCH_LOCATION=gcs_scratch_location,
       PROXY_SERVER_IMAGE=proxy_server_image,
       PROXY_ENV=proxy_env_str,
+      PROXY_ARGS=proxy_args_str,
   )
 
   _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
@@ -423,6 +450,7 @@ def connect(
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
   validators.validate_proxy_server_image(proxy_server_image)
+  validators.validate_proxy_options(proxy_options)
   _logger.info("Validation complete.")
   gke_utils.fetch_cluster_credentials(
       cluster_name=cluster, project_id=project, location=region
@@ -432,6 +460,8 @@ def connect(
           random.choices(string.ascii_lowercase + string.digits, k=5)
       )}"
   )
+
+  proxy_options_obj = ProxyOptions.from_list(proxy_options)
 
   _logger.info("Starting ISCPathways context.")
   with _ISCPathways(
@@ -443,7 +473,7 @@ def connect(
       expected_tpu_instances=expected_tpu_instances,
       proxy_job_name=proxy_job_name,
       proxy_server_image=proxy_server_image,
-      proxy_options=proxy_options,
+      proxy_options=proxy_options_obj,
       collect_service_metrics=collect_service_metrics,
   ) as t:
     if t.proxy_pod_name:

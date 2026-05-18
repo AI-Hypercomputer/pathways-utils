@@ -28,7 +28,6 @@ from absl import flags
 from absl import logging
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
-
 _CLUSTER = flags.DEFINE_string(
     "cluster", None, "The name of the GKE cluster.", required=True
 )
@@ -62,7 +61,8 @@ _PROXY_OPTIONS = flags.DEFINE_list(
     "proxy_options",
     [],
     "Configuration options for the Pathways proxy. Specify entries in the form"
-    ' "key:value". For example: --proxy_options=use_insecure_credentials:true',
+    ' "key:value". For example: --proxy_options=use_insecure_credentials:true'
+    ' or --proxy_options=xla_flags:"--xla_flag1 --xla_flag2"',
 )
 _COMMAND = flags.DEFINE_string(
     "command", None, "The command to run on TPUs.", required=True
@@ -76,17 +76,7 @@ _COLLECT_SERVICE_METRICS = flags.DEFINE_bool(
     " stored in Cloud Monitoring.",
 )
 
-flags.register_validator(
-    "proxy_options",
-    lambda value: all(
-        ":" in item
-        and len(item.split(":")) > 1
-        and item.split(":", 1)[0]
-        and item.split(":", 1)[1]
-        for item in value
-    ),
-    message='--proxy_options must be in the format "key:value".',
-)
+
 
 
 def run_command(
@@ -125,8 +115,6 @@ def run_command(
   Raises:
     subprocess.CalledProcessError: If the workload command fails.
   """
-  parsed_proxy_options = isc_pathways.ProxyOptions.from_list(proxy_options)
-
   logging.info("Connecting to Shared Pathways Service...")
   with connect_fn(
       cluster=cluster,
@@ -140,7 +128,7 @@ def run_command(
           if proxy_server_image
           else isc_pathways.DEFAULT_PROXY_IMAGE
       ),
-      proxy_options=parsed_proxy_options,
+      proxy_options=proxy_options,
       collect_service_metrics=collect_service_metrics,
   ):
     logging.info("Connection established. Running command: %r", command)
