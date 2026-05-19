@@ -102,7 +102,7 @@ def get_tpu_config(tpu_type: str) -> TPUConfig:
           machine_type="ct5p-hightpu-4t",
           chips_per_vm=4,
           accelerator_label="tpu-v5p-slice",
-          instance_prefix="tpuv5p",
+          instance_prefix="tpuv5",
       ),
       "v6e": TPUConfig(
           machine_type="ct6e-standard-4t",
