@@ -251,34 +251,6 @@ def write_arrays(
   return bulk_write_future
 
 
-def read_one_array(
-    location: str,
-    name: str,
-    dtype: np.dtype,
-    shape: Sequence[int],
-    shardings: jax.sharding.Sharding,
-    devices: Sequence[jax.Device] | np.ndarray,
-    timeout: datetime.timedelta,
-) -> jax.Array:
-  """Creates the read array plugin program string, compiles it to an executable, calls it and returns the result."""
-  read_request = get_read_request(
-      location,
-      name,
-      dtype,
-      shape,
-      shardings,
-      devices,
-      timeout,
-  )
-  read_executable = plugin_executable.PluginExecutable(read_request)
-  out_aval = core.ShapedArray(shape, dtype)
-  read_array, read_future = read_executable.call(
-      out_shardings=[shardings], out_avals=[out_aval]
-  )
-  read_future.result()
-  return read_array[0]
-
-
 def read_arrays(
     location: str,
     names: Sequence[str],
