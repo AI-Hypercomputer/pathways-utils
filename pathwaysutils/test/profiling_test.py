@@ -280,7 +280,7 @@ class ProfilingTest(parameterized.TestCase):
 
   def test_start_trace_while_running_error(self):
     profiling.start_trace("gs://test_bucket/test_dir")
-    with self.assertRaisesRegex(ValueError, "trace is already being taken"):
+    with self.assertRaisesRegex(RuntimeError, "trace is already being taken"):
       profiling.start_trace("gs://test_bucket/test_dir2")
 
   def test_stop_trace_success(self):
@@ -308,22 +308,16 @@ class ProfilingTest(parameterized.TestCase):
     options = jax.profiler.ProfileOptions()
     options.duration_ms = 2000
 
-    with mock.patch.object(
-        profiling, "_profile_state", autospec=True
-    ) as mock_profile_state:
-      request = profiling._create_profile_request(
-          "gs://test_bucket/test_dir", options
-      )
-      mock_profile_state.profile_request = request
-      mock_profile_state.executable = (
-          self.mock_plugin_executable_cls.return_value
-      )
-      mock_profile_state.lock = mock.MagicMock()
-      mock_profile_state.lock.locked.return_value = True
-      mock_profile_state.lock.__enter__.return_value = None
-      mock_profile_state.lock.__exit__.return_value = None
+    request = profiling._create_profile_request(
+        "gs://test_bucket/test_dir", options
+    )
+    profiling._profile_state.profile_request = request
+    profiling._profile_state.executable = (
+        self.mock_plugin_executable_cls.return_value
+    )
+    self.addCleanup(profiling._profile_state.reset)
 
-      profiling.stop_trace()
+    profiling.stop_trace()
 
     with self.subTest("plugin_executable_called"):
       self.mock_plugin_executable_cls.return_value.call.assert_called_once()
@@ -340,7 +334,7 @@ class ProfilingTest(parameterized.TestCase):
 
   def test_stop_trace_before_start_error(self):
     with self.assertRaisesRegex(
-        ValueError, "stop_trace called before a trace is being taken!"
+        RuntimeError, "stop_trace called before a trace is being taken!"
     ):
       profiling.stop_trace()
 
@@ -359,12 +353,12 @@ class ProfilingTest(parameterized.TestCase):
     )
     profiling.start_server(9000)
     with self.assertRaisesRegex(
-        ValueError, "Only one profiler server can be active"
+        RuntimeError, "Only one profiler server can be active"
     ):
       profiling.start_server(9001)
 
   def test_stop_server_no_server_raises_error(self):
-    with self.assertRaisesRegex(ValueError, "No active profiler server"):
+    with self.assertRaisesRegex(RuntimeError, "No active profiler server"):
       profiling.stop_server()
 
   def test_stop_server_does_nothing_if_server_exists(self):
@@ -508,6 +502,7 @@ class ProfilingTest(parameterized.TestCase):
     options.python_tracer_level = 1
     options.duration_ms = 2000
     options.start_timestamp_ns = 123456789
+    options.session_id = "test_session"
     options.advanced_configuration = {
         "tpu_num_chips_to_profile_per_task": 3,
         "tpu_num_sparse_core_tiles_to_trace": 5,
@@ -525,6 +520,7 @@ class ProfilingTest(parameterized.TestCase):
             "maxNumHosts": 1,
             "xprofTraceOptions": {
                 "traceDirectory": "gs://bucket/dir",
+                "traceSessionName": "test_session",
                 "pwTraceOptions": {
                     "enablePythonTracer": True,
                     "advancedConfiguration": {
@@ -608,6 +604,36 @@ class ProfilingTest(parameterized.TestCase):
 
     mocks["start_trace"].assert_called_once()
     mocks["stop_trace"].assert_called_once()
+
+  @absltest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  def test_is_default_profile_options_with_session_id(self):
+    options = jax.profiler.ProfileOptions()
+    options.session_id = "test_session"
+    self.assertFalse(profiling._is_default_profile_options(options))
+
+  @absltest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  def test_start_trace_compatibility_error(self):
+    self.mock_plugin_executable_cls.side_effect = RuntimeError(
+        "Bad PluginProgram"
+    )
+
+    options = jax.profiler.ProfileOptions()
+    options.session_id = "test_session"
+
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "likely because the running Pathways server images do not support the"
+        " trace session ID option",
+    ):
+      profiling.start_trace(
+          "gs://test_bucket/test_dir", profiler_options=options
+      )
 
 
 if __name__ == "__main__":

@@ -35,6 +35,14 @@ _logger = logging.getLogger(__name__)
 
 
 class _ProfileState:
+  """Holds the state of an ongoing profiling session.
+
+  Attributes:
+    executable: The `plugin_executable.PluginExecutable` instance used for the
+      profiling session.
+    profile_request: The mapping containing the profile request options.
+    lock: A thread lock to protect access to the state.
+  """
   executable: plugin_executable.PluginExecutable | None = None
   profile_request: Mapping[str, Any] | None = None
   lock: threading.Lock
@@ -47,6 +55,37 @@ class _ProfileState:
   def reset(self) -> None:
     self.executable = None
     self.profile_request = None
+
+  def call_profile_executable(self) -> None:
+    """Calls the profiling executable and waits for the result."""
+    if self.executable is None:
+      raise RuntimeError(
+          "_call_profile_executable called with no active executable."
+      )
+    # If the profile request contains xprofTraceOptions, then we need to pass
+    # out_avals and out_shardings to the executable call because the
+    # executable will return a future that needs to be resolved. This is true
+    # for both starting and stopping a trace.
+    if (
+        self.profile_request is not None
+        and "xprofTraceOptions" in self.profile_request
+    ):
+      out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
+      out_shardings = [
+          getattr(
+              jax.sharding,
+              "make_single_device_sharding",
+              jax.sharding.SingleDeviceSharding,
+          )(jax.devices()[0])
+      ]
+    else:
+      out_avals = ()
+      out_shardings = ()
+
+    _, result_future = self.executable.call(
+        out_avals=out_avals, out_shardings=out_shardings
+    )
+    result_future.result()
 
 
 _first_profile_start = True
@@ -74,6 +113,7 @@ def _is_default_profile_options(
       == default_options.python_tracer_level
       and profiler_options.duration_ms == default_options.duration_ms
       and not getattr(profiler_options, "advanced_configuration", None)
+      and not getattr(profiler_options, "session_id", None)
   )
 
 
@@ -128,6 +168,9 @@ def _create_profile_request(
   if pw_trace_opts:
     xprof_options["pwTraceOptions"] = pw_trace_opts
 
+  if getattr(profiler_options, "session_id", None):
+    xprof_options["traceSessionName"] = profiler_options.session_id
+
   profile_request["xprofTraceOptions"] = xprof_options
 
   if profiler_options.duration_ms > 0:
@@ -153,19 +196,30 @@ def _start_pathways_trace_from_profile_request(
       toy_computation()
 
     if _profile_state.executable is not None:
-      raise ValueError(
+      raise RuntimeError(
           "start_trace called while a trace is already being taken!"
       )
-    _profile_state.executable = plugin_executable.PluginExecutable(
-        json.dumps({"profileRequest": profile_request})
-    )
-    _profile_state.profile_request = profile_request
     try:
-      _, result_future = _profile_state.executable.call()
-      result_future.result()
-    except Exception:
-      _logger.exception("Failed to start trace")
+      _profile_state.executable = plugin_executable.PluginExecutable(
+          json.dumps({"profileRequest": profile_request})
+      )
+      _profile_state.profile_request = profile_request
+      _profile_state.call_profile_executable()
+    except Exception as e:
       _profile_state.reset()
+      if (
+          "xprofTraceOptions" in profile_request
+          and "traceSessionName" in profile_request["xprofTraceOptions"]
+      ):
+        if "Bad PluginProgram" in str(e):
+          raise RuntimeError(
+              "Failed to start Pathways trace. The Pathways backend rejected "
+              "the request, likely because the running Pathways server images "
+              "do not support the trace session ID option. Please ensure you "
+              "are running the latest versions of both Pathways server images "
+              "and the pathwaysutils library."
+          ) from e
+      _logger.exception("Failed to start trace")
       raise
 
 
@@ -243,28 +297,9 @@ def stop_trace() -> None:
   try:
     with _profile_state.lock:
       if _profile_state.executable is None:
-        raise ValueError("stop_trace called before a trace is being taken!")
+        raise RuntimeError("stop_trace called before a trace is being taken!")
       try:
-        if (
-            _profile_state.profile_request is not None
-            and "xprofTraceOptions" in _profile_state.profile_request
-        ):
-          out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
-          out_shardings = [
-              getattr(
-                  jax.sharding,
-                  "make_single_device_sharding",
-                  lambda x: jax.sharding.SingleDeviceSharding(x),
-              )(jax.devices()[0])
-          ]
-        else:
-          out_avals = ()
-          out_shardings = ()
-
-        _, result_future = _profile_state.executable.call(
-            out_avals=out_avals, out_shardings=out_shardings
-        )
-        result_future.result()
+        _profile_state.call_profile_executable()
       finally:
         _profile_state.reset()
   finally:
@@ -306,7 +341,7 @@ def start_server(port: int) -> None:
 
   global _profiler_thread
   if _profiler_thread is not None:
-    raise ValueError("Only one profiler server can be active at a time.")
+    raise RuntimeError("Only one profiler server can be active at a time.")
 
   _profiler_thread = threading.Thread(target=server_loop, args=(port,))
   _profiler_thread.start()
@@ -318,7 +353,7 @@ def stop_server() -> None:
   Pathways profiling servers are not stoppable at this time.
   """
   if _profiler_thread is None:
-    raise ValueError("No active profiler server.")
+    raise RuntimeError("No active profiler server.")
 
 
 def collect_profile(
