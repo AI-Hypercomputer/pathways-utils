@@ -100,20 +100,29 @@ def toy_computation() -> None:
   x.block_until_ready()
 
 
-def _is_default_profile_options(
-    profiler_options: jax.profiler.ProfileOptions,
-) -> bool:
-  if jax.version.__version_info__ < (0, 9, 2):
-    return True
-
-  default_options = jax.profiler.ProfileOptions()
+def _profile_options_eq(self, other: Any) -> bool:
+  if not isinstance(other, jax.profiler.ProfileOptions):
+    return NotImplemented
   return (
-      profiler_options.host_tracer_level == default_options.host_tracer_level
-      and profiler_options.python_tracer_level
-      == default_options.python_tracer_level
-      and profiler_options.duration_ms == default_options.duration_ms
-      and not getattr(profiler_options, "advanced_configuration", None)
-      and not getattr(profiler_options, "session_id", None)
+      getattr(self, "include_dataset_ops", None)
+      == getattr(other, "include_dataset_ops", None)
+      and getattr(self, "host_tracer_level", None)
+      == getattr(other, "host_tracer_level", None)
+      and getattr(self, "python_tracer_level", None)
+      == getattr(other, "python_tracer_level", None)
+      and getattr(self, "enable_hlo_proto", None)
+      == getattr(other, "enable_hlo_proto", None)
+      and getattr(self, "start_timestamp_ns", None)
+      == getattr(other, "start_timestamp_ns", None)
+      and getattr(self, "duration_ms", None)
+      == getattr(other, "duration_ms", None)
+      and getattr(self, "raise_error_on_start_failure", None)
+      == getattr(other, "raise_error_on_start_failure", None)
+      and getattr(self, "advanced_configuration", None)
+      == getattr(other, "advanced_configuration", None)
+      and getattr(self, "repository_path", None)
+      == getattr(other, "repository_path", None)
+      and getattr(self, "session_id", None) == getattr(other, "session_id", None)
   )
 
 
@@ -128,7 +137,11 @@ def _create_profile_request(
       "maxNumHosts": max_num_hosts,
   }
 
-  if profiler_options is None or _is_default_profile_options(profiler_options):
+  if (
+      profiler_options is None
+      or jax.version.__version_info__ < (0, 9, 2)
+      or profiler_options == jax.profiler.ProfileOptions()
+  ):
     return profile_request
 
   advanced_config = None
@@ -188,6 +201,10 @@ def _start_pathways_trace_from_profile_request(
 
   Args:
     profile_request: A mapping containing the profile request options.
+
+  Raises:
+    RuntimeError: If a trace is already active, or if starting the trace fails
+      due to an incompatible Pathways backend version when using a session ID.
   """
   with _profile_state.lock:
     global _first_profile_start
@@ -217,7 +234,7 @@ def _start_pathways_trace_from_profile_request(
               "the request, likely because the running Pathways server images "
               "do not support the trace session ID option. Please ensure you "
               "are running the latest versions of both Pathways server images "
-              "and the pathwaysutils library."
+              "and the pathwaysutils package."
           ) from e
       _logger.exception("Failed to start trace")
       raise
@@ -318,6 +335,9 @@ def start_server(port: int) -> None:
 
   Args:
     port : The port to start the server on.
+
+  Raises:
+    RuntimeError: If a profiler server is already active.
   """
   def server_loop(port: int):
     _logger.debug("Starting JAX profiler server on port %s", port)
@@ -448,3 +468,7 @@ def monkey_patch_jax() -> None:
     stop_server()
 
   jax.profiler.stop_server = stop_server_patch
+
+
+if hasattr(jax.profiler, "ProfileOptions"):
+  jax.profiler.ProfileOptions.__eq__ = _profile_options_eq

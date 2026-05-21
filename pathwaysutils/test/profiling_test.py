@@ -24,6 +24,17 @@ from pathwaysutils import profiling
 import requests
 
 
+def _make_profile_options(**kwargs) -> jax.profiler.ProfileOptions:
+  options = jax.profiler.ProfileOptions()
+  for k, v in kwargs.items():
+    # Confirm that the attribute is one of the ProfileOptions attributes
+    # that is supported by Pathways. This is not a test function so it cannot
+    # use assertHasAttr.
+    assert hasattr(options, k), f"ProfileOptions does not have attribute {k}"
+    setattr(options, k, v)
+  return options
+
+
 class ProfilingTest(parameterized.TestCase):
   """Tests for Pathways on Cloud profiling."""
 
@@ -305,8 +316,7 @@ class ProfilingTest(parameterized.TestCase):
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
   def test_stop_trace_with_xprof_options_passes_out_avals(self):
-    options = jax.profiler.ProfileOptions()
-    options.duration_ms = 2000
+    options = _make_profile_options(duration_ms=2000)
 
     request = profiling._create_profile_request(
         "gs://test_bucket/test_dir", options
@@ -467,7 +477,7 @@ class ProfilingTest(parameterized.TestCase):
 
     mocks["stop_server"].assert_called_once()
 
-  @parameterized.parameters(None, jax.profiler.ProfileOptions())
+  @parameterized.parameters(None, _make_profile_options())
   def test_create_profile_request_default_options(self, profiler_options):
     request = profiling._create_profile_request(
         "gs://bucket/dir", profiler_options=profiler_options
@@ -497,17 +507,18 @@ class ProfilingTest(parameterized.TestCase):
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
   def test_create_profile_request_with_options(self):
-    options = jax.profiler.ProfileOptions()
-    options.host_tracer_level = 2
-    options.python_tracer_level = 1
-    options.duration_ms = 2000
-    options.start_timestamp_ns = 123456789
-    options.session_id = "test_session"
-    options.advanced_configuration = {
-        "tpu_num_chips_to_profile_per_task": 3,
-        "tpu_num_sparse_core_tiles_to_trace": 5,
-        "tpu_trace_mode": "TRACE_COMPUTE",
-    }
+    options = _make_profile_options(
+        host_tracer_level=2,
+        python_tracer_level=1,
+        duration_ms=2000,
+        start_timestamp_ns=123456789,
+        session_id="test_session",
+        advanced_configuration={
+            "tpu_num_chips_to_profile_per_task": 3,
+            "tpu_num_sparse_core_tiles_to_trace": 5,
+            "tpu_trace_mode": "TRACE_COMPUTE",
+        },
+    )
 
     request = profiling._create_profile_request(
         "gs://bucket/dir", profiler_options=options
@@ -609,10 +620,62 @@ class ProfilingTest(parameterized.TestCase):
       jax.version.__version_info__ < (0, 9, 2),
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
-  def test_is_default_profile_options_with_session_id(self):
-    options = jax.profiler.ProfileOptions()
-    options.session_id = "test_session"
-    self.assertFalse(profiling._is_default_profile_options(options))
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="default_equal",
+          options1=_make_profile_options(),
+          options2=_make_profile_options(),
+      ),
+      dict(
+          testcase_name="session_id_equal",
+          options1=_make_profile_options(session_id="test"),
+          options2=_make_profile_options(session_id="test"),
+      ),
+      dict(
+          testcase_name="host_tracer_level_equal",
+          options1=_make_profile_options(host_tracer_level=3),
+          options2=_make_profile_options(host_tracer_level=3),
+      ),
+      dict(
+          testcase_name="advanced_config_equal",
+          options1=_make_profile_options(
+              advanced_configuration={"foo": "bar"}
+          ),
+          options2=_make_profile_options(
+              advanced_configuration={"foo": "bar"}
+          ),
+      ),
+  )
+  def test_profile_options_equal(self, options1, options2):
+    self.assertEqual(options1, options2)
+
+  @absltest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="session_id_diff",
+          options1=_make_profile_options(session_id="test1"),
+          options2=_make_profile_options(session_id="test2"),
+      ),
+      dict(
+          testcase_name="host_tracer_level_diff",
+          options1=_make_profile_options(host_tracer_level=1),
+          options2=_make_profile_options(host_tracer_level=2),
+      ),
+      dict(
+          testcase_name="advanced_config_diff",
+          options1=_make_profile_options(
+              advanced_configuration={"foo": "bar"}
+          ),
+          options2=_make_profile_options(
+              advanced_configuration={"foo": "baz"}
+          ),
+      ),
+  )
+  def test_profile_options_not_equal(self, options1, options2):
+    self.assertNotEqual(options1, options2)
 
   @absltest.skipIf(
       jax.version.__version_info__ < (0, 9, 2),
@@ -623,8 +686,7 @@ class ProfilingTest(parameterized.TestCase):
         "Bad PluginProgram"
     )
 
-    options = jax.profiler.ProfileOptions()
-    options.session_id = "test_session"
+    options = _make_profile_options(session_id="test_session")
 
     with self.assertRaisesRegex(
         RuntimeError,
