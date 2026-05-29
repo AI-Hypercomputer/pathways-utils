@@ -197,6 +197,7 @@ class Manager:
       timeout: float | None = None,
       pre_callback: Callable[..., Any] | None = None,
       on_elastic_event_callback: Callable[..., Any] | None = None,
+      should_retry: Callable[[jax.errors.JaxRuntimeError], bool] | None = None,
   ) -> Callable[[_F], _F]:
     """Retries a function with elasticity fault tolerance.
 
@@ -233,6 +234,7 @@ class Manager:
       pre_callback: A callback to call before the function is attempted.
       on_elastic_event_callback: A callback to call after an elastic failure
         occurs.
+      should_retry: Custom callback to determine if an error should be retried.
 
     Returns:
       A decorator that retries the wrapped function.
@@ -299,7 +301,10 @@ class Manager:
             if on_elastic_event_callback is not None:
               on_elastic_event_callback()
           except jax.errors.JaxRuntimeError as error:
-            if not elastic.is_error_due_to_slice_down(error):
+            should_retry_error = elastic.is_error_due_to_slice_down(error)
+            if should_retry is not None and should_retry(error):
+              should_retry_error = True
+            if not should_retry_error:
               raise
 
             if self.new_slice_event.is_set():
