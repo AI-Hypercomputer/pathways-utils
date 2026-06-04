@@ -16,6 +16,7 @@
 import asyncio
 from collections.abc import Mapping
 import dataclasses
+import datetime
 import json
 import logging
 import os
@@ -112,8 +113,8 @@ def _is_default_profile_options(
       and profiler_options.python_tracer_level
       == default_options.python_tracer_level
       and profiler_options.duration_ms == default_options.duration_ms
-      and not getattr(profiler_options, "advanced_configuration", None)
-      and not getattr(profiler_options, "session_id", None)
+      and not profiler_options.advanced_configuration
+      and not profiler_options.session_id
   )
 
 
@@ -132,9 +133,9 @@ def _create_profile_request(
     return profile_request
 
   advanced_config = None
-  if getattr(profiler_options, "advanced_configuration", None):
+  if profiler_options.advanced_configuration:
     advanced_config = {}
-    for k, v in getattr(profiler_options, "advanced_configuration").items():
+    for k, v in profiler_options.advanced_configuration.items():
       # Convert python dict to tensorflow.ProfileOptions.AdvancedConfigValue
       # json-compatible dict
       if isinstance(v, bool):
@@ -168,7 +169,7 @@ def _create_profile_request(
   if pw_trace_opts:
     xprof_options["pwTraceOptions"] = pw_trace_opts
 
-  if getattr(profiler_options, "session_id", None):
+  if profiler_options.session_id:
     xprof_options["traceSessionName"] = profiler_options.session_id
 
   profile_request["xprofTraceOptions"] = xprof_options
@@ -270,26 +271,44 @@ def start_trace(
         "features for Pathways on Cloud and may not be fully supported."
     )
 
-  if jax.version.__version_info__ < (0, 9, 2) and profiler_options is not None:
-    _logger.warning(
-        "ProfileOptions are not supported until JAX 0.9.2 and will be omitted. "
-        "Some options can be specified via command line flags."
-    )
-    profiler_options = None
+  if jax.version.__version_info__ < (0, 9, 2):
+    if profiler_options is not None:
+      _logger.warning(
+          "ProfileOptions are not supported until JAX 0.9.2 and will be omitted. "
+          "Some options can be specified via command line flags."
+      )
+      profiler_options = None
+  else:
+    if profiler_options is None:
+      profiler_options = jax.profiler.ProfileOptions()
+    if not profiler_options.session_id:
+      profiler_options.session_id = datetime.datetime.now().strftime(
+          "%Y_%m_%d_%H_%M_%S"
+      )
 
   profile_request = _create_profile_request(
-      log_dir, profiler_options, max_num_hosts=max_num_hosts
+      log_dir,
+      profiler_options,
+      max_num_hosts=max_num_hosts,
   )
 
   _logger.debug("Profile request: %s", profile_request)
 
   _start_pathways_trace_from_profile_request(profile_request)
 
-  _original_start_trace(
-      log_dir=log_dir,
-      create_perfetto_link=create_perfetto_link,
-      create_perfetto_trace=create_perfetto_trace,
-  )
+  if jax.version.__version_info__ >= (0, 9, 2):
+    _original_start_trace(
+        log_dir=log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=profiler_options,
+    )
+  else:
+    _original_start_trace(
+        log_dir=log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+    )
 
 
 def stop_trace() -> None:
