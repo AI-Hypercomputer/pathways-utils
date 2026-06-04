@@ -113,8 +113,8 @@ def _is_default_profile_options(
       and profiler_options.python_tracer_level
       == default_options.python_tracer_level
       and profiler_options.duration_ms == default_options.duration_ms
-      and not getattr(profiler_options, "advanced_configuration", None)
-      and not getattr(profiler_options, "session_id", None)
+      and not profiler_options.advanced_configuration
+      and not profiler_options.session_id
   )
 
 
@@ -133,9 +133,9 @@ def _create_profile_request(
     return profile_request
 
   advanced_config = None
-  if getattr(profiler_options, "advanced_configuration", None):
+  if profiler_options.advanced_configuration:
     advanced_config = {}
-    for k, v in getattr(profiler_options, "advanced_configuration").items():
+    for k, v in profiler_options.advanced_configuration.items():
       # Convert python dict to tensorflow.ProfileOptions.AdvancedConfigValue
       # json-compatible dict
       if isinstance(v, bool):
@@ -169,7 +169,7 @@ def _create_profile_request(
   if pw_trace_opts:
     xprof_options["pwTraceOptions"] = pw_trace_opts
 
-  if getattr(profiler_options, "session_id", None):
+  if profiler_options.session_id:
     xprof_options["traceSessionName"] = profiler_options.session_id
 
   profile_request["xprofTraceOptions"] = xprof_options
