@@ -145,8 +145,8 @@ def run_command(
   ):
     logging.info("Connection established. Running command: %r", command)
     try:
-      command_args = shlex.split(command)
-      subprocess.run(command_args, check=True, env=os.environ.copy())
+      #command_args = shlex.split(command)
+      subprocess.run(command, shell=True, check=True, env=os.environ.copy())
     except subprocess.CalledProcessError:
       logging.error(
           "Command failed! Find the underlying error in the logs above, where"
