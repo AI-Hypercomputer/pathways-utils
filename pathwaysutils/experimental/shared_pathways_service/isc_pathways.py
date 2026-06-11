@@ -339,7 +339,7 @@ class _ISCPathways:
       self.proxy_pod_name = gke_utils.wait_for_pod(self._proxy_job_name)
       self._proxy_port, self._port_forward_process = (
           gke_utils.enable_port_forwarding(
-              self.proxy_pod_name, PROXY_SERVER_PORT
+              f"pod/{self.proxy_pod_name}", PROXY_SERVER_PORT
           )
       )
 
@@ -394,7 +394,7 @@ class _ISCPathways:
 
     # Delete the proxy GKE job.
     _logger.info("Deleting Pathways proxy...")
-    gke_utils.delete_gke_job(self._proxy_job_name)
+    gke_utils.delete_gke_resource("job", self._proxy_job_name)
     _logger.info("Pathways proxy GKE job deletion complete.")
 
     # Restore JAX variables.

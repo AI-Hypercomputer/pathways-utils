@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${NAME}
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${NAME}
+  template:
+    metadata:
+      labels:
+        app: ${NAME}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+      - name: code-server
+        image: ${IMAGE}
+        securityContext:
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - containerPort: ${PORT}
+        env:
+        - name: PASSWORD
+          value: "${PASSWORD}"
+        - name: PORT
+          value: "${PORT}"
+        securityContext:
+          runAsUser: 1000  # go/gke-shipshape#rootless
+          runAsGroup: 1000  # go/gke-shipshape#rootless
+          readOnlyRootFilesystem: true
+          capabilities:  # go/gke-shipshape#capabilities
+            drop:
+            - ALL
+          seccompProfile:  # go/gke-shipshape#seccomp
+            type: RuntimeDefault
+          allowPrivilegeEscalation: false  # go/gke-shipshape#allowprivilegeescalation
+      nodeSelector:
+        node.kubernetes.io/instance-type: "${INSTANCE_TYPE}"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${SERVICE_NAME}
+  namespace: ${NAMESPACE}
+  annotations:
+    # Forces GKE to provision a private internal load balancer instead of a public one
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  ports:
+  - port: ${PORT}
+    targetPort: ${PORT}
+  selector:
+    app: ${NAME}
