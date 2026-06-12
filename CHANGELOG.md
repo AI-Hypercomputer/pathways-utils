@@ -23,6 +23,23 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-06-12
+## What's Changed
+* Add `--dns-endpoint` to the get-credentials command by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/224
+* Add support for passing XLA flags to the Pathways proxy by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/225
+* Generalize TPU Slice Health Checks for elasticity by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/218
+* Fix the accelerator label for tpu7x by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/226
+* Rename "v5p" to "v5" TPU type by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/230
+* Fix argument and resource type injection in gke_utils.py by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/228
+* Plumb session_id from ProfileOptions to traceSessionName. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/232
+* Add JAX 0.10.1 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/234
+* Sync session_id format between JAX client and Pathways server in pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/236
+* Clean up ProfileOptions getattr usages in pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/237
+* Bump min JAX version to 0.8.3 by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/240
+* Add base PathwaysJobSet builder by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/239
+* Add Head Job configuration to PathwaysJobSet by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/241
+* Add a script to deploy VS Code on GKE CPU node pool by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/242
+
 ## [0.1.8] - 2026-04-24
 ## What's Changed
 * Add background log streaming to detect TPU placement completion by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/204
