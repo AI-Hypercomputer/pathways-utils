@@ -87,6 +87,7 @@ spec:
               - --server_port=29005
               - --resource_manager_address=$$(PATHWAYS_HEAD):29001
               - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
+              - --cloud_pathways_sidecar_shm_directory=${SIDECAR_SHM_DIR}
               env:
               - name: TPU_MIN_LOG_LEVEL
                 value: "0"
@@ -133,8 +134,47 @@ spec:
                 limits:
                   google.com/tpu: "${CHIPS_PER_VM}"
               volumeMounts:
-              - mountPath: /tmp
-                name: shared-tmp
+              - name: shared-tmp
+                mountPath: /tmp
+              - name: sidecar-shared-memory
+                mountPath: ${SIDECAR_SHM_DIR}
+            initContainers:
+            - name: colocated-python-sidecar
+              image: ${SIDECAR_IMAGE}
+              imagePullPolicy: Always
+              env:
+              - name: GRPC_SERVER_ADDRESS
+                value: '''0.0.0.0:50051'''
+              - name: CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY
+                value: ${SIDECAR_SHM_DIR}
+              - name: PYTHONUNBUFFERED
+                value: '1'
+              # --- High Verbosity Logging Variables ---
+              - name: LOGLEVEL
+                value: 'DEBUG'
+              - name: GLOG_minloglevel
+                value: '0' # 0 = INFO level base
+              - name: GLOG_v
+                value: '5' # Extreme verbosity for all C++ modules
+              - name: TF_CPP_MIN_LOG_LEVEL
+                value: '0'
+              - name: TF_CPP_MIN_VLOG_LEVEL
+                value: '5' # TF/XLA verbose logging
+              - name: TPU_MIN_LOG_LEVEL
+                value: '0'
+              - name: GLOG_vmodule
+                value: 'jax_array_handlers=5,type_handlers=5,tensorstore_utils=5'
+              # ----------------------------------------
+              ports:
+              - containerPort: 50051
+                protocol: TCP
+              resources: {}
+              restartPolicy: Always
+              volumeMounts:
+              - name: shared-tmp
+                mountPath: /tmp
+              - name: sidecar-shared-memory
+                mountPath: ${SIDECAR_SHM_DIR}
             dnsPolicy: ClusterFirstWithHostNet
             hostNetwork: true
             nodeSelector:
@@ -146,6 +186,9 @@ spec:
               hostPath:
                 path: /tmp
                 type: DirectoryOrCreate
+            - name: sidecar-shared-memory
+              emptyDir:
+                medium: Memory
   startupPolicy:
     startupPolicyOrder: InOrder
   successPolicy:

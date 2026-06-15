@@ -48,14 +48,17 @@ class ProxyOptions:
     use_insecure_credentials: Whether to use insecure gRPC credentials for the
       proxy server.
     xla_flags: A list of XLA flags to pass to the proxy server.
+    sidecar: Whether to use the worker sidecar or not.
   """
   use_insecure_credentials: bool = False
   xla_flags: list[str] = dataclasses.field(default_factory=list)
+  sidecar: bool = False
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
+    use_sidecar = False
     xla_flags = []
     for option in options or []:
       if ":" in option:
@@ -63,6 +66,8 @@ class ProxyOptions:
         key_strip = key.strip().lower()
         if key_strip == "use_insecure_credentials":
           use_insecure = value.strip().lower() == "true"
+        elif key_strip == "sidecar":
+          use_sidecar = value.strip().lower() == "true"
         elif key_strip == "xla_flags":
           val_strip = value.strip()
           if (
@@ -78,7 +83,11 @@ class ProxyOptions:
     if xla_flags:
       validators.validate_xla_flags(xla_flags)
 
-    return cls(use_insecure_credentials=use_insecure, xla_flags=xla_flags)
+    return cls(
+        use_insecure_credentials=use_insecure,
+        xla_flags=xla_flags,
+        sidecar=use_sidecar,
+    )
 
 
 def _deploy_pathways_proxy_server(
@@ -133,6 +142,9 @@ def _deploy_pathways_proxy_server(
         f"        - {flag}" for flag in proxy_options.xla_flags
     )
     proxy_args_str = "\n" + proxy_args_str
+
+  if proxy_options.sidecar:
+    proxy_args_str += "\n        - --sidecar_name=external"
 
   template = string.Template(yaml_template)
   substituted_yaml = template.substitute(

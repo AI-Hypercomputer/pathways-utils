@@ -26,6 +26,11 @@ _JAX_VERSION = flags.DEFINE_string(
 _SERVER_IMAGE = flags.DEFINE_string(
     "server_image", None, "Full path to the server Docker image"
 )
+_SIDECAR_IMAGE = flags.DEFINE_string(
+    "sidecar_image",
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:20260423-python_3.12-jax_0.10.0",
+    "Full path to the sidecar Docker image",
+)
 _TPU_TYPE = flags.DEFINE_enum(
     "tpu_type", "v6e", ["v5e", "v5p", "v6e", "tpu7x"], "TPU type"
 )
@@ -52,6 +57,7 @@ _DRY_RUN = flags.DEFINE_boolean(
     False,
     "If true, only print the generated YAML without deploying.",
 )
+_SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -191,6 +197,7 @@ def run_deployment(
     jobset_name,
     gcs_bucket,
     server_image,
+    sidecar_image,
     template_file,
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
@@ -202,6 +209,8 @@ def run_deployment(
   context = {
       "JOBSET_NAME": jobset_name,
       "SERVER_IMAGE": server_image,
+      "SIDECAR_IMAGE": sidecar_image,
+      "SIDECAR_SHM_DIR": _SIDECAR_SHM_DIR,
       "GCS_SCRATCH_LOCATION": gcs_bucket,
       "NUM_SLICES": num_slices,
       "INSTANCE_TYPE": f"{tpu_config.instance_prefix}:{topology}",
@@ -246,6 +255,7 @@ def main(argv: Sequence[str]) -> None:
         jobset_name=_JOBSET_NAME.value,
         gcs_bucket=_GCS_BUCKET.value,
         server_image=server_image,
+        sidecar_image=_SIDECAR_IMAGE.value,
         template_file=_TEMPLATE_FILE.value,
         dry_run=_DRY_RUN.value,
     )
