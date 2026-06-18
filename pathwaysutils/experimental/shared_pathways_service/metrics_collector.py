@@ -75,8 +75,15 @@ _METRIC_DESCRIPTORS = [
 class MetricsCollector:
   """Collects usage metrics for Shared Pathways Service and reports to Cloud Monitoring."""
 
-  def __init__(self, project_id: str):
+  def __init__(
+      self,
+      project_id: str,
+      cluster_name: str,
+      job_name: str | None = None,
+  ):
     self.project_id = project_id
+    self.cluster_name = cluster_name
+    self.job_name = job_name
     self.client = monitoring_v3.MetricServiceClient()
     self.project_name = f"projects/{self.project_id}"
     self._lock = threading.Lock()
@@ -185,6 +192,9 @@ class MetricsCollector:
   ):
     """Queues a single metric in the buffer."""
     default_labels = {"client_instance_id": self._instance_id}
+    default_labels["cluster_name"] = self.cluster_name
+    if self.job_name:
+      default_labels["job_name"] = self.job_name
     if metric_labels:
       default_labels.update(metric_labels)
     _logger.info(
@@ -244,11 +254,23 @@ class MetricsCollector:
               "description": description,
               "display_name": display_name,
               "unit": unit,
-              "labels": [{
-                  "key": "client_instance_id",
-                  "value_type": "STRING",
-                  "description": "Unique execution identifier",
-              }],
+              "labels": [
+                  {
+                      "key": "client_instance_id",
+                      "value_type": "STRING",
+                      "description": "Unique execution identifier",
+                  },
+                  {
+                      "key": "cluster_name",
+                      "value_type": "STRING",
+                      "description": "GKE cluster name",
+                  },
+                  {
+                      "key": "job_name",
+                      "value_type": "STRING",
+                      "description": "Pathways proxy job name",
+                  },
+              ],
           },
       )
       _logger.info("Created metric descriptor: %s", metric_type)

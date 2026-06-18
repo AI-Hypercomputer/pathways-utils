@@ -278,14 +278,16 @@ class _ISCPathways:
     self.proxy_server_image = proxy_server_image
     self.proxy_options = proxy_options or ProxyOptions()
     self._old_jax_platforms = None
-    raw_collector = (
-        metrics_collector.MetricsCollector(self.project)
-        if collect_service_metrics
-        else None
-    )
-    self.metrics_collector = metrics_collector.SafeMetricsCollector(
-        raw_collector
-    )
+    if collect_service_metrics:
+      raw_collector = metrics_collector.MetricsCollector(
+          self.project, self.cluster, self._proxy_job_name
+      )
+      self.metrics_collector = metrics_collector.SafeMetricsCollector(
+          raw_collector
+      )
+    else:
+      self.metrics_collector = metrics_collector.SafeMetricsCollector(None)
+
     self.start_time = None
     self._old_jax_backend_target = None
     self._old_jax_platforms_config = None
