@@ -86,17 +86,24 @@ class Manager:
   Attributes:
     slice_to_devices: A mapping from slice index to a sequence of `jax.Device`
       objects for that slice.
-    all_slice_indices: A set of all possible slice indices.
-    active_slice_indices: A set of indices of the currently active slices.
-    new_slice_event: A `threading.Event` that is set when new slices become
-      available during replica/resize mode.
+    all_slice_indices: A set of all possible slice indices in the allocation.
+    active_slice_indices: A set of indices of the slices currently participating
+      in the JAX computation mesh.
+    inactive_slice_indices: A set of indices of the slices in the allocation
+      that are not currently participating in the JAX computation mesh (e.g.
+      because they are down or have not joined yet).
+    available_inactive_slices: A set of indices of the inactive slices that
+      have been detected as up and healthy by the background monitor thread,
+      but have not yet been joined to the active JAX computation mesh.
   """
 
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
   all_slice_indices: Set[int]
   active_slice_indices: Set[int]
-  new_slice_event: threading.Event
-
+  inactive_slice_indices: Set[int]
+  available_inactive_slices: Set[int]
+  _stop_event: threading.Event | None
+  _monitor_thread: threading.Thread | None
   def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
     """Initializes the manager.
 
@@ -107,12 +114,55 @@ class Manager:
       devices = jax.devices()
     self.slice_to_devices = elastic.get_slice_to_devices(devices)
 
-    self.all_slice_indices = set(self.slice_to_devices.keys())
+    self.all_slice_indices = frozenset(self.slice_to_devices.keys())
 
     self.active_slice_indices = elastic.get_active_slice_indices(
         slice_to_devices=self.slice_to_devices
     )
-    self.new_slice_event = threading.Event()
+    self.inactive_slice_indices = self.all_slice_indices - self.active_slice_indices
+    self.available_inactive_slices = frozenset()
+
+    self._stop_event = None
+    self._monitor_thread = None
+
+  def start_monitoring(self, poll_interval: float | int = 10) -> None:
+    """Starts the background monitor thread.
+
+    Args:
+      poll_interval: The number of seconds to wait between activity checks.
+    """
+    if self._monitor_thread is not None and self._monitor_thread.is_alive():
+      _logger.warning("Monitor thread is already running.")
+      return
+
+    self._stop_event = threading.Event()
+    self._monitor_thread = threading.Thread(
+        target=self._monitor_new_slices,
+        args=(self._stop_event, poll_interval),
+        daemon=True,
+    )
+    self._monitor_thread.start()
+    _logger.info("Elastic monitor thread started with interval %s.", poll_interval)
+
+  def close(self) -> None:
+    """Stops the background monitor thread."""
+    if self._stop_event is not None:
+      self._stop_event.set()
+    if self._monitor_thread is not None:
+      _logger.info("Closing manager, waiting for monitor thread to stop...")
+      try:
+        self._monitor_thread.join(timeout=5)
+        if self._monitor_thread.is_alive():
+          _logger.warning(
+              "Elastic monitor thread failed to stop within 5s timeout."
+          )
+      except RuntimeError as e:
+        if "cannot join thread" in str(e):
+          pass
+        else:
+          raise
+      self._monitor_thread = None
+      self._stop_event = None
 
   @functools.cached_property
   def total_slice_count(self) -> int:
@@ -135,10 +185,7 @@ class Manager:
     """The number of active slices."""
     return len(self.active_slice_indices)
 
-  @property
-  def inactive_slice_indices(self) -> set[int]:
-    """The set of inactive slice indices."""
-    return self.all_slice_indices - self.active_slice_indices  # pyrefly: ignore[bad-return]
+
 
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
@@ -171,37 +218,57 @@ class Manager:
     for array in jax.live_arrays():
       array.delete()
 
+  def _check_inactive_slices(self) -> None:
+    """Checks inactive slices and updates available_inactive_slices."""
+    if not self.inactive_slice_indices:
+      _logger.debug("No inactive slices to check.")
+      if self.available_inactive_slices:
+        self.available_inactive_slices = frozenset()
+      return
+
+    _logger.debug(
+        "Now checking inactive slices %s", self.inactive_slice_indices
+    )
+    inactive_slice_to_devices = {
+        i: self.slice_to_devices[i] for i in self.inactive_slice_indices
+    }
+    found_slices = elastic.get_active_slice_indices(
+        inactive_slice_to_devices
+    )
+
+    _logger.debug(
+        "Found available and inactive slices %s", found_slices
+    )
+
+    # Filter against active_slice_indices in case the main thread initiated scale-up
+    # and claimed these slices while this background health check was running.
+    found_slices = found_slices - self.active_slice_indices
+
+    if found_slices != self.available_inactive_slices:
+      _logger.info(
+          "Newly available but inactive slices %s", found_slices
+      )
+      self.available_inactive_slices = frozenset(found_slices)
+
   def _monitor_new_slices(
       self, stop_event: threading.Event, poll_interval: float | int
   ) -> None:
-    """Monitors for new slices and sets the `new_slice_event` if found."""
-    while not stop_event.wait(poll_interval):
-      try:
-        if not self.inactive_slice_indices:
-          _logger.debug("No inactive slices to check.")
-          continue
-
-        _logger.debug(
-            "Checking inactive slices: %s", self.inactive_slice_indices
-        )
-        inactive_slice_to_devices = {
-            i: self.slice_to_devices[i] for i in self.inactive_slice_indices
-        }
-        newly_active_indices = elastic.get_active_slice_indices(
-            inactive_slice_to_devices
-        )
-
-        if newly_active_indices:
-          _logger.info(
-              "New slices found: %s. Setting new slice event.",
-              newly_active_indices,
-          )
-          self.new_slice_event.set()
-          return
-
-        _logger.debug("No new slices found.")
-      except Exception:  # pylint: disable=broad-exception-caught
-        _logger.exception("Error in monitor thread")
+    """Monitors for new slices and updates available_inactive_slices."""
+    _logger.info("Elastic monitor thread started.")
+    try:
+      while not stop_event.wait(poll_interval):
+        try:
+          self._check_inactive_slices()
+        except Exception:  # pylint: disable=broad-exception-caught
+          _logger.exception("Error in monitor thread loop")
+    except BaseException as e:
+      _logger.critical(
+          "Catastrophic error in monitor thread, thread is dying!",
+          exc_info=True,
+      )
+      raise
+    finally:
+      _logger.info("Elastic monitor thread stopped.")
 
   def elastic_retry(
       self,
@@ -227,10 +294,10 @@ class Manager:
     (i.e., it waits for all slices to be active).
 
     When `minimum_slice_count` is less than the total number of slices, a
-    background thread will monitor for new slices becoming available and set
-    `self.new_slice_event`. The user code can then poll this event and raise
-    a `ScaleUpSignalError` to gracefully interrupt the current execution and
-    trigger a retry.
+    background thread will monitor for newly joined inactive slices and populate
+    `self.available_inactive_slices`. User code can check this set (e.g. at step
+    boundaries) and raise a `ScaleUpSignalError` to gracefully interrupt the
+    current execution and trigger a retry with the expanded hardware.
 
     Often, the function will dispatch JAX operations and wait for them to
     complete while creating a log message. If using Python logging, it is
@@ -286,6 +353,7 @@ class Manager:
     def decorator(func: _F) -> _F:
       @functools.wraps(func)
       def wrapper(*args: Any, **kwargs: Any) -> Any:
+        self.start_monitoring(poll_interval)
 
         def attempt_execution(attempt: int) -> Any:
           _logger.info("Elastic attempt %d", attempt)
@@ -295,73 +363,67 @@ class Manager:
               poll_interval=poll_interval,
               timeout=timeout,
           )
+          self.inactive_slice_indices = (
+              self.all_slice_indices - self.active_slice_indices
+          )
+          # Reset available_inactive_slices at attempt start since
+          # active_slice_indices has just been updated by wait_for_slices.
+          self.available_inactive_slices = frozenset()
           if pre_callback is not None:
             pre_callback()
 
           with jax.default_device(self.default_device):
-            self.new_slice_event.clear()
-            stop_event = threading.Event()
+            return func(*args, **kwargs)
 
-            if target_slice_count < self.total_slice_count:
-              monitor_thread = threading.Thread(
-                  target=self._monitor_new_slices,
-                  args=(stop_event, poll_interval),
-                  daemon=True,
-              )
-              monitor_thread.start()
-            else:
-              monitor_thread = None
+        def handle_scale_up_error(attempt: int, error: ScaleUpSignalError) -> None:
+          _logger.info("Scale up requested.")
+          _elastic_event_cleanup()
+          # Reset available_inactive_slices before retry callback and next attempt.
+          self.available_inactive_slices = frozenset()
 
+          if on_elastic_event_callback is not None:
+            on_elastic_event_callback()
+
+          if not retry_policy(attempt, error):
+            _logger.info("Retry policy rejected retry after ScaleUpSignalError.")
+            raise ElasticRuntimeError(
+                f"Elastic attempt {attempt} failed."
+            ) from error
+
+        def handle_slice_down_error(
+            attempt: int, error: jax.errors.JaxRuntimeError
+        ) -> None:
+          if not elastic.is_error_due_to_slice_down(error):
+            raise
+
+          _logger.exception("Elastic event detected")
+          _elastic_event_cleanup()
+          # Reset available_inactive_slices on slice-down failure before retry.
+          self.available_inactive_slices = frozenset()
+
+          if on_elastic_event_callback is not None:
+            on_elastic_event_callback()
+
+          if not retry_policy(attempt, error):
+            _logger.info(
+                "Retry policy rejected retry after jax.errors.JaxRuntimeError."
+            )
+            raise ElasticRuntimeError(
+                f"Elastic attempt {attempt} failed."
+            ) from error
+
+        try:
+          attempt = 1
+          while True:
             try:
-              return func(*args, **kwargs)
-            finally:
-              stop_event.set()
-              if monitor_thread is not None:
-                monitor_thread.join()
-
-        attempt = 1
-        while True:
-          try:
-            return attempt_execution(attempt)
-          except ScaleUpSignalError as error:
-            _logger.info("Scale up requested.")
-            _elastic_event_cleanup()
-
-            if on_elastic_event_callback is not None:
-              on_elastic_event_callback()
-
-            if not retry_policy(attempt, error):
-              _logger.info(
-                  "Retry policy rejected retry after ScaleUpSignalError."
-              )
-              raise ElasticRuntimeError(
-                  f"Elastic attempt {attempt} failed."
-              ) from error
-
-            _logger.info("Retrying.")
-          except jax.errors.JaxRuntimeError as error:
-            if not elastic.is_error_due_to_slice_down(error):
-              raise
-
-            if self.new_slice_event.is_set():
-              _logger.info("Slice down event and new slice available detected.")
-            else:
-              _logger.info("Slice down event detected.")
-
-            _elastic_event_cleanup()
-
-            if on_elastic_event_callback is not None:
-              on_elastic_event_callback()
-
-            if not retry_policy(attempt, error):
-              _logger.info("Retry policy rejected retry after JaxRuntimeError.")
-              raise ElasticRuntimeError(
-                  f"Elastic attempt {attempt} failed."
-              ) from error
-
-            _logger.info("Retrying.")
-
-          attempt += 1
+              return attempt_execution(attempt)
+            except ScaleUpSignalError as error:
+              handle_scale_up_error(attempt, error)
+            except jax.errors.JaxRuntimeError as error:
+              handle_slice_down_error(attempt, error)
+            attempt += 1
+        finally:
+          self.close()
 
       return wrapper  # pyrefly: ignore[bad-return]
 
