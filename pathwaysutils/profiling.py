@@ -141,7 +141,7 @@ def _create_profile_request(
       if isinstance(v, bool):
         advanced_config[k] = {"boolValue": v}
       elif isinstance(v, int):
-        advanced_config[k] = {"intValue": v}
+        advanced_config[k] = {"int64Value": v}
       elif isinstance(v, str):
         advanced_config[k] = {"stringValue": v}
       else:

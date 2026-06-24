@@ -569,6 +569,8 @@ class ProfilingTest(parameterized.TestCase):
         "tpu_num_chips_to_profile_per_task": 3,
         "tpu_num_sparse_core_tiles_to_trace": 5,
         "tpu_trace_mode": "TRACE_COMPUTE",
+        "tpu_num_sparse_cores_to_trace": 1,
+        "tpu_enable_flag": True,
     }
 
     request = profiling._create_profile_request(
@@ -586,9 +588,15 @@ class ProfilingTest(parameterized.TestCase):
                 "pwTraceOptions": {
                     "enablePythonTracer": True,
                     "advancedConfiguration": {
-                        "tpu_num_chips_to_profile_per_task": {"intValue": 3},
-                        "tpu_num_sparse_core_tiles_to_trace": {"intValue": 5},
+                        "tpu_num_chips_to_profile_per_task": {
+                            "int64Value": 3
+                        },
+                        "tpu_num_sparse_core_tiles_to_trace": {
+                            "int64Value": 5
+                        },
                         "tpu_trace_mode": {"stringValue": "TRACE_COMPUTE"},
+                        "tpu_num_sparse_cores_to_trace": {"int64Value": 1},
+                        "tpu_enable_flag": {"boolValue": True},
                     },
                 },
             },
