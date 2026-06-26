@@ -1,6 +1,6 @@
 """Module for connecting to a Pathways server for interactive supercomputing."""
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 import contextlib
 import dataclasses
 import gc
@@ -435,7 +435,7 @@ def connect(
     expected_tpu_instances: Mapping[str, int],
     proxy_job_name: str | None = None,
     proxy_server_image: str = DEFAULT_PROXY_IMAGE,
-    proxy_options: ProxyOptions | None = None,
+    proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
@@ -465,17 +465,24 @@ def connect(
   validators.validate_tpu_instances(expected_tpu_instances)
   validators.validate_proxy_server_image(proxy_server_image)
   validators.validate_proxy_options(proxy_options)
-  _logger.info("Validation complete.")
   gke_utils.fetch_cluster_credentials(
       cluster_name=cluster, project_id=project, location=region
   )
-  proxy_job_name = (
-      proxy_job_name or f"isc-proxy-{os.environ.get('USER', 'user')}-{''.join(
-          random.choices(string.ascii_lowercase + string.digits, k=5)
-      )}"
-  )
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)
+  if proxy_options_obj.sidecar:
+    sidecar_image = gke_utils.get_worker_sidecar_image(
+        pathways_service=pathways_service
+    )
+    if sidecar_image:
+      validators.validate_sidecar_image_versions(sidecar_image)
+  _logger.info("Validation complete.")
+
+  proxy_job_name = (
+      proxy_job_name
+      or f"isc-proxy-{os.environ.get('USER', 'user')}-"
+      f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=5))}"
+  )
 
   _logger.info("Starting ISCPathways context.")
   with _ISCPathways(

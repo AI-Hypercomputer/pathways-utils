@@ -3,10 +3,15 @@
 from collections.abc import Iterable, Mapping
 import logging
 import re
+import sys
 from typing import Any
 from absl import flags
+import jax
 
 _logger = logging.getLogger(__name__)
+
+_PYTHON_VERSION_REGEX = r"python[-_]?(\d+\.\d+(?:\.\d+)*)"
+_JAX_VERSION_REGEX = r"jax[-_]?(\d+\.\d+(?:\.\d+)*)"
 
 
 def validate_proxy_options(proxy_options: Iterable[str] | None) -> None:
@@ -133,3 +138,97 @@ def validate_xla_flags(xla_flags: Iterable[str] | None) -> None:
       raise flags.ValidationError(
           f"XLA flag '{flag}' must start with '--xla_'."
       )
+
+
+def validate_sidecar_image_versions(sidecar_image: str) -> None:
+  """Checks compatibility of sidecar image versions with user environment.
+
+  Compares the Python and JAX versions in the sidecar image tag with the user
+  environment's Python and JAX versions.
+
+  Args:
+    sidecar_image: The sidecar image string, e.g.,
+      "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0".
+
+  Raises:
+    ValueError: If the sidecar image Python or JAX versions do not match the
+      user environment.
+  """
+  _logger.info(
+      "Checking sidecar image version compatibility: %s", sidecar_image
+  )
+
+  parts = sidecar_image.rsplit(":", 1)
+  if len(parts) < 2:
+    _logger.warning(
+        "No tag found in sidecar image: %s. Skipping version validation.",
+        sidecar_image,
+    )
+    return
+  tag = parts[1]
+
+  sidecar_python_match = re.search(
+      _PYTHON_VERSION_REGEX, tag, re.IGNORECASE
+  )
+  sidecar_jax_match = re.search(
+      _JAX_VERSION_REGEX, tag, re.IGNORECASE
+  )
+  if not sidecar_python_match and not sidecar_jax_match:
+    _logger.warning(
+        "No Python or JAX versions found in sidecar image tag: %s. Skipping "
+        "version validation.",
+        tag,
+    )
+    return
+
+  def clean_version(version_str: str) -> str:
+    match = re.match(r"^(\d+(?:\.\d+)*)", version_str)
+    return match.group(1) if match else version_str
+
+  def versions_match(sidecar_ver: str, env_ver: str) -> bool:
+    sidecar_parts = sidecar_ver.split(".")
+    env_parts = env_ver.split(".")
+    compare_len = min(len(sidecar_parts), len(env_parts))
+    if compare_len == 0:
+      return False
+    return sidecar_parts[:compare_len] == env_parts[:compare_len]
+
+  if sidecar_python_match:
+    sidecar_python = clean_version(sidecar_python_match.group(1))
+    env_python = (
+        f"{sys.version_info.major}.{sys.version_info.minor}."
+        f"{sys.version_info.micro}"
+    )
+    if not versions_match(sidecar_python, env_python):
+      raise ValueError(
+          f"Python version mismatch: sidecar image matches Python version "
+          f"{sidecar_python}, but the user environment is running Python "
+          f"{env_python}. Either rebuild the sidecar image with a matching "
+          "Python version or update the user environment to match the sidecar"
+          " image."
+      )
+    _logger.info(
+        "Python version match: sidecar image matches Python version %s, and the"
+        " user environment is running Python %s.",
+        sidecar_python,
+        env_python,
+    )
+
+  if sidecar_jax_match:
+    sidecar_jax = clean_version(sidecar_jax_match.group(1))
+    env_jax = clean_version(jax.__version__)
+    if not versions_match(sidecar_jax, env_jax):
+      raise ValueError(
+          f"JAX version mismatch: sidecar image matches JAX version "
+          f"{sidecar_jax}, but the user environment is running JAX "
+          f"{env_jax}. Either rebuild the sidecar image with a matching "
+          "JAX version or update the user environment to match the sidecar "
+          "image."
+      )
+    _logger.info(
+        "JAX version match: sidecar image matches JAX version %s, and the user"
+        " environment is running JAX %s.",
+        sidecar_jax,
+        env_jax,
+    )
+

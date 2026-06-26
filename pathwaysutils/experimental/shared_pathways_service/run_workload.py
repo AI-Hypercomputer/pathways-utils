@@ -77,8 +77,6 @@ _COLLECT_SERVICE_METRICS = flags.DEFINE_bool(
 )
 
 
-
-
 def run_command(
     *,
     cluster: str,
@@ -107,8 +105,8 @@ def run_command(
     command: The command to run on TPUs.
     proxy_server_image: The proxy server image to use.
     proxy_options: Configuration options for the Pathways proxy.
-    collect_service_metrics: Whether to collect usage metrics for Shared Pathways
-      Service. Defaults to False.
+    collect_service_metrics: Whether to collect usage metrics for Shared
+      Pathways Service. Defaults to False.
     connect_fn: The function to use for establishing the connection context,
       expected to be a callable that returns a context manager.
 

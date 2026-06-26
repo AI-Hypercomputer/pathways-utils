@@ -1,5 +1,6 @@
 """GKE utils for deploying and managing the Pathways proxy."""
 
+import json
 import logging
 import re
 import socket
@@ -474,4 +475,59 @@ def pick_unused_local_port() -> int:
 def is_local_port_free(port: int) -> bool:
   """Checks if a local port is free."""
   return portpicker.is_port_free(port)
+
+
+def get_worker_sidecar_image(
+    pathways_service: str, namespace: str = "default"
+) -> str | None:
+  """Gets the image of the sidecar container used by the workers."""
+  pathways_head_hostname = pathways_service.split(":")[0]
+  _validate_k8s_name(namespace)
+
+  # Try to extract the jobset name from the Pathways service hostname.
+  jobset_name = None
+  if "-pathways-head" in pathways_head_hostname:
+    jobset_name = pathways_head_hostname.split("-pathways-head")[0]
+
+  command = ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
+  try:
+    result = subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+  except subprocess.CalledProcessError as e:
+    _logger.exception("Failed to get pods. kubectl output:\n%r", e.stderr)
+    return None
+
+  try:
+    pods_data = json.loads(result.stdout)
+  except json.JSONDecodeError as e:
+    _logger.exception("Failed to parse kubectl get pods output: %r", e)
+    return None
+
+  items = pods_data.get("items", [])
+
+  # Look for pods belonging to the jobset and having the sidecar
+  # container/initContainer.
+  if jobset_name:
+    for pod in items:
+      metadata = pod.get("metadata", {})
+      labels = metadata.get("labels", {})
+      pod_jobset_name = labels.get("jobset.sigs.k8s.io/jobset-name")
+      pod_name = metadata.get("name", "")
+
+      if pod_jobset_name == jobset_name or pod_name.startswith(jobset_name):
+        spec = pod.get("spec", {})
+        for container in spec.get("initContainers", []) + spec.get(
+            "containers", []
+        ):
+          if container.get("name") == "colocated-python-sidecar":
+            image = container.get("image")
+            if image:
+              return image
+
+  return None
+
 
