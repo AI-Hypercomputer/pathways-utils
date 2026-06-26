@@ -27,6 +27,7 @@ import urllib.parse
 import fastapi
 import jax
 from jax import numpy as jnp
+from jax.extend import backend
 from pathwaysutils import plugin_executable
 import requests
 import uvicorn
@@ -77,7 +78,7 @@ class _ProfileState:
               jax.sharding,
               "make_single_device_sharding",
               jax.sharding.SingleDeviceSharding,
-          )(jax.devices()[0])
+          )(backend.get_default_device())
       ]
     else:
       out_avals = ()
