@@ -14,15 +14,30 @@
 
 import json
 import logging
-from unittest import mock
 from typing import Any
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import grpc
 import jax
 from jax import numpy as jnp
 from pathwaysutils import profiling
-import requests
+from tensorflow.core.profiler.protobuf import profiler_service_pb2  # pylint: disable=g-direct-tensorflow-import
+from tensorflow.core.profiler.protobuf import profiler_service_pb2_grpc  # pylint: disable=g-direct-tensorflow-import
+
+
+class _MockRpcError(grpc.RpcError):
+
+  def __init__(self, code, details=""):
+    self._code = code
+    self._details = details
+
+  def code(self):
+    return self._code
+
+  def details(self):
+    return self._details
 
 
 class ProfilingTest(parameterized.TestCase):
@@ -30,12 +45,33 @@ class ProfilingTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
-    self.mock_post = self.enter_context(
-        mock.patch.object(requests, "post", autospec=True)
+    # Mock grpc channel and server
+    self.mock_secure_channel = self.enter_context(
+        mock.patch.object(grpc, "secure_channel", autospec=True)
     )
+    self.mock_grpc_server = self.enter_context(
+        mock.patch.object(grpc, "server", autospec=True)
+    )
+    self.mock_alts_server_creds = self.enter_context(
+        mock.patch.object(grpc, "alts_server_credentials", autospec=True)
+    )
+    self.mock_alts_channel_creds = self.enter_context(
+        mock.patch.object(grpc, "alts_channel_credentials", autospec=True)
+    )
+
+    # Mock the gRPC stub
+    self.mock_stub_cls = self.enter_context(
+        mock.patch.object(
+            profiler_service_pb2_grpc,
+            "ProfilerServiceStub",
+        )
+    )
+    self.mock_stub = self.mock_stub_cls.return_value
+
     profiling._profile_state.reset()
     profiling._first_profile_start = True
-    profiling._profiler_thread = None
+    profiling._profiler_server = None
+
     self.mock_plugin_executable_cls = self.enter_context(
         mock.patch.object(
             profiling.plugin_executable, "PluginExecutable", autospec=True
@@ -91,6 +127,7 @@ class ProfilingTest(parameterized.TestCase):
 
   @parameterized.parameters(8000, 1234)
   def test_collect_profile_port(self, port):
+    self.mock_stub.Profile.return_value = profiler_service_pb2.ProfileResponse()
     result = profiling.collect_profile(
         port=port,
         duration_ms=1000,
@@ -99,16 +136,17 @@ class ProfilingTest(parameterized.TestCase):
     )
 
     self.assertTrue(result)
-    self.mock_post.assert_called_once_with(
-        f"http://127.0.0.1:{port}/profiling",
-        json={
-            "duration_ms": 1000,
-            "repository_path": "gs://test_bucket/test_dir",
-        },
+    self.mock_stub.Profile.assert_called_once_with(
+        profiler_service_pb2.ProfileRequest(
+            duration_ms=1000,
+            repository_root="gs://test_bucket/test_dir",
+        ),
+        timeout=11.0,
     )
 
   @parameterized.parameters(1000, 1234)
   def test_collect_profile_duration_ms(self, duration_ms):
+    self.mock_stub.Profile.return_value = profiler_service_pb2.ProfileResponse()
     result = profiling.collect_profile(
         port=8000,
         duration_ms=duration_ms,
@@ -117,16 +155,17 @@ class ProfilingTest(parameterized.TestCase):
     )
 
     self.assertTrue(result)
-    self.mock_post.assert_called_once_with(
-        "http://127.0.0.1:8000/profiling",
-        json={
-            "duration_ms": duration_ms,
-            "repository_path": "gs://test_bucket/test_dir",
-        },
+    self.mock_stub.Profile.assert_called_once_with(
+        profiler_service_pb2.ProfileRequest(
+            duration_ms=duration_ms,
+            repository_root="gs://test_bucket/test_dir",
+        ),
+        timeout=(duration_ms / 1000.0) + 10.0,
     )
 
   @parameterized.parameters("127.0.0.1", "localhost", "192.168.1.1")
   def test_collect_profile_host(self, host):
+    self.mock_stub.Profile.return_value = profiler_service_pb2.ProfileResponse()
     result = profiling.collect_profile(
         port=8000,
         duration_ms=1000,
@@ -135,12 +174,12 @@ class ProfilingTest(parameterized.TestCase):
     )
 
     self.assertTrue(result)
-    self.mock_post.assert_called_once_with(
-        f"http://{host}:8000/profiling",
-        json={
-            "duration_ms": 1000,
-            "repository_path": "gs://test_bucket/test_dir",
-        },
+    self.mock_stub.Profile.assert_called_once_with(
+        profiler_service_pb2.ProfileRequest(
+            duration_ms=1000,
+            repository_root="gs://test_bucket/test_dir",
+        ),
+        timeout=11.0,
     )
 
   @parameterized.parameters(
@@ -149,17 +188,18 @@ class ProfilingTest(parameterized.TestCase):
       "gs://test_bucket3/test/log/dir",
   )
   def test_collect_profile_log_dir(self, log_dir):
+    self.mock_stub.Profile.return_value = profiler_service_pb2.ProfileResponse()
     result = profiling.collect_profile(
         port=8000, duration_ms=1000, host="127.0.0.1", log_dir=log_dir
     )
 
     self.assertTrue(result)
-    self.mock_post.assert_called_once_with(
-        "http://127.0.0.1:8000/profiling",
-        json={
-            "duration_ms": 1000,
-            "repository_path": log_dir,
-        },
+    self.mock_stub.Profile.assert_called_once_with(
+        profiler_service_pb2.ProfileRequest(
+            duration_ms=1000,
+            repository_root=log_dir,
+        ),
+        timeout=11.0,
     )
 
   @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
@@ -169,15 +209,34 @@ class ProfilingTest(parameterized.TestCase):
           port=8000, duration_ms=1000, host="127.0.0.1", log_dir=log_dir
       )
 
-  @parameterized.parameters(
-      requests.exceptions.ConnectionError("Connection error"),
-      requests.exceptions.Timeout("Timeout"),
-      requests.exceptions.TooManyRedirects("Too many redirects"),
-      requests.exceptions.RequestException("Request exception"),
-      requests.exceptions.HTTPError("HTTP error"),
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="unavailable",
+          status_code=grpc.StatusCode.UNAVAILABLE,
+          expected_log=(
+              "Failed to connect to the profiling server at 127.0.0.1:8000."
+          ),
+      ),
+      dict(
+          testcase_name="timeout",
+          status_code=grpc.StatusCode.DEADLINE_EXCEEDED,
+          expected_log=(
+              "Profiling request timed out. The server might be unresponsive."
+          ),
+      ),
+      dict(
+          testcase_name="other_error",
+          status_code=grpc.StatusCode.INTERNAL,
+          expected_log=(
+              "gRPC error occurred while collecting profile. "
+              "Error code: StatusCode.INTERNAL"
+          ),
+      ),
   )
-  def test_collect_profile_request_error(self, exception):
-    self.mock_post.side_effect = exception
+  def test_collect_profile_request_error(self, status_code, expected_log):
+    self.mock_stub.Profile.side_effect = _MockRpcError(
+        status_code, "Error details"
+    )
 
     with self.assertLogs(profiling._logger, level=logging.ERROR) as logs:
       result = profiling.collect_profile(
@@ -188,26 +247,24 @@ class ProfilingTest(parameterized.TestCase):
       )
 
     self.assertLen(logs.output, 1)
-    self.assertIn("Failed to collect profiling data", logs.output[0])
-    self.assertIn(str(exception), logs.output[0])
+    self.assertIn(expected_log, logs.output[0])
     self.assertFalse(result)
-    self.mock_post.assert_called_once()
+    self.mock_stub.Profile.assert_called_once()
 
-  def test_collect_profile_success(self):
-    mock_response = mock.Mock()
-    mock_response.raise_for_status.return_value = None
-    self.mock_post.return_value = mock_response
-
+  def test_collect_profile_use_alts(self):
+    self.mock_stub.Profile.return_value = profiler_service_pb2.ProfileResponse()
     result = profiling.collect_profile(
         port=8000,
         duration_ms=1000,
         host="127.0.0.1",
         log_dir="gs://test_bucket/test_dir",
+        use_alts=True,
     )
-
     self.assertTrue(result)
-    self.mock_post.assert_called_once()
-    mock_response.raise_for_status.assert_called_once()
+    self.mock_secure_channel.assert_called_once_with(
+        "127.0.0.1:8000", self.mock_alts_channel_creds.return_value
+    )
+    self.mock_stub.Profile.assert_called_once()
 
   @parameterized.parameters(
       "/logs/test_log_dir",
@@ -309,10 +366,14 @@ class ProfilingTest(parameterized.TestCase):
   def test_start_trace_with_session_id_in_options(self):
     options = jax.profiler.ProfileOptions()
     options.session_id = "options_session"
-    profiling.start_trace("gs://test_bucket/test_dir", profiler_options=options)
+    profiling.start_trace(
+        "gs://test_bucket/test_dir", profiler_options=options
+    )
 
     expected_request = self._get_expected_profile_request(
-        "gs://test_bucket/test_dir", max_num_hosts=1, session_id="options_session"
+        "gs://test_bucket/test_dir",
+        max_num_hosts=1,
+        session_id="options_session",
     )
     self.mock_plugin_executable_cls.assert_called_once_with(
         json.dumps(expected_request)
@@ -323,7 +384,9 @@ class ProfilingTest(parameterized.TestCase):
     self.assertEqual(call_args["log_dir"], "gs://test_bucket/test_dir")
     self.assertFalse(call_args["create_perfetto_link"])
     self.assertFalse(call_args["create_perfetto_trace"])
-    self.assertEqual(call_args["profiler_options"].session_id, "options_session")
+    self.assertEqual(
+        call_args["profiler_options"].session_id, "options_session"
+    )
 
   def test_start_trace_no_toy_computation_second_time(self):
     profiling.start_trace("gs://test_bucket/test_dir")
@@ -400,19 +463,18 @@ class ProfilingTest(parameterized.TestCase):
     ):
       profiling.stop_trace()
 
-  def test_start_server_starts_thread(self):
-    mock_thread = self.enter_context(
-        mock.patch.object(profiling.threading, "Thread", autospec=True)
-    )
+  def test_start_server_starts_grpc_server(self):
+    mock_server = self.mock_grpc_server.return_value
     profiling.start_server(9000)
-    mock_thread.assert_called_once_with(target=mock.ANY, args=(9000,))
-    mock_thread.return_value.start.assert_called_once()
-    self.assertIsNotNone(profiling._profiler_thread)
+
+    self.mock_grpc_server.assert_called_once()
+    mock_server.add_secure_port.assert_called_once_with(
+        "[::]:9000", self.mock_alts_server_creds.return_value
+    )
+    mock_server.start.assert_called_once()
+    self.assertEqual(profiling._profiler_server, mock_server)
 
   def test_start_server_twice_raises_error(self):
-    self.enter_context(
-        mock.patch.object(profiling.threading, "Thread", autospec=True)
-    )
     profiling.start_server(9000)
     with self.assertRaisesRegex(
         RuntimeError, "Only one profiler server can be active"
@@ -423,12 +485,12 @@ class ProfilingTest(parameterized.TestCase):
     with self.assertRaisesRegex(RuntimeError, "No active profiler server"):
       profiling.stop_server()
 
-  def test_stop_server_does_nothing_if_server_exists(self):
-    self.enter_context(
-        mock.patch.object(profiling.threading, "Thread", autospec=True)
-    )
+  def test_stop_server_stops_server(self):
+    mock_server = self.mock_grpc_server.return_value
     profiling.start_server(9000)
-    profiling.stop_server()  # Should not raise
+    profiling.stop_server()
+    mock_server.stop.assert_called_once_with(grace=5.0)
+    self.assertIsNone(profiling._profiler_server)
 
   def _setup_monkey_patch(self):
     """Saves originals, applies monkey patch, and sets up mocks."""
@@ -714,6 +776,48 @@ class ProfilingTest(parameterized.TestCase):
       profiling.start_trace(
           "gs://test_bucket/test_dir", profiler_options=options
       )
+
+  def test_servicer_profile_success(self):
+    with (
+        mock.patch.object(
+            jax.profiler, "start_trace", autospec=True
+        ) as mock_start_trace,
+        mock.patch.object(
+            jax.profiler, "stop_trace", autospec=True
+        ) as mock_stop_trace,
+    ):
+      servicer = profiling.PathwaysProfilerServicer()
+      request = profiler_service_pb2.ProfileRequest(
+          duration_ms=100, repository_root="gs://test_bucket/test_dir"
+      )
+      mock_context = mock.create_autospec(grpc.ServicerContext, instance=True)
+
+      response = servicer.Profile(request, mock_context)
+
+      self.assertIsInstance(response, profiler_service_pb2.ProfileResponse)
+      mock_start_trace.assert_called_once_with("gs://test_bucket/test_dir")
+      mock_stop_trace.assert_called_once()
+
+  def test_servicer_profile_failure(self):
+    with (
+        mock.patch.object(
+            jax.profiler, "start_trace", autospec=True
+        ) as mock_start_trace,
+        mock.patch.object(
+            jax.profiler, "stop_trace", autospec=True
+        ) as mock_stop_trace,
+    ):
+      servicer = profiling.PathwaysProfilerServicer()
+      request = profiler_service_pb2.ProfileRequest(
+          duration_ms=100, repository_root="gs://test_bucket/test_dir"
+      )
+      mock_context = mock.create_autospec(grpc.ServicerContext, instance=True)
+      mock_start_trace.side_effect = RuntimeError("start failed")
+
+      with self.assertRaisesRegex(RuntimeError, "start failed"):
+        servicer.Profile(request, mock_context)
+
+      mock_stop_trace.assert_called_once()
 
 
 if __name__ == "__main__":
