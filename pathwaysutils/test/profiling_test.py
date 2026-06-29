@@ -14,8 +14,8 @@
 
 import json
 import logging
-from unittest import mock
 from typing import Any
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -704,6 +704,14 @@ class ProfilingTest(parameterized.TestCase):
       profiling.start_trace(
           "gs://test_bucket/test_dir", profiler_options=options
       )
+
+  def test_export_profile_options(self):
+    self.assertEqual(profiling.ProfileOptions, jax.profiler.ProfileOptions)
+
+  def test_export_trace_data_classes(self):
+    self.assertEqual(profiling.ProfileData, jax.profiler.ProfileData)
+    self.assertEqual(profiling.ProfileEvent, jax.profiler.ProfileEvent)
+    self.assertEqual(profiling.ProfilePlane, jax.profiler.ProfilePlane)
 
 
 if __name__ == "__main__":
