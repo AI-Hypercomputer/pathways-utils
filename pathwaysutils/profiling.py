@@ -36,6 +36,9 @@ import uvicorn
 _logger = logging.getLogger(__name__)
 
 
+ProfileOptions = jax.profiler.ProfileOptions
+
+
 class _ProfileState:
   """Holds the state of an ongoing profiling session.
 
