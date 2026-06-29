@@ -13,24 +13,23 @@
 # limitations under the License.
 """Profiling Utilities."""
 
-import asyncio
 from collections.abc import Mapping
-import dataclasses
+import concurrent.futures
 import datetime
 import json
 import logging
 import os
 import threading
+import time
 from typing import Any
-import urllib.parse
 
-import fastapi
+import grpc
 import jax
 from jax import numpy as jnp
 from jax.extend import backend
 from pathwaysutils import plugin_executable
-import requests
-import uvicorn
+from tensorflow.core.profiler.protobuf import profiler_service_pb2  # pylint: disable=g-direct-tensorflow-import
+from tensorflow.core.profiler.protobuf import profiler_service_pb2_grpc  # pylint: disable=g-direct-tensorflow-import
 
 
 _logger = logging.getLogger(__name__)
@@ -326,10 +325,39 @@ def stop_trace() -> None:
     _original_stop_trace()
 
 
-_profiler_thread: threading.Thread | None = None
+_profiler_server: grpc.Server | None = None
+_profiler_server_lock = threading.Lock()
 
 
-def start_server(port: int, requires_backend: bool = True) -> None:
+class PathwaysProfilerServicer(
+    profiler_service_pb2_grpc.ProfilerServiceServicer
+):
+  """gRPC servicer for Pathways Profiler Service implementing tensorflow.ProfilerService."""
+
+  def Profile(
+      self,
+      request: profiler_service_pb2.ProfileRequest,
+      context: grpc.ServicerContext,
+  ) -> profiler_service_pb2.ProfileResponse:
+    del context
+    duration_ms = request.duration_ms
+    log_dir = request.repository_root
+    _logger.info("Received gRPC profile request for %s ms", duration_ms)
+    _logger.info("Writing profiling data to %s", log_dir)
+
+    try:
+      jax.profiler.start_trace(log_dir)
+      time.sleep(duration_ms / 1000.0)
+    finally:
+      _logger.info("Stopping trace")
+      jax.profiler.stop_trace()
+
+    return profiler_service_pb2.ProfileResponse()
+
+
+def start_server(
+    port: int, requires_backend: bool = True, use_alts: bool | None = None
+) -> None:
   """Starts the profiling server on port `port`.
 
   The signature matches `jax.profiler.start_server`, though no handle
@@ -339,43 +367,41 @@ def start_server(port: int, requires_backend: bool = True) -> None:
   Args:
     port: The port to start the server on.
     requires_backend: Unused in Pathways; accepted for parameter parity.
+    use_alts: Whether to use ALTS credentials. If None, defaults to checking
+      the PATHWAYS_PROFILER_USE_ALTS environment variable (defaulting to True).
   """
   del requires_backend
-  def server_loop(port: int):
-    _logger.debug("Starting JAX profiler server on port %s", port)
-    app = fastapi.FastAPI()
+  global _profiler_server
+  with _profiler_server_lock:
+    if _profiler_server is not None:
+      raise RuntimeError("Only one profiler server can be active at a time.")
 
-    @dataclasses.dataclass
-    class ProfilingConfig:
-      duration_ms: int
-      repository_path: str
+    if use_alts is None:
+      use_alts = os.environ.get("PATHWAYS_PROFILER_USE_ALTS", "1") == "1"
 
-    @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig) -> Mapping[str, str]:
-      _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
-      _logger.debug("Writing profiling data to %s", pc.repository_path)
-      await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
-      await asyncio.sleep(pc.duration_ms / 1e3)
-      await asyncio.to_thread(jax.profiler.stop_trace)
-      return {"response": "profiling completed"}
-
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")
-
-  global _profiler_thread
-  if _profiler_thread is not None:
-    raise RuntimeError("Only one profiler server can be active at a time.")
-
-  _profiler_thread = threading.Thread(target=server_loop, args=(port,))
-  _profiler_thread.start()
+    _logger.info("Starting JAX pathways profiler gRPC server on port %s", port)
+    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
+    profiler_service_pb2_grpc.add_ProfilerServiceServicer_to_server(
+        PathwaysProfilerServicer(), server
+    )
+    if use_alts:
+      server_creds = grpc.alts_server_credentials()
+      server.add_secure_port(f"[::]:{port}", server_creds)
+    else:
+      server.add_insecure_port(f"[::]:{port}")
+    server.start()
+    _profiler_server = server
 
 
 def stop_server() -> None:
-  """Raises an error if there is no active profiler server.
-
-  Pathways profiling servers are not stoppable at this time.
-  """
-  if _profiler_thread is None:
-    raise RuntimeError("No active profiler server.")
+  """Stops the active profiler server."""
+  global _profiler_server
+  with _profiler_server_lock:
+    if _profiler_server is None:
+      raise RuntimeError("No active profiler server.")
+    _logger.info("Stopping JAX pathways profiler gRPC server")
+    _profiler_server.stop(grace=5.0)
+    _profiler_server = None
 
 
 def collect_profile(
@@ -383,6 +409,7 @@ def collect_profile(
     duration_ms: int,
     host: str,
     log_dir: os.PathLike[str] | str,
+    use_alts: bool = True,
 ) -> bool:
   """Collects a JAX profile and saves it to the specified directory.
 
@@ -391,6 +418,7 @@ def collect_profile(
     duration_ms: The duration in milliseconds for which to collect the profile.
     host: The host on which the JAX profiler server is running.
     log_dir: The GCS path to save the profile data.
+    use_alts: Whether to connect using ALTS credentials.
 
   Returns:
     True if the profile was collected successfully, False otherwise.
@@ -401,16 +429,49 @@ def collect_profile(
   if not str(log_dir).startswith("gs://"):
     raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
 
-  request_json = {
-      "duration_ms": duration_ms,
-      "repository_path": log_dir,
-  }
-  address = urllib.parse.urljoin(f"http://{host}:{port}", "profiling")
+  target = f"{host}:{port}"
+  _logger.info("Connecting to profiling server at %s", target)
   try:
-    response = requests.post(address, json=request_json)
-    response.raise_for_status()
-  except requests.exceptions.RequestException:
-    _logger.exception("Failed to collect profiling data")
+    if use_alts:
+      creds = grpc.alts_channel_credentials()
+      channel = grpc.secure_channel(target, creds)
+    else:
+      channel = grpc.insecure_channel(target)
+
+    with channel:
+      stub = profiler_service_pb2_grpc.ProfilerServiceStub(channel)
+      request = profiler_service_pb2.ProfileRequest(
+          duration_ms=duration_ms,
+          repository_root=str(log_dir),
+      )
+      timeout = (duration_ms / 1000.0) + 10.0
+      _logger.info("Triggering profile for %s ms", duration_ms)
+      stub.Profile(request, timeout=timeout)
+      _logger.info("Profiling response completed successfully")
+      return True
+  except grpc.RpcError as e:
+    e_call: Any = e
+    if e_call.code() == grpc.StatusCode.UNAVAILABLE:
+      _logger.error(
+          "Failed to connect to the profiling server at %s. "
+          "Please verify that the server is running on this port. "
+          "Error details: %s",
+          target,
+          e_call,
+      )
+    elif e_call.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+      _logger.error(
+          "Profiling request timed out. The server might be unresponsive. "
+          "Error details: %s",
+          e_call,
+      )
+    else:
+      _logger.error(
+          "gRPC error occurred while collecting profile. "
+          "Error code: %s, details: %s",
+          e_call.code(),
+          e_call.details(),
+      )
     return False
 
   return True
