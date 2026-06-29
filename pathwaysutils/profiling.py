@@ -462,9 +462,11 @@ def monkey_patch_jax() -> None:
     start_server(port)
 
   jax.profiler.start_server = start_server_patch
+  jax._src.profiler.start_server = start_server_patch  # pylint: disable=protected-access
 
   def stop_server_patch() -> None:
     _logger.debug("jax.profile.stop_server patched with pathways' stop_server")
     stop_server()
 
   jax.profiler.stop_server = stop_server_patch
+  jax._src.profiler.stop_server = stop_server_patch  # pylint: disable=protected-access

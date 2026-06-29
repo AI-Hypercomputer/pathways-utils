@@ -439,6 +439,8 @@ class ProfilingTest(parameterized.TestCase):
         (jax.profiler, "stop_server"),
         (jax._src.profiler, "start_trace"),
         (jax._src.profiler, "stop_trace"),
+        (jax._src.profiler, "start_server"),
+        (jax._src.profiler, "stop_server"),
     ]
     original_jax_funcs = {}
     for module, func_name in targets:
@@ -515,17 +517,25 @@ class ProfilingTest(parameterized.TestCase):
 
     mocks["stop_trace"].assert_called_once()
 
-  def test_monkey_patched_start_server(self):
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_start_server(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    jax.profiler.start_server(1234)
+    profiler_module.start_server(1234)
 
     mocks["start_server"].assert_called_once_with(1234)
 
-  def test_monkey_patched_stop_server(self):
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_stop_server(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    jax.profiler.stop_server()
+    profiler_module.stop_server()
 
     mocks["stop_server"].assert_called_once()
 
