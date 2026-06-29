@@ -15,6 +15,7 @@
 
 import asyncio
 from collections.abc import Mapping
+import contextlib
 import dataclasses
 import datetime
 import json
@@ -326,6 +327,28 @@ def stop_trace() -> None:
     _original_stop_trace()
 
 
+@contextlib.contextmanager
+def trace(
+    log_dir: str,
+    create_perfetto_link: bool = False,
+    create_perfetto_trace: bool = False,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
+    max_num_hosts: int = 1,
+):
+  """Context manager to take a profiler trace in Pathways."""
+  start_trace(
+      log_dir,
+      create_perfetto_link=create_perfetto_link,
+      create_perfetto_trace=create_perfetto_trace,
+      profiler_options=profiler_options,
+      max_num_hosts=max_num_hosts,
+  )
+  try:
+    yield
+  finally:
+    stop_trace()
+
+
 _profiler_thread: threading.Thread | None = None
 
 
@@ -454,6 +477,25 @@ def monkey_patch_jax() -> None:
 
   jax.profiler.stop_trace = stop_trace_patch
   jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
+
+  def trace_patch(
+      log_dir: str,
+      create_perfetto_link: bool = False,
+      create_perfetto_trace: bool = False,
+      profiler_options: jax.profiler.ProfileOptions | None = None,
+      max_num_hosts: int = 1,
+  ):
+    _logger.debug("jax.profile.trace patched with pathways' trace")
+    return trace(
+        log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=profiler_options,
+        max_num_hosts=max_num_hosts,
+    )
+
+  jax.profiler.trace = trace_patch
+  jax._src.profiler.trace = trace_patch  # pylint: disable=protected-access
 
   def start_server_patch(port: int) -> None:
     _logger.debug(

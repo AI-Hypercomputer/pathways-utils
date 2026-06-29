@@ -435,10 +435,12 @@ class ProfilingTest(parameterized.TestCase):
     targets = [
         (jax.profiler, "start_trace"),
         (jax.profiler, "stop_trace"),
+        (jax.profiler, "trace"),
         (jax.profiler, "start_server"),
         (jax.profiler, "stop_server"),
         (jax._src.profiler, "start_trace"),
         (jax._src.profiler, "stop_trace"),
+        (jax._src.profiler, "trace"),
     ]
     original_jax_funcs = {}
     for module, func_name in targets:
@@ -460,6 +462,9 @@ class ProfilingTest(parameterized.TestCase):
         ),
         "stop_trace": self.enter_context(
             mock.patch.object(profiling, "stop_trace", autospec=True)
+        ),
+        "trace": self.enter_context(
+            mock.patch.object(profiling, "trace", autospec=True)
         ),
         "start_server": self.enter_context(
             mock.patch.object(profiling, "start_server", autospec=True)
@@ -666,14 +671,23 @@ class ProfilingTest(parameterized.TestCase):
       profiling.stop_trace()
     self.mock_original_stop_trace.assert_called_once()
 
-  def test_jax_profiler_trace_calls_patched_functions(self):
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_trace(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    with jax.profiler.trace("gs://bucket/dir"):
+    with profiler_module.trace("gs://bucket/dir", max_num_hosts=3):
       pass
 
-    mocks["start_trace"].assert_called_once()
-    mocks["stop_trace"].assert_called_once()
+    mocks["trace"].assert_called_once_with(
+        "gs://bucket/dir",
+        create_perfetto_link=False,
+        create_perfetto_trace=False,
+        profiler_options=None,
+        max_num_hosts=3,
+    )
 
   @absltest.skipIf(
       jax.version.__version_info__ < (0, 9, 2),
