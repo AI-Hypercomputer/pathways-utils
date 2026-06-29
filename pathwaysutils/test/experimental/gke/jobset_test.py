@@ -128,9 +128,82 @@ class PathwaysJobSetTest(parameterized.TestCase):
   def test_monkeypatch_restart_policy(self):
     # Construct V1Container with restart_policy to test monkeypatch.
     c = client.V1Container(
-        name="test", restart_policy="Always"
+        name="test",
+        restart_policy="Always"
     )  # pytype: disable=wrong-keyword-args
     self.assertEqual(getattr(c, "restart_policy"), "Always")
+
+  def test_worker_job(self):
+    js = jobset.PathwaysJobSet(
+        name="test-jobset",
+        namespace="default",
+        pathways_dir="gs://test-bucket",
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=2,
+        max_slice_restarts=3,
+        termination_grace_period_seconds=60,
+    )
+    config = js.to_dict()
+
+    replicated_jobs = config["spec"]["replicatedJobs"]
+    worker_job = next(
+        j for j in replicated_jobs if j["name"] == "pathways-worker"
+    )
+    parsed_number_of_slices = worker_job["replicas"]
+    self.assertEqual(parsed_number_of_slices, 2)
+
+    # 4x8 v5e topology has 32 chips. v5e has 4 chips per VM.
+    # Total VMs = 32 / 4 = 8 VMs.
+    job_spec = worker_job["template"]["spec"]
+    self.assertEqual(job_spec["completions"], 8)
+    self.assertEqual(job_spec["parallelism"], 8)
+    # backoffLimit = num_vms * max_slice_restarts = 8 * 3 = 24
+    self.assertEqual(job_spec["backoffLimit"], 24)
+
+    pod_spec = job_spec["template"]["spec"]
+    self.assertTrue(pod_spec["hostNetwork"])
+    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertEqual(pod_spec["restartPolicy"], "OnFailure")
+    self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 60)
+
+    # Node selector
+    self.assertEqual(
+        pod_spec["nodeSelector"]["cloud.google.com/gke-tpu-accelerator"],
+        "tpu-v5-lite-podslice",
+    )
+    self.assertEqual(
+        pod_spec["nodeSelector"]["cloud.google.com/gke-tpu-topology"], "4x8"
+    )
+
+    # Container limits
+    container = pod_spec["containers"][0]
+    self.assertEqual(container["name"], "pathways-worker")
+    self.assertEqual(container["resources"]["limits"]["google.com/tpu"], "4")
+
+  def test_worker_job_small_topology(self):
+    js = jobset.PathwaysJobSet(
+        name="test-jobset",
+        namespace="default",
+        pathways_dir="gs://test-bucket",
+        tpu_type="v5e",
+        topology="1x1",
+        num_slices=1,
+    )
+    config = js.to_dict()
+
+    worker_job = next(
+        j
+        for j in config["spec"]["replicatedJobs"]
+        if j["name"] == "pathways-worker"
+    )
+    # 1x1 v5e topology has 1 chip. v5e has 4 chips per VM.
+    # Since total_chips (1) < chips_per_vm (4), num_vms should be 1.
+    job_spec = worker_job["template"]["spec"]
+    self.assertEqual(job_spec["completions"], 1)
+    self.assertEqual(job_spec["parallelism"], 1)
+    # default backoffLimit = num_vms * 4 = 1 * 4 = 4
+    self.assertEqual(job_spec["backoffLimit"], 4)
 
 
 if __name__ == "__main__":
