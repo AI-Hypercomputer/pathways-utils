@@ -439,6 +439,7 @@ class ProfilingTest(parameterized.TestCase):
         (jax.profiler, "stop_server"),
         (jax._src.profiler, "start_trace"),
         (jax._src.profiler, "stop_trace"),
+        (jax._src.profiler, "stop_and_get_fdo_profile"),
     ]
     original_jax_funcs = {}
     for module, func_name in targets:
@@ -460,6 +461,11 @@ class ProfilingTest(parameterized.TestCase):
         ),
         "stop_trace": self.enter_context(
             mock.patch.object(profiling, "stop_trace", autospec=True)
+        ),
+        "stop_and_get_fdo_profile": self.enter_context(
+            mock.patch.object(
+                profiling, "stop_and_get_fdo_profile", autospec=True
+            )
         ),
         "start_server": self.enter_context(
             mock.patch.object(profiling, "start_server", autospec=True)
@@ -514,6 +520,17 @@ class ProfilingTest(parameterized.TestCase):
     profiler_module.stop_trace()
 
     mocks["stop_trace"].assert_called_once()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_stop_and_get_fdo_profile(self, profiler_module):
+    mocks = self._setup_monkey_patch()
+
+    if hasattr(profiler_module, "stop_and_get_fdo_profile"):
+      profiler_module.stop_and_get_fdo_profile()
+      mocks["stop_and_get_fdo_profile"].assert_called_once()
 
   def test_monkey_patched_start_server(self):
     mocks = self._setup_monkey_patch()

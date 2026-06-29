@@ -94,6 +94,9 @@ _first_profile_start = True
 _profile_state = _ProfileState()
 _original_start_trace = jax.profiler.start_trace
 _original_stop_trace = jax.profiler.stop_trace
+_original_stop_and_get_fdo_profile = getattr(
+    jax._src.profiler, "stop_and_get_fdo_profile", None  # pylint: disable=protected-access
+)
 
 
 def toy_computation() -> None:
@@ -326,6 +329,23 @@ def stop_trace() -> None:
     _original_stop_trace()
 
 
+def stop_and_get_fdo_profile() -> Any:
+  """Stops the currently-running profiler trace and exports fdo_profile."""
+  try:
+    with _profile_state.lock:
+      if _profile_state.executable is not None:
+        try:
+          _profile_state.call_profile_executable()
+        finally:
+          _profile_state.reset()
+  finally:
+    if _original_stop_and_get_fdo_profile is not None:
+      return _original_stop_and_get_fdo_profile()
+    raise NotImplementedError(
+        "stop_and_get_fdo_profile is not supported in this version of JAX."
+    )
+
+
 _profiler_thread: threading.Thread | None = None
 
 
@@ -454,6 +474,17 @@ def monkey_patch_jax() -> None:
 
   jax.profiler.stop_trace = stop_trace_patch
   jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
+
+  def stop_and_get_fdo_profile_patch() -> Any:
+    _logger.debug("jax._src.profiler.stop_and_get_fdo_profile patched")
+    return stop_and_get_fdo_profile()
+
+  if hasattr(jax._src.profiler, "stop_and_get_fdo_profile"):
+    jax._src.profiler.stop_and_get_fdo_profile = (  # pylint: disable=protected-access
+        stop_and_get_fdo_profile_patch
+    )
+  if hasattr(jax.profiler, "stop_and_get_fdo_profile"):
+    jax.profiler.stop_and_get_fdo_profile = stop_and_get_fdo_profile_patch
 
   def start_server_patch(port: int) -> None:
     _logger.debug(
