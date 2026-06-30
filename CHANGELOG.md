@@ -23,6 +23,18 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-30
+## What's Changed
+* Add retry_policy and deprecate max_retries in pathwaysutils.elastic.manager.elastic_retry. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/246
+* Add support for a static colocated Python sidecar by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/243
+* Refactor pathwaysutils resharding APIs to establish IFRT/sidechannel split. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/248
+* Add cluster and job name labels to Shared Pathways Service metrics by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/249
+* fix serialization of int values matching tensorflow.ProfileOptions.AdvancedConfigValue by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/260
+* Add sidecar image version validation to ISC Pathways connection by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/247
+* Fix JAX device compatibility in profiling.py for elasticity. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/261
+* Add Worker Job configuration to PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/251
+* Monkey-patch jax._src.profiler.start_server and stop_server in pathwaysutils by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/266
+
 ## [0.1.9] - 2026-06-12
 ## What's Changed
 * Add `--dns-endpoint` to the get-credentials command by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/224
