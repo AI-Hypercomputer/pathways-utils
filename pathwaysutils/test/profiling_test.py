@@ -524,9 +524,9 @@ class ProfilingTest(parameterized.TestCase):
   def test_monkey_patched_start_server(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    profiler_module.start_server(1234)
+    profiler_module.start_server(1234, requires_backend=False)
 
-    mocks["start_server"].assert_called_once_with(1234)
+    mocks["start_server"].assert_called_once_with(1234, requires_backend=False)
 
   @parameterized.named_parameters(
       dict(testcase_name="jax_profiler", profiler_module=jax.profiler),

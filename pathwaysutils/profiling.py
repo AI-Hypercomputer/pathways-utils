@@ -329,16 +329,18 @@ def stop_trace() -> None:
 _profiler_thread: threading.Thread | None = None
 
 
-def start_server(port: int) -> None:
+def start_server(port: int, requires_backend: bool = True) -> None:
   """Starts the profiling server on port `port`.
 
-  The signature is slightly different from `jax.profiler.start_server`
-  because no handle to the server is returned because there is no
+  The signature matches `jax.profiler.start_server`, though no handle
+  to the server is returned because there is no
   `xla_client.profiler.ProfilerServer` to return.
 
   Args:
-    port : The port to start the server on.
+    port: The port to start the server on.
+    requires_backend: Unused in Pathways; accepted for parameter parity.
   """
+  del requires_backend
   def server_loop(port: int):
     _logger.debug("Starting JAX profiler server on port %s", port)
     app = fastapi.FastAPI()
@@ -455,11 +457,11 @@ def monkey_patch_jax() -> None:
   jax.profiler.stop_trace = stop_trace_patch
   jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
 
-  def start_server_patch(port: int) -> None:
+  def start_server_patch(port: int, requires_backend: bool = True) -> None:
     _logger.debug(
         "jax.profile.start_server patched with pathways' start_server"
     )
-    start_server(port)
+    start_server(port, requires_backend=requires_backend)
 
   jax.profiler.start_server = start_server_patch
   jax._src.profiler.start_server = start_server_patch  # pylint: disable=protected-access
