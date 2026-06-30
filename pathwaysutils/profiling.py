@@ -94,6 +94,9 @@ _first_profile_start = True
 _profile_state = _ProfileState()
 _original_start_trace = jax.profiler.start_trace
 _original_stop_trace = jax.profiler.stop_trace
+_original_register_subprocess = getattr(
+    jax._src.profiler, "register_subprocess", None  # pylint: disable=protected-access
+)
 
 
 def toy_computation() -> None:
@@ -326,6 +329,15 @@ def stop_trace() -> None:
     _original_stop_trace()
 
 
+def register_subprocess(pid: int, port: int) -> Any:
+  """Registers a subprocess's profiler server to be profiled alongside the current process."""
+  if _original_register_subprocess is not None:
+    return _original_register_subprocess(pid, port)
+  raise NotImplementedError(
+      "register_subprocess is not supported in this version of JAX."
+  )
+
+
 _profiler_thread: threading.Thread | None = None
 
 
@@ -470,3 +482,14 @@ def monkey_patch_jax() -> None:
 
   jax.profiler.stop_server = stop_server_patch
   jax._src.profiler.stop_server = stop_server_patch  # pylint: disable=protected-access
+
+  def register_subprocess_patch(pid: int, port: int) -> Any:
+    _logger.debug("jax.profiler.register_subprocess patched with pathways'")
+    return register_subprocess(pid, port)
+
+  if hasattr(jax._src.profiler, "register_subprocess"):
+    jax._src.profiler.register_subprocess = (  # pylint: disable=protected-access
+        register_subprocess_patch
+    )
+  if hasattr(jax.profiler, "register_subprocess"):
+    jax.profiler.register_subprocess = register_subprocess_patch

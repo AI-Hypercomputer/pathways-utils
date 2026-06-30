@@ -433,14 +433,20 @@ class ProfilingTest(parameterized.TestCase):
   def _setup_monkey_patch(self):
     """Saves originals, applies monkey patch, and sets up mocks."""
     targets = [
-        (jax.profiler, "start_trace"),
-        (jax.profiler, "stop_trace"),
-        (jax.profiler, "start_server"),
-        (jax.profiler, "stop_server"),
-        (jax._src.profiler, "start_trace"),
-        (jax._src.profiler, "stop_trace"),
-        (jax._src.profiler, "start_server"),
-        (jax._src.profiler, "stop_server"),
+        (module, func_name)
+        for module, func_name in [
+            (jax.profiler, "start_trace"),
+            (jax.profiler, "stop_trace"),
+            (jax.profiler, "start_server"),
+            (jax.profiler, "stop_server"),
+            (jax.profiler, "register_subprocess"),
+            (jax._src.profiler, "start_trace"),
+            (jax._src.profiler, "stop_trace"),
+            (jax._src.profiler, "start_server"),
+            (jax._src.profiler, "stop_server"),
+            (jax._src.profiler, "register_subprocess"),
+        ]
+        if hasattr(module, func_name)
     ]
     original_jax_funcs = {}
     for module, func_name in targets:
@@ -468,6 +474,9 @@ class ProfilingTest(parameterized.TestCase):
         ),
         "stop_server": self.enter_context(
             mock.patch.object(profiling, "stop_server", autospec=True)
+        ),
+        "register_subprocess": self.enter_context(
+            mock.patch.object(profiling, "register_subprocess", autospec=True)
         ),
     }
     return mocks
@@ -538,6 +547,17 @@ class ProfilingTest(parameterized.TestCase):
     profiler_module.stop_server()
 
     mocks["stop_server"].assert_called_once()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_register_subprocess(self, profiler_module):
+    mocks = self._setup_monkey_patch()
+
+    if hasattr(profiler_module, "register_subprocess"):
+      profiler_module.register_subprocess(12345, 9090)
+      mocks["register_subprocess"].assert_called_once_with(12345, 9090)
 
   @parameterized.parameters(None, jax.profiler.ProfileOptions())
   def test_create_profile_request_default_options(self, profiler_options):
