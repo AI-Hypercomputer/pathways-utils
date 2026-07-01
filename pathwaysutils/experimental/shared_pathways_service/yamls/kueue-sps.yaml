@@ -1,0 +1,32 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: ${DEPLOYMENT_NAME}-tpu-${TPU_TYPE}
+spec:
+  nodeLabels:
+    cloud.google.com/gke-tpu-accelerator: ${ACCELERATOR_LABEL}
+    cloud.google.com/gke-tpu-topology: ${TOPOLOGY}
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: ${DEPLOYMENT_NAME}-shared-tpu-q
+spec:
+  namespaceSelector: {} # Match all namespaces
+  cohort: tpu-pool
+  resourceGroups:
+  - coveredResources: ["google.com/tpu"]
+    flavors:
+    - name: tpu-${TPU_TYPE}
+      resources:
+      - name: "google.com/tpu"
+        nominalQuota: "${NOMINAL_QUOTA}" # 2 slices of 32 chips = 64 chips
+
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: ${DEPLOYMENT_NAME}-shared-tpu-local-q
+  namespace: default
+spec:
+  clusterQueue: ${DEPLOYMENT_NAME}-shared-tpu-q
