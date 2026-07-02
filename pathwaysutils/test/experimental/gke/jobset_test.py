@@ -129,7 +129,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     # Construct V1Container with restart_policy to test monkeypatch.
     c = client.V1Container(
         name="test",
-        restart_policy="Always"
+        restart_policy="Always"  # pyrefly: ignore[unexpected-keyword]
     )  # pytype: disable=wrong-keyword-args
     self.assertEqual(getattr(c, "restart_policy"), "Always")
 

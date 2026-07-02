@@ -164,7 +164,7 @@ class PathwaysJobSet:
         pathways_dir=pathways_dir,
         num_vms=num_vms,
         chips_per_vm=chips_per_vm,
-        gke_accel_type=gke_accel_type,
+        gke_accel_type=gke_accel_type,  # pyrefly: ignore[bad-argument-type]
         topology=topology,
         image_tag=image_tag,
         max_slice_restarts=max_slice_restarts,
@@ -306,8 +306,8 @@ class PathwaysJobSet:
       head_pod_spec.host_network = True
       head_pod_spec.dns_policy = "ClusterFirstWithHostNet"
 
-      rm_container.restart_policy = "Always"
-      proxy_container.restart_policy = "Always"
+      rm_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
+      proxy_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
       init_containers = head_pod_spec.init_containers or []
       init_containers.extend([rm_container, proxy_container])
@@ -566,11 +566,11 @@ class PathwaysJobSet:
         },
     }
     if self._labels:
-      jobset_config["metadata"]["labels"] = self._labels
+      jobset_config["metadata"]["labels"] = self._labels  # pyrefly: ignore[bad-assignment]
     if self._annotations:
-      jobset_config["metadata"]["annotations"] = self._annotations
+      jobset_config["metadata"]["annotations"] = self._annotations  # pyrefly: ignore[bad-assignment]
     if self._success_policy:
-      jobset_config["spec"]["successPolicy"] = self._success_policy
+      jobset_config["spec"]["successPolicy"] = self._success_policy  # pyrefly: ignore[bad-assignment]
 
     return jobset_config
 

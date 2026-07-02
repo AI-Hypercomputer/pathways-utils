@@ -368,7 +368,7 @@ def find_intermediate_sharding(
 
   intermediate_mesh, intermediate_spec, replicated_axes = (
       _build_intermediate_mesh_and_spec(
-          in_sharding.mesh,
+          in_sharding.mesh,  # pyrefly: ignore[bad-argument-type]
           in_sharding.spec,
           src_dims,
           dst_dims,

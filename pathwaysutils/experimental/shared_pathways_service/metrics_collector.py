@@ -247,7 +247,7 @@ class MetricsCollector:
     try:
       self.client.create_metric_descriptor(
           name=f"projects/{self.project_id}",
-          metric_descriptor={
+          metric_descriptor={  # pyrefly: ignore[bad-argument-type]
               "type": metric_type,
               "metric_kind": metric_kind,
               "value_type": value_type,

@@ -463,8 +463,8 @@ def monkey_patch_jax() -> None:
     )
     start_server(port, requires_backend=requires_backend)
 
-  jax.profiler.start_server = start_server_patch
-  jax._src.profiler.start_server = start_server_patch  # pylint: disable=protected-access
+  jax.profiler.start_server = start_server_patch  # pyrefly: ignore[bad-assignment]
+  jax._src.profiler.start_server = start_server_patch  # pylint: disable=protected-access  # pyrefly: ignore[bad-assignment]
 
   def stop_server_patch() -> None:
     _logger.debug("jax.profile.stop_server patched with pathways' stop_server")

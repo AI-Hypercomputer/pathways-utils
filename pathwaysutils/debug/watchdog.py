@@ -34,7 +34,7 @@ def _log_thread_stack(thread: threading.Thread):
   _logger.debug(
       "".join(
           traceback.format_stack(
-              sys._current_frames().get(  # pylint: disable=protected-access
+              sys._current_frames().get(  # pylint: disable=protected-access  # pyrefly: ignore[no-matching-overload]
                   thread.ident, []
               )
           )

@@ -138,7 +138,7 @@ class Manager:
   @property
   def inactive_slice_indices(self) -> set[int]:
     """The set of inactive slice indices."""
-    return self.all_slice_indices - self.active_slice_indices
+    return self.all_slice_indices - self.active_slice_indices  # pyrefly: ignore[bad-return]
 
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
@@ -363,7 +363,7 @@ class Manager:
 
           attempt += 1
 
-      return wrapper
+      return wrapper  # pyrefly: ignore[bad-return]
 
     return decorator
 

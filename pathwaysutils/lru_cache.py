@@ -40,9 +40,9 @@ def lru_cache(
     cached = functools.lru_cache(maxsize=maxsize)(f)
     wrapper = functools.wraps(f)(cached)
 
-    wrapper.cache_clear = cached.cache_clear
-    wrapper.cache_info = cached.cache_info
+    wrapper.cache_clear = cached.cache_clear  # pyrefly: ignore[missing-attribute]
+    wrapper.cache_info = cached.cache_info  # pyrefly: ignore[missing-attribute]
     backend.register_backend_cache(wrapper, "Pathways LRU cache")
-    return wrapper
+    return wrapper  # pyrefly: ignore[bad-return]
 
   return wrap
