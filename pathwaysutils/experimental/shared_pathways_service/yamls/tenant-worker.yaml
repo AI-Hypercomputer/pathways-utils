@@ -1,11 +1,12 @@
 apiVersion: jobset.x-k8s.io/v1alpha2
 kind: JobSet
 metadata:
-  name: ${JOBSET_NAME}
+  name: ${WORKER_NAME}
   namespace: default
+  labels:
+    kueue.x-k8s.io/queue-name: ${QUEUE_NAME}
 spec:
-  coordinator:
-    replicatedJob: pathways-head
+  suspend: true
   failurePolicy:
     maxRestarts: 1
     restartStrategy: Recreate
@@ -13,61 +14,8 @@ spec:
     enableDNSHostnames: true
     publishNotReadyAddresses: true
   replicatedJobs:
-  - name: pathways-head
-    replicas: 1
-    template:
-      metadata:
-        annotations:
-          alpha.jobset.sigs.k8s.io/exclusive-topology: kubernetes.io/hostname
-      spec:
-        backoffLimit: 3
-        completionMode: Indexed
-        completions: 1
-        parallelism: 1
-        template:
-          metadata:
-            annotations:
-              alpha.jobset.sigs.k8s.io/exclusive-topology: kubernetes.io/hostname
-          spec:
-            containers:
-            - name: pathways-rm
-              image: ${SERVER_IMAGE}
-              imagePullPolicy: Always
-              args:
-              - --server_port=29001
-              - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
-              - --node_type=resource_manager
-              - --instance_count=${NUM_SLICES}
-              - --instance_type=${INSTANCE_TYPE}
-              env:
-              - name: REPLICATED_JOB_NAME
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']
-              - name: JOBSET_NAME
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
-              - name: HOST_ADDRESS
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
-              - name: TPU_SKIP_MDS_QUERY
-                value: "true"
-              ports:
-              - containerPort: 29001
-                protocol: TCP
-              - containerPort: 29002
-                protocol: TCP
-              resources:
-                limits:
-                  cpu: "8"
-                  memory: 32G
-            dnsPolicy: ClusterFirstWithHostNet
-            hostNetwork: true
-            restartPolicy: OnFailure
   - name: worker
-    replicas: ${NUM_SLICES}
+    replicas: 1 # We run 1 slice per JobSet
     template:
       spec:
         backoffLimit: 1000000
@@ -85,7 +33,7 @@ spec:
               imagePullPolicy: Always
               args:
               - --server_port=29005
-              - --resource_manager_address=$$(PATHWAYS_HEAD):29001
+              - --resource_manager_address=${PATHWAYS_RM_SERVICE_ADDRESS}
               - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
               - --cloud_pathways_sidecar_shm_directory=${SIDECAR_SHM_DIR}
               env:
@@ -98,9 +46,7 @@ spec:
               - name: MEGASCALE_GRPC_ENABLE_XOR_TRACER
                 value: "false"
               - name: MEGASCALE_NUM_SLICES
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.labels['jobset.sigs.k8s.io/replicatedjob-replicas']
+                value: "1" # Each JobSet is 1 slice
               - name: JOBSET_NAME
                 valueFrom:
                   fieldRef:
@@ -110,17 +56,11 @@ spec:
                   fieldRef:
                     fieldPath: metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']
               - name: MEGASCALE_SLICE_ID
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.labels['jobset.sigs.k8s.io/job-index']
+                value: "0" # Only 1 slice in this JobSet
               - name: PATHWAYS_HEAD
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+                value: pathways-rm-service
               - name: MEGASCALE_COORDINATOR_ADDRESS
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
+                value: pathways-rm-service
               ports:
               - containerPort: 29005
                 protocol: TCP
@@ -144,27 +84,25 @@ spec:
               imagePullPolicy: Always
               env:
               - name: GRPC_SERVER_ADDRESS
-                value: '''0.0.0.0:50051'''
+                value: '0.0.0.0:50051'
               - name: CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY
                 value: ${SIDECAR_SHM_DIR}
               - name: PYTHONUNBUFFERED
                 value: '1'
-              # --- High Verbosity Logging Variables ---
               - name: LOGLEVEL
                 value: 'DEBUG'
               - name: GLOG_minloglevel
-                value: '0' # 0 = INFO level base
+                value: '0'
               - name: GLOG_v
-                value: '5' # Extreme verbosity for all C++ modules
+                value: '5'
               - name: TF_CPP_MIN_LOG_LEVEL
                 value: '0'
               - name: TF_CPP_MIN_VLOG_LEVEL
-                value: '5' # TF/XLA verbose logging
+                value: '5'
               - name: TPU_MIN_LOG_LEVEL
                 value: '0'
               - name: GLOG_vmodule
                 value: 'jax_array_handlers=5,type_handlers=5,tensorstore_utils=5'
-              # ----------------------------------------
               ports:
               - containerPort: 50051
                 protocol: TCP
