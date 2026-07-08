@@ -57,12 +57,29 @@ _PROXY_SERVER_IMAGE = flags.DEFINE_string(
     "",
     "The proxy server image to use. If not provided, a default will be used.",
 )
+_SERVER_IMAGE = flags.DEFINE_string(
+    "server_image",
+    "",
+    "The server image to use for workers. If not provided, a default will be"
+    " used.",
+)
 _PROXY_OPTIONS = flags.DEFINE_list(
     "proxy_options",
     [],
     "Configuration options for the Pathways proxy. Specify entries in the form"
     ' "key:value". For example: --proxy_options=use_insecure_credentials:true'
     ' or --proxy_options=xla_flags:"--xla_flag1 --xla_flag2"',
+)
+_SIDECAR_IMAGE = flags.DEFINE_string(
+    "sidecar_image",
+    None,
+    "The custom sidecar image for the tenant worker. If provided, workers will "
+    "be deployed dynamically.",
+)
+_QUEUE_NAME = flags.DEFINE_string(
+    "queue_name",
+    "shared-tpu-local-queue",
+    "The Kueue LocalQueue name.",
 )
 _COMMAND = flags.DEFINE_string(
     "command", None, "The command to run on TPUs.", required=True
@@ -88,8 +105,11 @@ def run_command(
     tpu_count: int,
     command: str,
     proxy_server_image: str | None = None,
+    server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
+    sidecar_image: str | None = None,
+    queue_name: str = "shared-tpu-local-queue",
     connect_fn: Callable[..., ContextManager[Any]] = isc_pathways.connect,
 ) -> None:
   """Run the TPU workload within a Shared Pathways connection.
@@ -104,9 +124,12 @@ def run_command(
     tpu_count: The number of TPU slices.
     command: The command to run on TPUs.
     proxy_server_image: The proxy server image to use.
+    server_image: The server image to use for workers.
     proxy_options: Configuration options for the Pathways proxy.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service. Defaults to False.
+    sidecar_image: The custom sidecar image for the tenant worker.
+    queue_name: The Kueue LocalQueue name.
     connect_fn: The function to use for establishing the connection context,
       expected to be a callable that returns a context manager.
 
@@ -126,8 +149,15 @@ def run_command(
           if proxy_server_image
           else isc_pathways.DEFAULT_PROXY_IMAGE
       ),
+      server_image=(
+          server_image
+          if server_image
+          else None
+      ),
       proxy_options=proxy_options,
       collect_service_metrics=collect_service_metrics,
+      sidecar_image=sidecar_image,
+      queue_name=queue_name,
   ):
     logging.info("Connection established. Running command: %r", command)
     try:
@@ -157,8 +187,11 @@ def main(argv: Sequence[str]) -> None:
       tpu_count=_TPU_COUNT.value,
       command=_COMMAND.value,
       proxy_server_image=_PROXY_SERVER_IMAGE.value,
+      server_image=_SERVER_IMAGE.value,
       proxy_options=_PROXY_OPTIONS.value,
       collect_service_metrics=_COLLECT_SERVICE_METRICS.value,
+      sidecar_image=_SIDECAR_IMAGE.value,
+      queue_name=_QUEUE_NAME.value,
   )
 
 

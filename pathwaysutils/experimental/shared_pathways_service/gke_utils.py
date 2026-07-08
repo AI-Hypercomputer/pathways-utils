@@ -531,3 +531,95 @@ def get_worker_sidecar_image(
   return None
 
 
+def get_rm_server_image(
+    pathways_service: str, namespace: str = "default"
+) -> str | None:
+  """Gets the server image used by the Pathways Resource Manager Service."""
+  pathways_head_hostname = pathways_service.split(":")[0]
+  _validate_k8s_name(namespace)
+  _validate_k8s_name(pathways_head_hostname)
+
+  # 1. Get the Service to find its selector
+  get_service_cmd = [
+      "kubectl",
+      "get",
+      "service",
+      pathways_head_hostname,
+      "-n",
+      namespace,
+      "-o",
+      "json",
+  ]
+  try:
+    result = subprocess.run(
+        get_service_cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    service_data = json.loads(result.stdout)
+    selector = service_data.get("spec", {}).get("selector")
+    if not selector:
+      _logger.warning(
+          "No selector found for service %s in namespace %s",
+          pathways_head_hostname,
+          namespace,
+      )
+      return None
+  except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
+    _logger.exception(
+        "Failed to get selector for service %s: %r",
+        pathways_head_hostname,
+        e,
+    )
+    return None
+
+  # 2. Format the label selector
+  label_selector = ",".join(f"{k}={v}" for k, v in selector.items())
+
+  # 3. Get Pods matching the selector
+  get_pods_cmd = [
+      "kubectl",
+      "get",
+      "pods",
+      "-n",
+      namespace,
+      "-l",
+      label_selector,
+      "-o",
+      "json",
+  ]
+  try:
+    result = subprocess.run(
+        get_pods_cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pods_data = json.loads(result.stdout)
+    items = pods_data.get("items", [])
+    if not items:
+      _logger.warning(
+          "No pods found matching selector %s in namespace %s",
+          label_selector,
+          namespace,
+      )
+      return None
+
+    # Get the image from the first container of the first matching pod
+    pod_spec = items[0].get("spec", {})
+    containers = pod_spec.get("containers", [])
+    if containers:
+      image = containers[0].get("image")
+      if image:
+        return image
+
+  except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
+    _logger.exception(
+        "Failed to get pods or parse image for selector %s: %r",
+        label_selector,
+        e,
+    )
+    return None
+
+  return None

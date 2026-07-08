@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${DEPLOYMENT_NAME}-rm
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${DEPLOYMENT_NAME}-rm
+  template:
+    metadata:
+      labels:
+        app: ${DEPLOYMENT_NAME}-rm
+    spec:
+      containers:
+      - name: ${DEPLOYMENT_NAME}-rm
+        image: ${SERVER_IMAGE}
+        imagePullPolicy: Always
+        args:
+        - --server_port=29001
+        - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
+        - --node_type=resource_manager
+        - --instance_count=${NUM_SLICES}
+        - --instance_type=${INSTANCE_TYPE}
+        ports:
+        - containerPort: 29001
+          protocol: TCP
+        - containerPort: 29002
+          protocol: TCP
+        resources:
+          limits:
+            cpu: "8"
+            memory: 32G
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${DEPLOYMENT_NAME}-rm-svc
+  namespace: default
+spec:
+  selector:
+    app: ${DEPLOYMENT_NAME}-rm
+  ports:
+  - name: rm-port
+    port: 29001
+    targetPort: 29001
+  - name: rm-port-2
+    port: 29002
+    targetPort: 29002
+  type: ClusterIP

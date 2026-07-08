@@ -18,11 +18,15 @@ import jax.extend.backend as jax_backend
 import pathwaysutils
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
 from pathwaysutils.experimental.shared_pathways_service import metrics_collector
+from pathwaysutils.experimental.shared_pathways_service import tpu_specs
 from pathwaysutils.experimental.shared_pathways_service import validators
 
 
 PROXY_FILEPATH = os.path.join(
     os.path.dirname(__file__), "yamls/pw-proxy.yaml"
+)
+WORKER_FILEPATH = os.path.join(
+    os.path.dirname(__file__), "yamls/tenant-worker.yaml"
 )
 # TODO(b/459935429): Hardcoding the port and using hostNetwork: true in the
 # proxy YAML limits us to one proxy server pod per node. Consider alternative
@@ -35,6 +39,9 @@ _JAX_BACKEND_TARGET_KEY = "jax_backend_target"
 _JAX_BACKEND_TARGET_HOSTNAME = "grpc://127.0.0.1"
 DEFAULT_PROXY_IMAGE = (
     "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
+)
+DEFAULT_SERVER_IMAGE = (
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest"
 )
 
 _logger = logging.getLogger(__name__)
@@ -88,6 +95,38 @@ class ProxyOptions:
         xla_flags=xla_flags,
         sidecar=use_sidecar,
     )
+
+
+def _deploy_pathways_workers(
+    *,
+    worker_name: str,
+    queue_name: str,
+    server_image: str,
+    sidecar_image: str,
+    gcs_scratch_location: str,
+    pathways_service: str,
+    tpu_params: dict[str, str],
+) -> None:
+  """Deploys the Pathways worker JobSet to the GKE cluster."""
+  try:
+    with open(WORKER_FILEPATH, "r") as f:
+      yaml_template = f.read()
+  except OSError as err:
+    raise ValueError("Could not read file: " + WORKER_FILEPATH) from err
+
+  template = string.Template(yaml_template)
+  substituted_yaml = template.substitute(
+      WORKER_NAME=worker_name,
+      QUEUE_NAME=queue_name,
+      SERVER_IMAGE=server_image,
+      SIDECAR_IMAGE=sidecar_image,
+      GCS_SCRATCH_LOCATION=gcs_scratch_location,
+      SIDECAR_SHM_DIR="/tmp/sidecar_dir",
+      PATHWAYS_RM_SERVICE_ADDRESS=pathways_service,
+      **tpu_params,
+  )
+  _logger.info("Deploying Tenant Workers: %s", worker_name)
+  gke_utils.deploy_gke_yaml(substituted_yaml)
 
 
 def _deploy_pathways_proxy_server(
@@ -244,10 +283,14 @@ class _ISCPathways:
     proxy_job_name: The name to use for the deployed proxy.
     proxy_pod_name: The name of the proxy pod, assigned during deployment.
     proxy_server_image: The image to use for the proxy server.
+    server_image: The server image to use for the workers.
     proxy_options: Configuration options for the Pathways proxy.
     metrics_collector: The metrics collector instance if enabled.
     start_time: The start time of the TPU assignment.
     total_chips: The total number of TPU chips expected across all instances.
+    sidecar_image: The custom sidecar image for the tenant worker.
+    queue_name: The name of the Kueue queue to use for the workers.
+    worker_name: The name of the worker JobSet.
   """
 
   def __init__(
@@ -263,6 +306,9 @@ class _ISCPathways:
       proxy_server_image: str,
       proxy_options: ProxyOptions | None = None,
       collect_service_metrics: bool = False,
+      sidecar_image: str | None = None,
+      queue_name: str = "shared-tpu-local-queue",
+      server_image: str = DEFAULT_SERVER_IMAGE,
   ):
     """Initializes the TPU manager."""
     self.cluster = cluster
@@ -276,7 +322,13 @@ class _ISCPathways:
     self._port_forward_process = None
     self._proxy_port = None
     self.proxy_server_image = proxy_server_image
+    self.server_image = server_image
     self.proxy_options = proxy_options or ProxyOptions()
+    self.sidecar_image = sidecar_image
+    self.queue_name = queue_name
+    self.worker_name = (
+        f"isc-worker-{os.environ.get('USER', 'user')}-{self._proxy_job_name.split('-')[-1]}"
+    )
     self._old_jax_platforms = None
     if collect_service_metrics:
       raw_collector = metrics_collector.MetricsCollector(
@@ -301,7 +353,11 @@ class _ISCPathways:
         f"pathways_service='{self.pathways_service}', "
         f"expected_tpu_instances={self.expected_tpu_instances}, "
         f"_proxy_job_name='{self._proxy_job_name}', "
-        f"proxy_options={self.proxy_options})"
+        f"proxy_server_image='{self.proxy_server_image}', "
+        f"server_image='{self.server_image}', "
+        f"proxy_options={self.proxy_options}, "
+        f"sidecar_image='{self.sidecar_image}', "
+        f"queue_name='{self.queue_name}')"
     )
 
   def _get_total_chips(self) -> int:
@@ -334,6 +390,20 @@ class _ISCPathways:
 
     try:
       self.start_time = time.time()
+      if self.sidecar_image:
+        tpu_type_str = next(iter(self.expected_tpu_instances.keys()))
+        tpu_gen, topology = tpu_specs.parse_tpu_type_string(tpu_type_str)
+        tpu_params = tpu_specs.get_tpu_params(tpu_gen, topology)
+        _deploy_pathways_workers(
+            worker_name=self.worker_name,
+            queue_name=self.queue_name,
+            server_image=self.server_image,
+            sidecar_image=self.sidecar_image,
+            gcs_scratch_location=self.bucket,
+            pathways_service=self.pathways_service,
+            tpu_params=tpu_params,
+        )
+
       _deploy_pathways_proxy_server(
           pathways_service=self.pathways_service,
           proxy_job_name=self._proxy_job_name,
@@ -409,6 +479,9 @@ class _ISCPathways:
     # Delete the proxy GKE job.
     _logger.info("Deleting Pathways proxy...")
     gke_utils.delete_gke_resource("job", self._proxy_job_name)
+    if self.sidecar_image:
+      _logger.info("Deleting Tenant Workers...")
+      gke_utils.delete_gke_resource("jobset", self.worker_name)
     _logger.info("Pathways proxy GKE job deletion complete.")
 
     # Restore JAX variables.
@@ -437,6 +510,9 @@ def connect(
     proxy_server_image: str = DEFAULT_PROXY_IMAGE,
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
+    sidecar_image: str | None = None,
+    queue_name: str = "shared-tpu-local-queue",
+    server_image: str | None = None,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
 
@@ -456,6 +532,10 @@ def connect(
       provided, no extra options will be used.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service.
+    sidecar_image: The custom sidecar image for the tenant worker.
+    queue_name: The Kueue LocalQueue name.
+    server_image: The server image to use for workers. If not provided, a
+      default will be used.
 
   Yields:
     The Pathways manager.
@@ -469,11 +549,26 @@ def connect(
       cluster_name=cluster, project_id=project, location=region
   )
 
-  proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar:
-    sidecar_image = gke_utils.get_worker_sidecar_image(
+  if not server_image:
+    inferred_image = gke_utils.get_rm_server_image(
         pathways_service=pathways_service
     )
+    if inferred_image:
+      _logger.info("Inferred RM server image: %s", inferred_image)
+      server_image = inferred_image
+    else:
+      _logger.warning(
+          "Could not infer RM server image, falling back to default: %s",
+          DEFAULT_SERVER_IMAGE,
+      )
+      server_image = DEFAULT_SERVER_IMAGE
+
+  proxy_options_obj = ProxyOptions.from_list(proxy_options)
+  if proxy_options_obj.sidecar:
+    if not sidecar_image:
+      sidecar_image = gke_utils.get_worker_sidecar_image(
+          pathways_service=pathways_service
+      )
     if sidecar_image:
       validators.validate_sidecar_image_versions(sidecar_image)
   _logger.info("Validation complete.")
@@ -496,6 +591,9 @@ def connect(
       proxy_server_image=proxy_server_image,
       proxy_options=proxy_options_obj,
       collect_service_metrics=collect_service_metrics,
+      sidecar_image=sidecar_image,
+      queue_name=queue_name,
+      server_image=server_image,
   ) as t:
     if t.proxy_pod_name:
       num_slices = sum(t.expected_tpu_instances.values())
