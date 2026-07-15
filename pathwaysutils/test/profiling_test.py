@@ -389,10 +389,8 @@ class ProfilingTest(parameterized.TestCase):
 
     with self.subTest("out_avals_properties"):
       _, kwargs = self.mock_plugin_executable_cls.return_value.call.call_args
-      self.assertLen(kwargs["out_avals"], 1)
-      (out_aval,) = kwargs["out_avals"]
-      self.assertEqual(out_aval.shape, (1,))
-      self.assertEqual(out_aval.dtype, jnp.object_)
+      self.assertEqual(kwargs["out_avals"], ())
+      self.assertEqual(kwargs["out_shardings"], ())
 
   def test_stop_trace_before_start_error(self):
     with self.assertRaisesRegex(
