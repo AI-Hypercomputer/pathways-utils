@@ -574,6 +574,77 @@ class PathwaysJobSet:
       volumes.append(volume)
       pod_spec.volumes = volumes
 
+  def add_colocated_python(
+      self,
+      image: str,
+      shm_mount_path: str = "/tmp/shared-memory",
+      shm_size_limit: str | None = None,
+  ) -> "PathwaysJobSet":
+    """Adds colocated python sidecar to the worker pods."""
+    pod_spec = self._worker_job_template.spec.template.spec
+
+    # Add shared memory volume if not exists.
+    volumes = pod_spec.volumes or []
+    shm_volume_name = "shared-memory"
+    shm_exists = any(v.name == shm_volume_name for v in volumes)
+    if not shm_exists:
+      volumes.append(
+          client.V1Volume(
+              name=shm_volume_name,
+              empty_dir=client.V1EmptyDirVolumeSource(
+                  medium="Memory", size_limit=shm_size_limit
+              ),
+          )
+      )
+      pod_spec.volumes = volumes
+
+    # Add colocated python container.
+    colocated_container = client.V1Container(
+        name="colocated-python-sidecar",
+        image=image,
+        image_pull_policy="Always",
+        env=[
+            client.V1EnvVar(name="GRPC_SERVER_ADDRESS", value="0.0.0.0:50051"),
+            client.V1EnvVar(
+                name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
+                value=shm_mount_path,
+            ),
+        ],
+        ports=[client.V1ContainerPort(container_port=50051)],
+        volume_mounts=[
+            client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
+            client.V1VolumeMount(name=shm_volume_name, mount_path=shm_mount_path),
+        ],
+    )
+    colocated_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
+
+    init_containers = pod_spec.init_containers or []
+    init_containers.append(colocated_container)
+    pod_spec.init_containers = init_containers
+
+    # Add volume mount to pathways-worker.
+    for container in pod_spec.containers:
+      if container.name == "pathways-worker":
+        volume_mounts = container.volume_mounts or []
+        volume_mounts.append(
+            client.V1VolumeMount(
+                name=shm_volume_name, mount_path=shm_mount_path
+            )
+        )
+        container.volume_mounts = volume_mounts
+        # Add env var for shm dir.
+        env = container.env or []
+        env.append(
+            client.V1EnvVar(
+                name="cloud_pathways_sidecar_shm_directory",
+                value=shm_mount_path,
+            )
+        )
+        container.env = env
+        break
+
+    return self
+
   def add_gcsfuse(
       self,
       containers: str | Sequence[str],

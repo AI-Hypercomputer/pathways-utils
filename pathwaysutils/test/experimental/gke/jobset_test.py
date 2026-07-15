@@ -475,6 +475,150 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertEqual(pod_meta.get("annotations", {}).get("existing-pod-anno"), "value")
     self.assertEqual(pod_meta.get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
 
+  def test_add_colocated_python_sidecar(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
 
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
+    sidecar = helper.init_containers["pathways-worker"]["colocated-python-sidecar"]
+    self.assertEqual(sidecar["restartPolicy"], "Always")
+    self.assertEqual(sidecar["image"], "gcr.io/my-project/colocated-python:custom")
+    self.assertTrue(
+        any(
+            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/shared-memory"
+            for m in sidecar["volumeMounts"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
+            and e["value"] == "/tmp/shared-memory"
+            for e in sidecar["env"]
+        )
+    )
+
+  def test_add_colocated_python_preserves_init_containers(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    
+    # Pre-populate init container on worker pod
+    worker_spec = pw_jobset._worker_job_template.spec.template.spec
+    existing_init = client.V1Container(name="existing-init-container", image="ubuntu:latest")
+    worker_spec.init_containers = [existing_init]
+
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    # Verify both exist
+    self.assertIn("existing-init-container", helper.init_containers["pathways-worker"])
+    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
+
+  def test_add_colocated_python_volume_default(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
+    shm_vol = helper.volumes["pathways-worker"]["shared-memory"]
+    self.assertNotIn("sizeLimit", shm_vol["emptyDir"])
+
+  def test_add_colocated_python_worker_mount(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("pathways-worker", helper.containers["pathways-worker"])
+    worker_container = helper.containers["pathways-worker"]["pathways-worker"]
+    self.assertTrue(
+        any(
+            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/shared-memory"
+            for m in worker_container["volumeMounts"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "cloud_pathways_sidecar_shm_directory"
+            and e["value"] == "/tmp/shared-memory"
+            for e in worker_container["env"]
+        )
+    )
+
+  def test_add_colocated_python_custom_shm(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:custom",
+        shm_mount_path="/tmp/custom-shm",
+        shm_size_limit="50Gi",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
+    sidecar = helper.init_containers["pathways-worker"]["colocated-python-sidecar"]
+    self.assertTrue(
+        any(
+            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/custom-shm"
+            for m in sidecar["volumeMounts"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
+            and e["value"] == "/tmp/custom-shm"
+            for e in sidecar["env"]
+        )
+    )
+
+    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
+    shm_vol = helper.volumes["pathways-worker"]["shared-memory"]
+    self.assertEqual(shm_vol["emptyDir"]["sizeLimit"], "50Gi")
+
+    self.assertIn("pathways-worker", helper.containers["pathways-worker"])
+    worker_container = helper.containers["pathways-worker"]["pathways-worker"]
+    self.assertTrue(
+        any(
+            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/custom-shm"
+            for m in worker_container["volumeMounts"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "cloud_pathways_sidecar_shm_directory"
+            and e["value"] == "/tmp/custom-shm"
+            for e in worker_container["env"]
+        )
+    )
+
+  def test_colocated_python_with_jax_command(self):
+    jax_command = "import jax; print(jax.devices());"
+    user_pod_template = {
+        "spec": {
+            "containers": [{
+                "name": "jax-tpu",
+                "image": "gcr.io/my-project/jax-tpu:latest",
+                "command": ["python3", "-c", jax_command],
+            }]
+        }
+    }
+    pw_jobset = self._create_jobset(
+        topology="2x2",
+        num_slices=1,
+        user_pod_template=user_pod_template,
+        main_container_name="jax-tpu",
+    )
+
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("pathways-head", helper.jobs)
+    self.assertIn("jax-tpu", helper.containers["pathways-head"])
+    jax_container = helper.containers["pathways-head"]["jax-tpu"]
+    self.assertEqual(jax_container["command"], ["python3", "-c", jax_command])
+
+    self.assertIn("pathways-worker", helper.jobs)
+    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
 if __name__ == "__main__":
   absltest.main()
