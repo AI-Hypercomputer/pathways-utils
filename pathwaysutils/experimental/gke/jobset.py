@@ -11,10 +11,11 @@
 # limitations under the License.
 """Pathways JobSet generator and builder (with Worker Job Config)."""
 
+import hashlib
 import json
 import logging
 import math
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from kubernetes import client
 
 # GKE sidecar containers restartPolicy compatibility placeholder.
@@ -529,6 +530,90 @@ class PathwaysJobSet:
         ),
     )
     return worker_job_template
+
+  def _filter_matching_containers(
+      self,
+      containers_param: str | Sequence[str],
+      all_containers: list[client.V1Container],
+  ) -> list[client.V1Container]:
+    """Filters containers matching the containers_param selection."""
+    if containers_param == "all":
+      return all_containers
+    if containers_param == "worker":
+      return [c for c in all_containers if c.name == "pathways-worker"]
+
+    filter_names = (
+        [containers_param]
+        if isinstance(containers_param, str)
+        else set(containers_param)
+    )
+    return [c for c in all_containers if c.name in filter_names]
+
+  def _enable_gcsfuse_annotations(
+      self, job_template: client.V1JobTemplateSpec
+  ) -> None:
+    """Enables gke-gcsfuse/volumes annotation on job and pod metadata."""
+    job_metadata = job_template.metadata or client.V1ObjectMeta()
+    job_annotations = job_metadata.annotations or {}
+    job_annotations["gke-gcsfuse/volumes"] = "true"
+    job_metadata.annotations = job_annotations
+    job_template.metadata = job_metadata
+
+    pod_metadata = job_template.spec.template.metadata or client.V1ObjectMeta()
+    pod_annotations = pod_metadata.annotations or {}
+    pod_annotations["gke-gcsfuse/volumes"] = "true"
+    pod_metadata.annotations = pod_annotations
+    job_template.spec.template.metadata = pod_metadata
+
+  def _add_volume_to_pod_spec(
+      self, pod_spec: client.V1PodSpec, volume: client.V1Volume
+  ) -> None:
+    """Appends volume to pod_spec if not already present."""
+    volumes = pod_spec.volumes or []
+    if not any(v.name == volume.name for v in volumes):
+      volumes.append(volume)
+      pod_spec.volumes = volumes
+
+  def add_gcsfuse(
+      self,
+      containers: str | Sequence[str],
+      mount_path: str,
+      bucket: str,
+      read_only: bool = False,
+  ) -> "PathwaysJobSet":
+    """Adds GCSFuse mount to specified containers."""
+    bucket_hash = int(hashlib.md5(bucket.encode()).hexdigest(), 16) % (10**8)
+    volume_name = f"gcsfuse-{bucket_hash}"
+    volume = client.V1Volume(
+        name=volume_name,
+        csi=client.V1CSIVolumeSource(
+            driver="gcsfuse.csi.storage.gke.io",
+            volume_attributes={"bucketName": bucket},
+        ),
+    )
+    volume_mount = client.V1VolumeMount(
+        name=volume_name,
+        mount_path=mount_path,
+        read_only=read_only,
+    )
+
+    for job_template in (self._head_job_template, self._worker_job_template):
+      pod_spec = job_template.spec.template.spec
+      all_containers = (pod_spec.containers or []) + (pod_spec.init_containers or [])
+
+      matching = self._filter_matching_containers(containers, all_containers)
+      if not matching:
+        continue
+
+      self._enable_gcsfuse_annotations(job_template)
+      self._add_volume_to_pod_spec(pod_spec, volume)
+
+      for container in matching:
+        volume_mounts = container.volume_mounts or []
+        volume_mounts.append(volume_mount)
+        container.volume_mounts = volume_mounts
+
+    return self
 
   def _compile_config(self) -> dict[str, Any]:
     """Compiles the JobSet configuration into a dictionary."""
