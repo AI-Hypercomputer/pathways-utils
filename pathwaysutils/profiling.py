@@ -64,25 +64,8 @@ class _ProfileState:
       raise RuntimeError(
           "_call_profile_executable called with no active executable."
       )
-    # If the profile request contains xprofTraceOptions, then we need to pass
-    # out_avals and out_shardings to the executable call because the
-    # executable will return a future that needs to be resolved. This is true
-    # for both starting and stopping a trace.
-    if (
-        self.profile_request is not None
-        and "xprofTraceOptions" in self.profile_request
-    ):
-      out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
-      out_shardings = [
-          getattr(
-              jax.sharding,
-              "make_single_device_sharding",
-              jax.sharding.SingleDeviceSharding,
-          )(backend.get_default_device())
-      ]
-    else:
-      out_avals = ()
-      out_shardings = ()
+    out_avals = ()
+    out_shardings = ()
 
     _, result_future = self.executable.call(
         out_avals=out_avals, out_shardings=out_shardings
