@@ -121,9 +121,9 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
         _logger.debug(
             "Caught JaxRuntimeError for slice_index=%s: %s", slice_index, error
         )
-        if not is_error_due_to_slice_down(error):
+        if not is_error_due_to_slice_down(error, log_traceback=False):
           raise
-    return active_slice_indices
+    return frozenset(active_slice_indices)
 
 
 
@@ -249,7 +249,9 @@ def wait_for_slices(
       time.sleep(time_to_sleep)
 
 
-def is_error_due_to_slice_down(error: Exception) -> bool:
+def is_error_due_to_slice_down(
+    error: Exception, log_traceback: bool = True
+) -> bool:
   """Returns True if the error is due to slice down.
 
   The error types that are considered due to slice down are
@@ -261,6 +263,7 @@ def is_error_due_to_slice_down(error: Exception) -> bool:
 
   Args:
     error: The error to check.
+    log_traceback: If True, log the traceback of the error.
   """
   error_due_to_slice_down = False
   traceback_logging_level = logging.DEBUG
@@ -290,9 +293,7 @@ def is_error_due_to_slice_down(error: Exception) -> bool:
 
       error_due_to_slice_down = True
 
-  if not error_due_to_slice_down:
-    _logger.debug("Caught an error not due to slice down")
-
-  _logger.log(traceback_logging_level, "Error details:", exc_info=True)
+  if not error_due_to_slice_down and log_traceback:
+    _logger.log(traceback_logging_level, "Error details:", exc_info=True)
 
   return error_due_to_slice_down
