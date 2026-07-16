@@ -437,6 +437,7 @@ def connect(
     proxy_server_image: str = DEFAULT_PROXY_IMAGE,
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
+    use_dns_endpoint: bool = True,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
 
@@ -456,6 +457,10 @@ def connect(
       provided, no extra options will be used.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service.
+    use_dns_endpoint: If True (default), fetch cluster credentials via the
+      cluster's DNS endpoint. Set to False for fully-private clusters whose
+      DNS and public endpoints are both disabled, so credentials are fetched
+      via the reachable private IP endpoint instead.
 
   Yields:
     The Pathways manager.
@@ -466,7 +471,10 @@ def connect(
   validators.validate_proxy_server_image(proxy_server_image)
   validators.validate_proxy_options(proxy_options)
   gke_utils.fetch_cluster_credentials(
-      cluster_name=cluster, project_id=project, location=region
+      cluster_name=cluster,
+      project_id=project,
+      location=region,
+      use_dns_endpoint=use_dns_endpoint,
   )
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)

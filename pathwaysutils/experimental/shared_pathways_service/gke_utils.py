@@ -34,7 +34,11 @@ def _validate_k8s_name(name: str) -> None:
 
 
 def fetch_cluster_credentials(
-    *, cluster_name: str, project_id: str, location: str
+    *,
+    cluster_name: str,
+    project_id: str,
+    location: str,
+    use_dns_endpoint: bool = True,
 ) -> None:
   """Fetches credentials for the GKE cluster."""
   _validate_k8s_name(cluster_name)
@@ -46,10 +50,10 @@ def fetch_cluster_credentials(
       "get-credentials",
       f"--location={location}",
       f"--project={project_id}",
-      "--dns-endpoint",
-      "--",
-      cluster_name,
   ]
+  if use_dns_endpoint:
+    get_credentials_command.append("--dns-endpoint")
+  get_credentials_command += ["--", cluster_name]
   try:
     subprocess.run(
         get_credentials_command,
