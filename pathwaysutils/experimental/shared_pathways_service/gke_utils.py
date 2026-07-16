@@ -12,6 +12,13 @@ import portpicker
 
 _logger = logging.getLogger(__name__)
 
+# Default readiness timeout for the proxy pod. Wider than kubectl's short waits
+# so it can ride through a cold-start node provisioning from zero (cluster
+# autoscaling plus the image pull), which can take longer than a very short
+# timeout even though scheduling and the image pull complete quickly once a node
+# is warm. Callers that expect long cold starts can pass a larger value.
+DEFAULT_POD_READY_TIMEOUT_S = 60
+
 # TODO(b/456189271): Evaluate and replace the subprocess calls with Kubernetes
 # Python API for kubectl calls.
 
@@ -257,11 +264,16 @@ def get_log_link(*, cluster: str, project: str, job_name: str) -> str:
   )
 
 
-def wait_for_pod(job_name: str) -> str:
+def wait_for_pod(
+    job_name: str, timeout: int = DEFAULT_POD_READY_TIMEOUT_S
+) -> str:
   """Waits for the given job's pod to be ready.
 
   Args:
     job_name: The name of the job.
+    timeout: The maximum time in seconds to wait for the pod to be ready.
+      Defaults to a cold-start-tolerant value so the wait rides through node
+      provisioning from zero.
   Returns:
     The name of the pod.
   Raises:
@@ -275,7 +287,7 @@ def wait_for_pod(job_name: str) -> str:
       "Pod created: %s. Waiting for it to be ready...", pod_name
   )
 
-  return check_pod_ready(pod_name)
+  return check_pod_ready(pod_name, timeout=timeout)
 
 
 def _test_remote_connection(port: int) -> None:

@@ -248,6 +248,8 @@ class _ISCPathways:
     metrics_collector: The metrics collector instance if enabled.
     start_time: The start time of the TPU assignment.
     total_chips: The total number of TPU chips expected across all instances.
+    proxy_pod_ready_timeout_s: The maximum time in seconds to wait for the proxy
+      pod to become ready.
   """
 
   def __init__(
@@ -263,6 +265,7 @@ class _ISCPathways:
       proxy_server_image: str,
       proxy_options: ProxyOptions | None = None,
       collect_service_metrics: bool = False,
+      proxy_pod_ready_timeout_s: int = gke_utils.DEFAULT_POD_READY_TIMEOUT_S,
   ):
     """Initializes the TPU manager."""
     self.cluster = cluster
@@ -277,6 +280,7 @@ class _ISCPathways:
     self._proxy_port = None
     self.proxy_server_image = proxy_server_image
     self.proxy_options = proxy_options or ProxyOptions()
+    self._proxy_pod_ready_timeout_s = proxy_pod_ready_timeout_s
     self._old_jax_platforms = None
     if collect_service_metrics:
       raw_collector = metrics_collector.MetricsCollector(
@@ -350,7 +354,9 @@ class _ISCPathways:
       )
       _logger.info("View proxy logs in Cloud Logging: %s", cloud_logging_link)
 
-      self.proxy_pod_name = gke_utils.wait_for_pod(self._proxy_job_name)
+      self.proxy_pod_name = gke_utils.wait_for_pod(
+          self._proxy_job_name, timeout=self._proxy_pod_ready_timeout_s
+      )
       self._proxy_port, self._port_forward_process = (
           gke_utils.enable_port_forwarding(
               f"pod/{self.proxy_pod_name}", PROXY_SERVER_PORT
@@ -438,6 +444,7 @@ def connect(
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
     use_dns_endpoint: bool = True,
+    proxy_pod_ready_timeout_s: int = gke_utils.DEFAULT_POD_READY_TIMEOUT_S,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
 
@@ -461,6 +468,11 @@ def connect(
       cluster's DNS endpoint. Set to False for fully-private clusters whose
       DNS and public endpoints are both disabled, so credentials are fetched
       via the reachable private IP endpoint instead.
+    proxy_pod_ready_timeout_s: The maximum time in seconds to wait for the proxy
+      pod to become ready. Defaults to a cold-start-tolerant value so the wait
+      rides through node provisioning from zero. Increase this when the proxy
+      pod schedules onto a pool that autoscales from zero and cold starts can
+      take several minutes.
 
   Yields:
     The Pathways manager.
@@ -504,6 +516,7 @@ def connect(
       proxy_server_image=proxy_server_image,
       proxy_options=proxy_options_obj,
       collect_service_metrics=collect_service_metrics,
+      proxy_pod_ready_timeout_s=proxy_pod_ready_timeout_s,
   ) as t:
     if t.proxy_pod_name:
       num_slices = sum(t.expected_tpu_instances.values())
