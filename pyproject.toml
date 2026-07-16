@@ -14,10 +14,12 @@ keywords = []
 dependencies = [
     "absl-py",
     "fastapi",
+    "grpcio",
     "jax>=0.8.3",
     "orbax-checkpoint",
     "uvicorn",
     "requests",
+    "tensorflow",
     "packaging",
 ]
 

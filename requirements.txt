@@ -1,7 +1,9 @@
 absl-py
 fastapi
+grpcio>=1.80.0
 jax>=0.8.0
 orbax-checkpoint
 uvicorn
 requests
+tensorflow
 packaging
