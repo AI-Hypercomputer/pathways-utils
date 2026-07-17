@@ -38,6 +38,15 @@ dev = [
     "pylint>=2.6.0",
     "pyink",
 ]
+gke = [
+    "kubernetes",
+    "pyyaml",
+]
+test = [
+    "kubernetes",
+    "pyyaml",
+    "pytest",
+]
 
 [tool.pyink]
 # Formatting configuration to follow Google style-guide
