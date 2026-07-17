@@ -11,17 +11,27 @@
 # limitations under the License.
 """Pathways JobSet generator and builder (with Worker Job Config)."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import logging
 import math
 import time
-from typing import Any, Mapping, Sequence
-from kubernetes import client
-from kubernetes import config as k8s_config
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import yaml
 
-# GKE sidecar containers restartPolicy compatibility placeholder.
+try:
+  import kubernetes
+except ImportError as e:
+  raise ImportError(
+      "GKE utilities require `kubernetes`. "
+      "Please install pathwaysutils with GKE support:\n\n"
+      "    pip install 'pathwaysutils[gke]'\n"
+  ) from e
+
+from kubernetes import client
+from kubernetes import config as k8s_config
 
 _logger = logging.getLogger(__name__)
 
@@ -72,7 +82,7 @@ MACHINE_TYPE_TO_GKE_ACCELERATOR_TYPE_MAP = {
 
 
 def _deserialize_dict(
-    api_client: client.ApiClient, data_dict: Mapping[str, Any], klass: Any
+    api_client: Any, data_dict: Mapping[str, Any], klass: Any
 ) -> Any:
   class FakeResponse:
 
@@ -93,8 +103,6 @@ class PathwaysJobSet:
       tpu_type: str,
       topology: str,
       num_slices: int,
-      user_pod_template: Mapping[str, Any] | None = None,
-      main_container_name: str = "main",
       max_restarts: int = 0,
       max_slice_restarts: int = 0,
       termination_grace_period_seconds: int | None = None,
@@ -114,8 +122,6 @@ class PathwaysJobSet:
       tpu_type: TPU type (e.g., "v5e").
       topology: TPU topology (e.g., "2x2").
       num_slices: Number of slices.
-      user_pod_template: Optional user pod template for the head job.
-      main_container_name: Name of the main container in user_pod_template.
       max_restarts: Maximum number of restarts for the JobSet.
       max_slice_restarts: Maximum number of slice restarts.
       termination_grace_period_seconds: Optional termination grace period.
@@ -124,12 +130,8 @@ class PathwaysJobSet:
       elastic_slices: Number of elastic slices.
       labels: Optional labels for the JobSet.
       annotations: Optional annotations for the JobSet.
+      shared_pathways_service: Whether to run only RM for Shared Pathways Service.
     """
-    if shared_pathways_service and user_pod_template:
-      raise ValueError(
-          "Cannot enable shared_pathways_service when user_pod_template is"
-          " provided."
-      )
     self._shared_pathways_service = shared_pathways_service
 
     self._name = name
@@ -166,8 +168,6 @@ class PathwaysJobSet:
         num_slices=num_slices,
         instance_type=instance_type,
         image_tag=image_tag,
-        user_pod_template=user_pod_template,
-        main_container_name=main_container_name,
         elastic_slices=elastic_slices,
         shared_pathways_service=shared_pathways_service,
     )
@@ -185,7 +185,7 @@ class PathwaysJobSet:
     )
 
     self._success_policy = None
-    if user_pod_template or shared_pathways_service:
+    if shared_pathways_service:
       self._success_policy = {
           "operator": "All",
           "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
@@ -205,8 +205,6 @@ class PathwaysJobSet:
       num_slices: int,
       instance_type: str,
       image_tag: str,
-      user_pod_template: Mapping[str, Any] | None,
-      main_container_name: str,
       elastic_slices: int,
       shared_pathways_service: bool,
   ) -> client.V1JobTemplateSpec:
@@ -217,9 +215,8 @@ class PathwaysJobSet:
       num_slices: Number of slices.
       instance_type: TPU instance type (e.g., "tpuv5:2x2").
       image_tag: Version tag for Pathways images.
-      user_pod_template: Optional user pod template for the head job.
-      main_container_name: Name of the main container in user_pod_template.
       elastic_slices: Number of elastic slices.
+      shared_pathways_service: Whether to run only RM for Shared Pathways Service.
 
     Returns:
       The head job template.
@@ -318,74 +315,20 @@ class PathwaysJobSet:
         ),
     )
 
-    api_client = client.ApiClient()
+    containers = [rm_container]
+    if not shared_pathways_service:
+      containers.append(proxy_container)
 
-    if user_pod_template:
-      user_template_obj = _deserialize_dict(
-          api_client, user_pod_template, client.V1PodTemplateSpec
-      )
-      head_pod_spec = user_template_obj.spec
-      head_pod_spec.host_network = True
-      head_pod_spec.dns_policy = "ClusterFirstWithHostNet"
+    head_pod_spec = client.V1PodSpec(
+        host_network=True,
+        dns_policy="ClusterFirstWithHostNet",
+        containers=containers,
+        restart_policy="Never",
+    )
 
-      rm_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
-      proxy_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
-
-      init_containers = head_pod_spec.init_containers or []
-      init_containers.extend([rm_container, proxy_container])
-      head_pod_spec.init_containers = init_containers
-
-      # Inject JAX env vars into main container.
-      jax_env = [
-          client.V1EnvVar(
-              name="PATHWAYS_HEAD",
-              value_from=client.V1EnvVarSource(
-                  field_ref=client.V1ObjectFieldSelector(
-                      field_path=(
-                          "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                      )
-                  )
-              ),
-          ),
-          client.V1EnvVar(name="JAX_PLATFORMS", value="proxy"),
-          client.V1EnvVar(name="XCLOUD_ENVIRONMENT", value="GCP"),
-          client.V1EnvVar(
-              name="JAX_BACKEND_TARGET",
-              value=f"grpc://$(PATHWAYS_HEAD):{PATHWAYS_PROXY_PORT}",
-          ),
-      ]
-      containers = head_pod_spec.containers or []
-      for c in containers:
-        if c.name == main_container_name:
-          env = c.env or []
-          env.extend(jax_env)
-          c.env = env
-          break
-      head_pod_spec.containers = containers
-
-      annotations = user_pod_template.get("metadata", {}).get("annotations", {})
-      labels = user_pod_template.get("metadata", {}).get("labels", {})
-    else:
-      # Headless mode.
-      containers = [rm_container]
-      if not shared_pathways_service:
-        containers.append(proxy_container)
-      head_pod_spec = client.V1PodSpec(
-          host_network=True,
-          dns_policy="ClusterFirstWithHostNet",
-          containers=containers,
-      )
-      annotations = {}
-      labels = {}
-
-    if not head_pod_spec.restart_policy:
-      head_pod_spec.restart_policy = "Never"
-
-    # Default annotations
     job_annotations = {
         "alpha.jobset.sigs.k8s.io/exclusive-topology": "kubernetes.io/hostname"
     }
-    job_annotations.update(annotations)
 
     head_job_template = client.V1JobTemplateSpec(
         metadata=client.V1ObjectMeta(annotations=job_annotations),
@@ -396,7 +339,7 @@ class PathwaysJobSet:
             parallelism=1,
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(
-                    annotations=job_annotations, labels=labels
+                    annotations=job_annotations, labels={}
                 ),
                 spec=head_pod_spec,
             ),
@@ -640,11 +583,10 @@ class PathwaysJobSet:
             client.V1VolumeMount(name=shm_volume_name, mount_path=shm_mount_path),
         ],
     )
-    colocated_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
-    init_containers = pod_spec.init_containers or []
-    init_containers.append(colocated_container)
-    pod_spec.init_containers = init_containers
+    containers = pod_spec.containers or []
+    containers.append(colocated_container)
+    pod_spec.containers = containers
 
     # Add volume mount to pathways-worker.
     for container in pod_spec.containers:
