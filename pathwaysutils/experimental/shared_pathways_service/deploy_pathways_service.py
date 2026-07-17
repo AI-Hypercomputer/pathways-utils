@@ -5,12 +5,12 @@ import dataclasses
 import logging
 import math
 import os
-import string
 from typing import Any
 from absl import app
 from absl import flags
 from kubernetes import client
 from kubernetes import config
+from pathwaysutils.experimental.gke import jobset
 import yaml
 
 _logger = logging.getLogger(__name__)
@@ -44,13 +44,6 @@ _GCS_BUCKET = flags.DEFINE_string(
     "gcs_bucket",
     "gs://pathways-test-bucket",
     "GCS bucket name for scratch space",
-)
-_TEMPLATE_FILE = flags.DEFINE_string(
-    "template_file",
-    os.path.join(
-        os.path.dirname(__file__), "yamls/pw-service.yaml",
-    ),
-    "Path to the JobSet YAML template file",
 )
 _DRY_RUN = flags.DEFINE_boolean(
     "dry_run",
@@ -149,25 +142,6 @@ def calculate_vms_per_slice(topology: str, chips_per_vm: int) -> int:
     ) from e
 
 
-def load_and_substitute_template(
-    template_path: str, context: dict[str, Any]
-) -> dict[str, Any]:
-  """Loads and substitutes the string.Template from the given path."""
-  try:
-    with open(template_path, "r") as f:
-      template_str = f.read()
-  except OSError as err:
-    raise ValueError(
-        f"Could not read template file: {template_path}: {err}"
-    ) from err
-
-  _logger.info("Template file: %s", template_path)
-  _logger.info("Context: %s", context)
-  template = string.Template(template_str)
-  _logger.info("Template: %s", template)
-  substituted_yaml = template.substitute(context)
-  return yaml.safe_load(substituted_yaml)
-
 
 def deploy_jobset(jobset_yaml: dict[str, Any]) -> None:
   """Deploys the JobSet to the current Kubernetes cluster."""
@@ -198,29 +172,61 @@ def run_deployment(
     gcs_bucket,
     server_image,
     sidecar_image,
-    template_file,
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
 ) -> None:
   """Executes the deployment logic."""
-  tpu_config = get_tpu_config(tpu_type)
-  vms_per_slice = calculate_vms_per_slice(topology, tpu_config.chips_per_vm)
+  # Use PathwaysJobSet builder instead of YAML template.
+  pw_jobset = jobset.PathwaysJobSet(
+      name=jobset_name,
+      namespace="default",
+      pathways_dir=gcs_bucket,
+      tpu_type=tpu_type,
+      topology=topology,
+      num_slices=num_slices,
+      shared_pathways_service=True,
+  )
 
-  context = {
-      "JOBSET_NAME": jobset_name,
-      "SERVER_IMAGE": server_image,
-      "SIDECAR_IMAGE": sidecar_image,
-      "SIDECAR_SHM_DIR": _SIDECAR_SHM_DIR,
-      "GCS_SCRATCH_LOCATION": gcs_bucket,
-      "NUM_SLICES": num_slices,
-      "INSTANCE_TYPE": f"{tpu_config.instance_prefix}:{topology}",
-      "VMS_PER_SLICE": vms_per_slice,
-      "CHIPS_PER_VM": tpu_config.chips_per_vm,
-      "ACCELERATOR_LABEL": tpu_config.accelerator_label,
-      "TOPOLOGY": topology,
-  }
+  # If custom server_image is provided, mutate the templates to use it.
+  if server_image:
+    # Mutate head job.
+    for container in pw_jobset.head_job_template.spec.template.spec.containers:
+      if container.name == "pathways-rm":
+        container.image = server_image
+    # Mutate worker job.
+    for container in pw_jobset.worker_job_template.spec.template.spec.containers:
+      if container.name == "pathways-worker":
+        container.image = server_image
 
-  jobset_config = load_and_substitute_template(template_file, context)
+  # Add colocated python sidecar.
+  pw_jobset.add_colocated_python(image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR)
+
+  # Mutate the sidecar configuration to match what HEAD expects.
+  worker_spec = pw_jobset.worker_job_template.spec.template.spec
+
+  # 1. Add extra logging env vars to sidecar.
+  for container in worker_spec.init_containers:
+    if container.name == "colocated-python-sidecar":
+      container.env.extend([
+          client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
+          client.V1EnvVar(name="LOGLEVEL", value="DEBUG"),
+          client.V1EnvVar(name="GLOG_minloglevel", value="0"),
+          client.V1EnvVar(name="GLOG_v", value="5"),
+          client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
+          client.V1EnvVar(name="TF_CPP_MIN_VLOG_LEVEL", value="5"),
+          client.V1EnvVar(name="TPU_MIN_LOG_LEVEL", value="0"),
+          client.V1EnvVar(name="GLOG_vmodule", value="jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"),
+      ])
+
+  # 2. Add arg to pathways-worker container (in addition to env var set by builder).
+  for container in worker_spec.containers:
+    if container.name == "pathways-worker":
+      args = container.args or []
+      if not any(a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args):
+        args.append(f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}")
+      container.args = args
+
+  jobset_config = pw_jobset.to_dict()
 
   _logger.info("--- Generated JobSet YAML ---")
   _logger.info("\n%s", yaml.dump(jobset_config))
@@ -256,15 +262,10 @@ def main(argv: Sequence[str]) -> None:
         gcs_bucket=_GCS_BUCKET.value,
         server_image=server_image,
         sidecar_image=_SIDECAR_IMAGE.value,
-        template_file=_TEMPLATE_FILE.value,
         dry_run=_DRY_RUN.value,
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
-  except FileNotFoundError:
-    _logger.exception(
-        "Error: Template file not found at %s", _TEMPLATE_FILE.value
-    )
 
 
 if __name__ == "__main__":
