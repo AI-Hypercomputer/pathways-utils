@@ -13,6 +13,7 @@
 # limitations under the License.
 """Tests for the proxy backend module."""
 
+import os
 from unittest import mock
 
 from absl.testing import absltest
@@ -53,6 +54,46 @@ class ProxyBackendTest(absltest.TestCase):
     )
     proxy_backend.register_backend_factory()
     self.assertIn("proxy", backend.backends())
+
+  def test_proxy_backend_registration_with_timeout(self):
+    mock_get_client = self.enter_context(
+        mock.patch.object(
+            ifrt_proxy,
+            "get_client",
+            return_value=mock.MagicMock(),
+        )
+    )
+    self.enter_context(
+        mock.patch.dict(
+            os.environ, {"PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS": "42"}
+        )
+    )
+    proxy_backend.register_backend_factory()
+    self.assertIn("proxy", backend.backends())
+    mock_get_client.assert_called_once()
+    args, _ = mock_get_client.call_args
+    self.assertEqual(args[0], "grpc://localhost:12345")
+    options = args[1]
+    self.assertEqual(options.connection_timeout_in_seconds, 42)
+
+  def test_proxy_backend_registration_without_timeout(self):
+    mock_get_client = self.enter_context(
+        mock.patch.object(
+            ifrt_proxy,
+            "get_client",
+            return_value=mock.MagicMock(),
+        )
+    )
+    self.enter_context(mock.patch.dict(os.environ))
+    os.environ.pop("PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS", None)
+
+    proxy_backend.register_backend_factory()
+    self.assertIn("proxy", backend.backends())
+    mock_get_client.assert_called_once()
+    args, _ = mock_get_client.call_args
+    self.assertEqual(args[0], "grpc://localhost:12345")
+    options = args[1]
+    self.assertNotEqual(options.connection_timeout_in_seconds, 42)
 
 
 if __name__ == "__main__":
