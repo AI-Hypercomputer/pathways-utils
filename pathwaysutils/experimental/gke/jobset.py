@@ -15,8 +15,11 @@ import hashlib
 import json
 import logging
 import math
+import time
 from typing import Any, Mapping, Sequence
 from kubernetes import client
+from kubernetes import config as k8s_config
+import yaml
 
 # GKE sidecar containers restartPolicy compatibility placeholder.
 
@@ -178,6 +181,14 @@ class PathwaysJobSet:
           "operator": "All",
           "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
       }
+
+  @property
+  def head_job_template(self) -> client.V1JobTemplateSpec:
+    return self._head_job_template
+
+  @property
+  def worker_job_template(self) -> client.V1JobTemplateSpec:
+    return self._worker_job_template
 
   def _build_head_job_template(
       self,
@@ -696,29 +707,43 @@ class PathwaysJobSet:
           self._worker_job_template
       )
 
-    replicated_jobs = [
-        {
-            "name": PATHWAYS_HEAD_JOB_NAME,
-            "replicas": 1,
-            "template": serialized_head,
-        },
-        {
-            "name": PATHWAYS_WORKER_JOB_NAME,
-            "replicas": self._worker_replicas,
-            "template": serialized_worker,
-        },
-    ]
+    head_job = {
+        "name": PATHWAYS_HEAD_JOB_NAME,
+        "replicas": 1,
+        "template": serialized_head,
+    }
+    worker_job = {
+        "name": PATHWAYS_WORKER_JOB_NAME,
+        "replicas": self._worker_replicas,
+        "template": serialized_worker,
+    }
+
+    coordinator = {
+        "replicatedJob": PATHWAYS_HEAD_JOB_NAME,
+    }
+
+    failure_policy: dict[str, Any] = {
+        "restartStrategy": "Recreate",
+    }
+    if self._max_restarts > 0:
+      failure_policy["maxRestarts"] = self._max_restarts
 
     jobset_config = {
-        "apiVersion": f"jobset.sigs.k8s.io/{self._jobset_api_version}",
+        "apiVersion": f"jobset.x-k8s.io/{self._jobset_api_version}",
         "kind": "JobSet",
         "metadata": {
             "name": self._name,
             "namespace": self._namespace,
         },
         "spec": {
-            "failurePolicy": {"maxRestarts": self._max_restarts},
-            "replicatedJobs": replicated_jobs,
+            "startupPolicy": {"startupPolicyOrder": "InOrder"},
+            "failurePolicy": failure_policy,
+            "network": {
+                "enableDNSHostnames": True,
+                "publishNotReadyAddresses": True,
+            },
+            "coordinator": coordinator,
+            "replicatedJobs": [head_job, worker_job],
         },
     }
     if self._labels:
@@ -733,3 +758,153 @@ class PathwaysJobSet:
   def to_dict(self) -> dict[str, Any]:
     """Returns the JobSet configuration as a dictionary."""
     return self._compile_config()
+
+  def export_yaml(self, filepath: str) -> None:
+    """Exports the JobSet configuration to a YAML file."""
+    with open(filepath, "w") as f:
+      yaml.dump(self.to_dict(), f, default_flow_style=False)
+
+  @classmethod
+  def import_yaml(cls, filepath: str) -> "PathwaysJobSet":
+    """Imports a JobSet configuration from a YAML file."""
+    with open(filepath, "r") as f:
+      config = yaml.safe_load(f)
+
+    cls._validate_config(config)
+
+    instance = cls.__new__(cls)
+    instance._name = config["metadata"]["name"]
+    instance._namespace = config["metadata"].get("namespace", "default")
+    api_version_parts = config.get("apiVersion", "").split("/")
+    instance._jobset_api_version = (
+        api_version_parts[-1] if len(api_version_parts) > 1 else "v1alpha2"
+    )
+    instance._max_restarts = (
+        config["spec"].get("failurePolicy", {}).get("maxRestarts", 0)
+    )
+    instance._labels = config["metadata"].get("labels", {})
+    instance._annotations = config["metadata"].get("annotations", {})
+
+    # Extract replicated jobs and deserialize.
+    head_job_template: client.V1JobTemplateSpec | None = None
+    worker_job_template: client.V1JobTemplateSpec | None = None
+
+    with client.ApiClient() as api_client:
+      for job in config["spec"]["replicatedJobs"]:
+        if job["name"] == PATHWAYS_HEAD_JOB_NAME:
+          head_job_template = _deserialize_dict(
+              api_client, job["template"], client.V1JobTemplateSpec
+          )
+        elif job["name"] in ("worker", PATHWAYS_WORKER_JOB_NAME):
+          worker_job_template = _deserialize_dict(
+              api_client, job["template"], client.V1JobTemplateSpec
+          )
+          instance._worker_replicas = job["replicas"]
+
+    if head_job_template is None:
+      raise ValueError(f"Missing head job ({PATHWAYS_HEAD_JOB_NAME}) in config")
+    if worker_job_template is None:
+      raise ValueError(
+          f"Missing worker job ({PATHWAYS_WORKER_JOB_NAME}) in config"
+      )
+
+    instance._head_job_template = head_job_template
+    instance._worker_job_template = worker_job_template
+
+    instance._success_policy = config["spec"].get("successPolicy")
+    return instance
+
+  @classmethod
+  def _validate_config(cls, config: dict[str, Any]) -> None:
+    """Validates that the config is a valid Pathways JobSet."""
+    if config.get("kind") != "JobSet":
+      raise ValueError("Resource kind is not JobSet")
+    jobs = {
+        j["name"]: j for j in config.get("spec", {}).get("replicatedJobs", [])
+    }
+    if "head" not in jobs and PATHWAYS_HEAD_JOB_NAME not in jobs:
+      raise ValueError(
+          f"Missing head replicated job ('head' or '{PATHWAYS_HEAD_JOB_NAME}')"
+      )
+    if "worker" not in jobs and PATHWAYS_WORKER_JOB_NAME not in jobs:
+      raise ValueError(
+          "Missing worker replicated job ('worker' or"
+          f" '{PATHWAYS_WORKER_JOB_NAME}')"
+      )
+
+  def apply(
+      self, recreate: bool = False, field_manager: str = "pathwaysutils"
+  ) -> None:
+    """Applies the JobSet to the GKE cluster."""
+
+    try:
+      k8s_config.load_kube_config()
+    except Exception:  # pylint: disable=broad-except
+      try:
+        k8s_config.load_incluster_config()
+      except Exception as e:
+        raise RuntimeError("Failed to load Kubernetes configuration") from e
+
+    api = client.CustomObjectsApi()
+    group = "jobset.x-k8s.io"
+    version = self._jobset_api_version
+    plural = "jobsets"
+
+    exists = False
+    try:
+      api.get_namespaced_custom_object(
+          group, version, self._namespace, plural, self._name
+      )
+      exists = True
+    except client.rest.ApiException as e:
+      if e.status != 404:
+        raise
+
+    if exists:
+      if recreate:
+        _logger.info(
+            "JobSet %s already exists. Deleting it first...", self._name
+        )
+        api.delete_namespaced_custom_object(
+            group, version, self._namespace, plural, self._name
+        )
+
+        # Poll for deletion.
+        max_retries = 30
+        for i in range(max_retries):
+          try:
+            api.get_namespaced_custom_object(
+                group, version, self._namespace, plural, self._name
+            )
+            _logger.info(
+                "Waiting for JobSet %s to be deleted... (%d/%d)",
+                self._name,
+                i + 1,
+                max_retries,
+            )
+            time.sleep(2)
+          except client.rest.ApiException as e:
+            if e.status == 404:
+              _logger.info("JobSet %s deleted.", self._name)
+              break
+            raise
+        else:
+          raise RuntimeError(
+              f"Timeout waiting for JobSet {self._name} to be deleted"
+          )
+      else:
+        raise RuntimeError(
+            f"JobSet {self._name} already exists. Use recreate=True to"
+            " overwrite."
+        )
+
+    _logger.info("Creating JobSet %s...", self._name)
+    api.create_namespaced_custom_object(
+        group=group,
+        version=version,
+        namespace=self._namespace,
+        plural=plural,
+        body=self.to_dict(),
+        field_manager=field_manager,
+    )
+    _logger.info("JobSet %s created successfully.", self._name)

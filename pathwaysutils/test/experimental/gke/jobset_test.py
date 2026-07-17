@@ -1,10 +1,39 @@
 import hashlib
 import itertools
+import os
 from typing import Any
+from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
 from kubernetes import client
 from pathwaysutils.experimental.gke import jobset
+import yaml
+
+
+def normalize_k8s_spec(spec: Any) -> Any:
+  if isinstance(spec, dict):
+    result = {}
+    for k, v in spec.items():
+      if k == "env" and isinstance(v, list):
+        result[k] = sorted(
+            [normalize_k8s_spec(x) for x in v], key=lambda x: x.get("name", "")
+        )
+      elif k == "ports" and isinstance(v, list):
+        result[k] = sorted(
+            [normalize_k8s_spec(x) for x in v],
+            key=lambda x: x.get("containerPort", 0),
+        )
+      elif k == "volumeMounts" and isinstance(v, list):
+        result[k] = sorted(
+            [normalize_k8s_spec(x) for x in v],
+            key=lambda x: x.get("mountPath", ""),
+        )
+      else:
+        result[k] = normalize_k8s_spec(v)
+    return result
+  elif isinstance(spec, list):
+    return [normalize_k8s_spec(x) for x in spec]
+  return spec
 
 
 class JobSetManifestHelper:
@@ -475,6 +504,40 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertEqual(pod_meta.get("annotations", {}).get("existing-pod-anno"), "value")
     self.assertEqual(pod_meta.get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
 
+  def test_add_gcsfuse_preserves_existing_volumes(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    # Pre-populate volumes in head and worker pod specs.
+    pw_jobset._head_job_template.spec.template.spec.volumes = [
+        client.V1Volume(name="preexisting-head-vol")
+    ]
+    pw_jobset._worker_job_template.spec.template.spec.volumes = [
+        client.V1Volume(name="preexisting-worker-vol")
+    ]
+
+    pw_jobset.add_gcsfuse(
+        containers="all",
+        mount_path="/gcs/data",
+        bucket="my-bucket",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    # Verify existing volumes and newly added GCSFuse volumes coexist.
+    self.assertIn("preexisting-head-vol", helper.volumes["pathways-head"])
+    self.assertIn("preexisting-worker-vol", helper.volumes["pathways-worker"])
+
+  def test_add_colocated_python_handles_none_volumes(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    
+    # Force volumes to be None
+    pw_jobset._worker_job_template.spec.template.spec.volumes = None
+
+    # Should not crash and should correctly add volume
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    
+    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
+
   def test_add_colocated_python_sidecar(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
 
@@ -620,5 +683,244 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
     self.assertIn("pathways-worker", helper.jobs)
     self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
+
+  # Reference similar GKE / JobSet custom object unit test suites:
+  # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py
+  # - Upstream Kubernetes SIGs JobSet unit tests: https://github.com/kubernetes-sigs/jobset/blob/main/pkg/controllers/jobset_controller_test.go
+  @mock.patch("kubernetes.config.load_kube_config")
+  @mock.patch("kubernetes.config.load_incluster_config")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
+  def test_apply_create(
+      self, mock_custom_objects_api, mock_load_incluster, mock_load_kube
+  ):
+    """Tests deploying a JobSet to GKE via Kubernetes CustomObjectsApi.
+
+    Modeled after official GKE JobSet unit test patterns (e.g. gke_callbacks_test.py).
+    """
+    mock_api = mock_custom_objects_api.return_value
+    # Mock GET to return 404 (not exists).
+    from kubernetes.client.rest import ApiException
+
+    mock_api.get_namespaced_custom_object.side_effect = ApiException(status=404)
+
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+    )
+    pw_jobset.apply()
+
+    mock_api.create_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="default",
+        plural="jobsets",
+        body=pw_jobset.to_dict(),
+        field_manager="pathwaysutils",
+    )
+
+  @mock.patch("kubernetes.config.load_kube_config")
+  @mock.patch("kubernetes.config.load_incluster_config")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
+  def test_apply_exists_recreate(
+      self, mock_custom_objects_api, mock_load_incluster, mock_load_kube
+  ):
+    mock_api = mock_custom_objects_api.return_value
+    # Mock GET to return success (exists).
+    mock_api.get_namespaced_custom_object.return_value = {}
+    # Mock GET after delete to return 404.
+    from kubernetes.client.rest import ApiException
+
+    mock_api.get_namespaced_custom_object.side_effect = [
+        {},
+        ApiException(status=404),
+    ]
+
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+    )
+    pw_jobset.apply(recreate=True)
+
+    mock_api.delete_namespaced_custom_object.assert_called_once_with(
+        "jobset.x-k8s.io", "v1alpha2", "default", "jobsets", "test-workload"
+    )
+    mock_api.create_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="default",
+        plural="jobsets",
+        body=pw_jobset.to_dict(),
+        field_manager="pathwaysutils",
+    )
+
+  @mock.patch("kubernetes.config.load_kube_config")
+  @mock.patch("kubernetes.config.load_incluster_config")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
+  def test_apply_exists_no_recreate_fails(
+      self, mock_custom_objects_api, mock_load_incluster, mock_load_kube
+  ):
+    mock_api = mock_custom_objects_api.return_value
+    # Mock GET to return success (exists).
+    mock_api.get_namespaced_custom_object.return_value = {}
+
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+    )
+    with self.assertRaises(RuntimeError):
+      pw_jobset.apply(recreate=False)
+
+  def test_export_import_roundtrip(self):
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+    )
+    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    pw_jobset.add_gcsfuse(
+        containers="pathways-worker", mount_path="/tmp/gcs", bucket="my-bucket"
+    )
+
+    # Export.
+    temp_filepath = os.path.join(self.create_tempdir().full_path, "jobset.yaml")
+    pw_jobset.export_yaml(temp_filepath)
+
+    # Import.
+    imported_jobset = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+
+    # Verify they are semantically identical.
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported_jobset.to_dict()),
+    )
+
+  def test_import_validation_failures(self):
+    temp_dir = self.create_tempdir().full_path
+
+    # 1. Missing kind.
+    invalid_config1 = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "metadata": {"name": "test"},
+        "spec": {"replicatedJobs": []},
+    }
+    path1 = os.path.join(temp_dir, "invalid1.yaml")
+    with open(path1, "w") as f:
+      yaml.dump(invalid_config1, f)
+    with self.assertRaisesRegex(ValueError, "Resource kind is not JobSet"):
+      jobset.PathwaysJobSet.import_yaml(path1)
+
+    # 2. Missing head.
+    invalid_config2 = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {"name": "test"},
+        "spec": {
+            "replicatedJobs": [
+                {"name": "worker", "replicas": 1, "template": {}}
+            ]
+        },
+    }
+    path2 = os.path.join(temp_dir, "invalid2.yaml")
+    with open(path2, "w") as f:
+      yaml.dump(invalid_config2, f)
+    with self.assertRaisesRegex(ValueError, "Missing head replicated job"):
+      jobset.PathwaysJobSet.import_yaml(path2)
+
+    # 3. Missing worker.
+    invalid_config3 = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {"name": "test"},
+        "spec": {
+            "replicatedJobs": [
+                {"name": "pathways-head", "replicas": 1, "template": {}}
+            ]
+        },
+    }
+    path3 = os.path.join(temp_dir, "invalid3.yaml")
+    with open(path3, "w") as f:
+      yaml.dump(invalid_config3, f)
+    with self.assertRaisesRegex(ValueError, "Missing worker replicated job"):
+      jobset.PathwaysJobSet.import_yaml(path3)
+
+  def test_labels_and_annotations(self):
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+        labels={"key1": "val1"},
+        annotations={"key2": "val2"},
+    )
+    config = pw_jobset.to_dict()
+    self.assertEqual(config["metadata"]["labels"], {"key1": "val1"})
+    self.assertEqual(config["metadata"]["annotations"], {"key2": "val2"})
+
+  def test_direct_mutation(self):
+    """Verifies that directly mutating Kubernetes JobTemplateSpec objects is preserved in to_dict()."""
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+    )
+    # Directly modify the Kubernetes template spec objects on the instance.
+    head_spec = pw_jobset.head_job_template.spec.template.spec
+    head_spec.active_deadline_seconds = 100
+
+    worker_spec = pw_jobset.worker_job_template.spec.template.spec
+    worker_spec.active_deadline_seconds = 200
+
+    # Verify that the direct mutations are preserved and serialized in to_dict().
+    config = pw_jobset.to_dict()
+    replicated_jobs = {
+        job["name"]: job for job in config["spec"]["replicatedJobs"]
+    }
+    self.assertEqual(
+        replicated_jobs["pathways-head"]["template"]["spec"]["template"]["spec"][
+            "activeDeadlineSeconds"
+        ],
+        100,
+    )
+    self.assertEqual(
+        replicated_jobs["pathways-worker"]["template"]["spec"]["template"]["spec"][
+            "activeDeadlineSeconds"
+        ],
+        200,
+    )
+
+  def test_failure_policy(self):
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+        max_restarts=5,
+    )
+    config = pw_jobset.to_dict()
+    self.assertEqual(config["spec"]["failurePolicy"]["maxRestarts"], 5)
+
+
 if __name__ == "__main__":
   absltest.main()
