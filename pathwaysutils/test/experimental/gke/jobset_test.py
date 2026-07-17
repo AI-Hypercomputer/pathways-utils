@@ -921,6 +921,57 @@ class PathwaysJobSetTest(parameterized.TestCase):
     config = pw_jobset.to_dict()
     self.assertEqual(config["spec"]["failurePolicy"]["maxRestarts"], 5)
 
+  def test_shared_pathways_service(self):
+    pw_jobset = self._create_jobset(
+        name="test-sps",
+        shared_pathways_service=True,
+    )
 
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    self.assertEqual(
+        config["spec"]["successPolicy"],
+        {
+            "operator": "All",
+            "targetReplicatedJobs": ["pathways-head"],
+        },
+    )
+
+    self.assertTrue(config["spec"]["network"]["enableDNSHostnames"])
+    self.assertTrue(config["spec"]["network"]["publishNotReadyAddresses"])
+
+    self.assertIn("pathways-head", helper.jobs)
+    pod_spec = helper.pod_specs["pathways-head"]
+
+    # Head job should only have pathways-rm container, no pathways-proxy.
+    self.assertIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
+    self.assertLen(pod_spec["containers"], 1)
+
+  def test_shared_pathways_service_with_user_template_fails(self):
+    user_pod_template = {
+        "spec": {
+            "containers": [{
+                "name": "jax-tpu",
+                "image": "gcr.io/my-project/jax-tpu:latest",
+            }]
+        }
+    }
+    with self.assertRaisesRegex(
+        ValueError,
+        "Cannot enable shared_pathways_service when user_pod_template is"
+        " provided.",
+    ):
+      jobset.PathwaysJobSet(
+          name="test-sps",
+          namespace="default",
+          pathways_dir="gs://bucket/scratch",
+          tpu_type="v5e",
+          topology="2x2",
+          num_slices=2,
+          shared_pathways_service=True,
+          user_pod_template=user_pod_template,
+      )
 if __name__ == "__main__":
   absltest.main()

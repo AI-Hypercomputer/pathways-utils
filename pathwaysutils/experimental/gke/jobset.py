@@ -103,6 +103,7 @@ class PathwaysJobSet:
       elastic_slices: int = 0,
       labels: Mapping[str, str] | None = None,
       annotations: Mapping[str, str] | None = None,
+      shared_pathways_service: bool = False,
   ):
     """Initializes the instance.
 
@@ -124,6 +125,13 @@ class PathwaysJobSet:
       labels: Optional labels for the JobSet.
       annotations: Optional annotations for the JobSet.
     """
+    if shared_pathways_service and user_pod_template:
+      raise ValueError(
+          "Cannot enable shared_pathways_service when user_pod_template is"
+          " provided."
+      )
+    self._shared_pathways_service = shared_pathways_service
+
     self._name = name
     self._namespace = namespace
     self._jobset_api_version = jobset_api_version
@@ -161,6 +169,7 @@ class PathwaysJobSet:
         user_pod_template=user_pod_template,
         main_container_name=main_container_name,
         elastic_slices=elastic_slices,
+        shared_pathways_service=shared_pathways_service,
     )
 
     # Build worker template.
@@ -176,7 +185,7 @@ class PathwaysJobSet:
     )
 
     self._success_policy = None
-    if user_pod_template:
+    if user_pod_template or shared_pathways_service:
       self._success_policy = {
           "operator": "All",
           "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
@@ -199,6 +208,7 @@ class PathwaysJobSet:
       user_pod_template: Mapping[str, Any] | None,
       main_container_name: str,
       elastic_slices: int,
+      shared_pathways_service: bool,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -357,10 +367,13 @@ class PathwaysJobSet:
       labels = user_pod_template.get("metadata", {}).get("labels", {})
     else:
       # Headless mode.
+      containers = [rm_container]
+      if not shared_pathways_service:
+        containers.append(proxy_container)
       head_pod_spec = client.V1PodSpec(
           host_network=True,
           dns_policy="ClusterFirstWithHostNet",
-          containers=[rm_container, proxy_container],
+          containers=containers,
       )
       annotations = {}
       labels = {}
