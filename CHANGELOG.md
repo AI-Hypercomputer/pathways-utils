@@ -23,6 +23,20 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-07-17
+## What's Changed
+* Update start_server signature in pathwaysutils.profiling to accept requires_backend by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/267
+* Extract TPU specifications and helper functions for Shared Pathways Service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/272
+* Add JAX 0.10.2 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/276
+* bump py version in pyproject.toml by @sadikneipp in https://github.com/AI-Hypercomputer/pathways-utils/pull/277
+* Automated Code Change by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/271
+* Add GCSFuse support to PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/252
+* Add Colocated Python support to PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/253
+* Unify monitor thread lifecycle and implement robust set-based slice tracking in pathwaysutils. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/257
+* Add YAML serialization and deployment to GKE for PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/254
+* Add Shared Pathways Service support to PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/255
+* Replace Shared Pathways Service YAML templates with PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/256
+
 ## [0.1.10] - 2026-06-30
 ## What's Changed
 * Add retry_policy and deprecate max_retries in pathwaysutils.elastic.manager.elastic_retry. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/246
