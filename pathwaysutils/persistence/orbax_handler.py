@@ -144,8 +144,21 @@ class CloudPathwaysArrayHandler(type_handlers.ArrayHandler):
 
     self._wait_for_directory_creation_signals()
     locations, names = extract_parent_dir_and_name(infos)
-    f = functools.partial(helper.write_one_array, timeout=self.timeout)
-    futures_results = list(map(f, locations, names, arrays))
+
+    # Group by location (parent_dir) to batch writes.
+    by_location = collections.defaultdict(list)
+    for loc, name, arr in zip(locations, names, arrays):
+      by_location[loc].append((name, arr))
+
+    futures_results = []
+    for loc, items in by_location.items():
+      grouped_names = [item[0] for item in items]
+      grouped_arrays = [item[1] for item in items]
+      futures_results.append(
+          helper.write_arrays(
+              loc, grouped_names, grouped_arrays, timeout=self.timeout
+          )
+      )
 
     return [
         future.CommitFutureAwaitingContractedSignals(
