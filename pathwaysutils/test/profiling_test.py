@@ -14,8 +14,8 @@
 
 import json
 import logging
-from unittest import mock
 from typing import Any
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -105,6 +105,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters(1000, 1234)
@@ -123,6 +124,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": duration_ms,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters("127.0.0.1", "localhost", "192.168.1.1")
@@ -141,6 +143,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters(
@@ -160,6 +163,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": log_dir,
         },
+        headers={},
     )
 
   @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
@@ -405,7 +409,9 @@ class ProfilingTest(parameterized.TestCase):
         mock.patch.object(profiling.threading, "Thread", autospec=True)
     )
     profiling.start_server(9000)
-    mock_thread.assert_called_once_with(target=mock.ANY, args=(9000,))
+    mock_thread.assert_called_once_with(
+        target=mock.ANY, args=(9000, "127.0.0.1", None)
+    )
     mock_thread.return_value.start.assert_called_once()
     self.assertIsNotNone(profiling._profiler_thread)
 
@@ -526,7 +532,10 @@ class ProfilingTest(parameterized.TestCase):
 
     profiler_module.start_server(1234, requires_backend=False)
 
-    mocks["start_server"].assert_called_once_with(1234, requires_backend=False)
+    mocks["start_server"].assert_called_once_with(
+        1234,
+        requires_backend=False,
+    )
 
   @parameterized.named_parameters(
       dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
@@ -713,6 +722,47 @@ class ProfilingTest(parameterized.TestCase):
     ):
       profiling.start_trace(
           "gs://test_bucket/test_dir", profiler_options=options
+      )
+
+  def test_validate_gcs_bucket_env_var(self):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_ALLOWED_GCS_BUCKETS": "bucket1,bucket2"},
+    ):
+      profiling._validate_gcs_bucket("gs://bucket1/dir")
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket("gs://bucket3/dir")
+
+  def test_start_trace_rollback_on_original_failure(self):
+    self.mock_original_start_trace.side_effect = RuntimeError(
+        "original start trace error"
+    )
+    with self.assertRaisesRegex(RuntimeError, "original start trace error"):
+      profiling.start_trace("gs://test_bucket/test_dir")
+
+    self.assertIsNone(profiling._profile_state.executable)
+    self.assertFalse(profiling._profile_state.lock.locked())
+
+  def test_collect_profile_with_auth_token(self):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_AUTH_TOKEN": "secret_token"},
+    ):
+      result = profiling.collect_profile(
+          port=8000,
+          duration_ms=1000,
+          host="127.0.0.1",
+          log_dir="gs://test_bucket/test_dir",
+      )
+
+      self.assertTrue(result)
+      self.mock_post.assert_called_once_with(
+          "http://127.0.0.1:8000/profiling",
+          json={
+              "duration_ms": 1000,
+              "repository_path": "gs://test_bucket/test_dir",
+          },
+          headers={"X-Auth-Token": "secret_token"},
       )
 
 

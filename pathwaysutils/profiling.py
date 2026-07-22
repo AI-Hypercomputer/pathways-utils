@@ -225,6 +225,25 @@ def _start_pathways_trace_from_profile_request(
       raise
 
 
+def _validate_gcs_bucket(log_dir: os.PathLike[str] | str) -> None:
+  """Validates that log_dir is a valid GCS path and optionally in allowed buckets."""
+  log_dir_str = str(log_dir)
+  if not log_dir_str.startswith("gs://"):
+    raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
+
+  env_buckets = os.environ.get("PATHWAYS_ALLOWED_GCS_BUCKETS")
+  if env_buckets:
+    allowed_buckets = [b.strip() for b in env_buckets.split(",") if b.strip()]
+    allowed_set = set(allowed_buckets)
+    path_without_scheme = log_dir_str[5:]
+    bucket_name = path_without_scheme.split("/")[0]
+    if not bucket_name or bucket_name not in allowed_set:
+      raise ValueError(
+          f"GCS bucket '{bucket_name}' is not in allowed buckets list: "
+          f"{allowed_set}"
+      )
+
+
 def start_trace(
     log_dir: os.PathLike[str] | str,
     *,
@@ -263,8 +282,7 @@ def start_trace(
     max_num_hosts: An optional integer to limit the number of hosts profiled
       (defaults to 1).
   """
-  if not str(log_dir).startswith("gs://"):
-    raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
+  _validate_gcs_bucket(log_dir)
 
   if create_perfetto_link or create_perfetto_trace:
     _logger.warning(
@@ -297,19 +315,24 @@ def start_trace(
 
   _start_pathways_trace_from_profile_request(profile_request)
 
-  if jax.version.__version_info__ >= (0, 9, 2):
-    _original_start_trace(
-        log_dir=log_dir,
-        create_perfetto_link=create_perfetto_link,
-        create_perfetto_trace=create_perfetto_trace,
-        profiler_options=profiler_options,
-    )
-  else:
-    _original_start_trace(
-        log_dir=log_dir,
-        create_perfetto_link=create_perfetto_link,
-        create_perfetto_trace=create_perfetto_trace,
-    )
+  try:
+    if jax.version.__version_info__ >= (0, 9, 2):
+      _original_start_trace(
+          log_dir=log_dir,
+          create_perfetto_link=create_perfetto_link,
+          create_perfetto_trace=create_perfetto_trace,
+          profiler_options=profiler_options,
+      )
+    else:
+      _original_start_trace(
+          log_dir=log_dir,
+          create_perfetto_link=create_perfetto_link,
+          create_perfetto_trace=create_perfetto_trace,
+      )
+  except Exception:
+    with _profile_state.lock:
+      _profile_state.reset()
+    raise
 
 
 def stop_trace() -> None:
@@ -341,8 +364,11 @@ def start_server(port: int, requires_backend: bool = True) -> None:
     requires_backend: Unused in Pathways; accepted for parameter parity.
   """
   del requires_backend
-  def server_loop(port: int):
-    _logger.debug("Starting JAX profiler server on port %s", port)
+  host = os.environ.get("PATHWAYS_PROFILING_SERVER_HOST", "127.0.0.1")
+  token_to_verify = os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN")
+
+  def server_loop(port: int, host: str, token_to_verify: str | None):
+    _logger.debug("Starting JAX profiler server on host %s port %s", host, port)
     app = fastapi.FastAPI()
 
     @dataclasses.dataclass
@@ -351,21 +377,43 @@ def start_server(port: int, requires_backend: bool = True) -> None:
       repository_path: str
 
     @app.post("/profiling")
-    async def profiling(pc: ProfilingConfig) -> Mapping[str, str]:
+    async def profiling(
+        pc: ProfilingConfig,
+        req: fastapi.Request,
+    ) -> Mapping[str, str]:
+      if token_to_verify is not None:
+        token = req.headers.get("X-Auth-Token") or req.headers.get(
+            "Authorization"
+        )
+        if token and token.startswith("Bearer "):
+          token = token[7:]
+        if token != token_to_verify:
+          raise fastapi.HTTPException(
+              status_code=fastapi.status.HTTP_401_UNAUTHORIZED,
+              detail="Unauthorized: invalid or missing authentication token",
+          )
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       _logger.debug("Writing profiling data to %s", pc.repository_path)
-      await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
-      await asyncio.sleep(pc.duration_ms / 1e3)
-      await asyncio.to_thread(jax.profiler.stop_trace)
+      _validate_gcs_bucket(pc.repository_path)
+
+      await asyncio.to_thread(start_trace, pc.repository_path)
+      try:
+        await asyncio.sleep(pc.duration_ms / 1e3)
+      finally:
+        await asyncio.to_thread(stop_trace)
+
       return {"response": "profiling completed"}
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")
+    uvicorn.run(app, host=host, port=port, log_level="debug")
 
   global _profiler_thread
   if _profiler_thread is not None:
     raise RuntimeError("Only one profiler server can be active at a time.")
 
-  _profiler_thread = threading.Thread(target=server_loop, args=(port,))
+  _profiler_thread = threading.Thread(
+      target=server_loop,
+      args=(port, host, token_to_verify),
+  )
   _profiler_thread.start()
 
 
@@ -383,6 +431,7 @@ def collect_profile(
     duration_ms: int,
     host: str,
     log_dir: os.PathLike[str] | str,
+    auth_token: str | None = None,
 ) -> bool:
   """Collects a JAX profile and saves it to the specified directory.
 
@@ -391,6 +440,7 @@ def collect_profile(
     duration_ms: The duration in milliseconds for which to collect the profile.
     host: The host on which the JAX profiler server is running.
     log_dir: The GCS path to save the profile data.
+    auth_token: Optional authentication token to send to the profiling server.
 
   Returns:
     True if the profile was collected successfully, False otherwise.
@@ -398,16 +448,24 @@ def collect_profile(
   Raises:
     ValueError: If the log_dir is not a GCS path.
   """
-  if not str(log_dir).startswith("gs://"):
-    raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
+  _validate_gcs_bucket(log_dir)
 
   request_json = {
       "duration_ms": duration_ms,
       "repository_path": log_dir,
   }
+  headers = {}
+  effective_token = (
+      auth_token
+      if auth_token is not None
+      else os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN")
+  )
+  if effective_token:
+    headers["X-Auth-Token"] = effective_token
+
   address = urllib.parse.urljoin(f"http://{host}:{port}", "profiling")
   try:
-    response = requests.post(address, json=request_json)
+    response = requests.post(address, json=request_json, headers=headers)
     response.raise_for_status()
   except requests.exceptions.RequestException:
     _logger.exception("Failed to collect profiling data")

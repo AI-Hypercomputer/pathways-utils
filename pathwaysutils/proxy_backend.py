@@ -13,17 +13,27 @@
 # limitations under the License.
 """Register the IFRT Proxy as a backend for JAX."""
 
+import os
 import jax
 from jax.extend import backend
 from jax.extend.backend import ifrt_proxy
 
 
 def register_backend_factory() -> None:
+  """Registers the IFRT Proxy backend factory with JAX."""
+
+  def make_client():
+    options = ifrt_proxy.ClientConnectionOptions()
+    timeout_secs = os.environ.get("PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS")
+    if timeout_secs:
+      options.connection_timeout_in_seconds = int(timeout_secs)
+    return ifrt_proxy.get_client(
+        jax.config.read("jax_backend_target"),
+        options,
+    )
+
   backend.register_backend_factory(
       "proxy",
-      lambda: ifrt_proxy.get_client(
-          jax.config.read("jax_backend_target"),
-          ifrt_proxy.ClientConnectionOptions(),
-      ),
+      make_client,
       priority=-1,
   )

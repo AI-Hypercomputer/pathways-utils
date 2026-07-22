@@ -58,6 +58,12 @@ def _get_parser() -> argparse.ArgumentParser:
       ),
       type=str,
   )
+  parser.add_argument(
+      "--auth_token",
+      default=None,
+      help="Authentication token for accessing the profiling server.",
+      type=str,
+  )
 
   return parser
 
@@ -67,7 +73,11 @@ def main() -> None:
   args = parser.parse_args()
 
   if profiling.collect_profile(
-      args.port, args.duration_ms, args.host, args.log_dir
+      args.port,
+      args.duration_ms,
+      args.host,
+      args.log_dir,
+      auth_token=args.auth_token,
   ):
     _logger.info("Dumped profiling information in: %s", args.log_dir)
   else:
