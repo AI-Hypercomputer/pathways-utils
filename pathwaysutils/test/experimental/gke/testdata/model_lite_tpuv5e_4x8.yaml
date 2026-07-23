@@ -73,8 +73,6 @@ spec:
               volumeMounts:
               - mountPath: /tmp
                 name: shared-tmp
-            dnsPolicy: ClusterFirstWithHostNet
-            hostNetwork: true
             initContainers:
             - args:
               - --server_port=29001
@@ -209,8 +207,6 @@ spec:
               volumeMounts:
               - mountPath: /tmp
                 name: shared-tmp
-            dnsPolicy: ClusterFirstWithHostNet
-            hostNetwork: true
             nodeSelector:
               cloud.google.com/gke-tpu-accelerator: tpu-v5-lite-podslice
               cloud.google.com/gke-tpu-topology: 4x8

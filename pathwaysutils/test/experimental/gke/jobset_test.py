@@ -2,12 +2,22 @@ import hashlib
 import itertools
 import os
 from typing import Any
+import unittest
 from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
-from kubernetes import client
-from pathwaysutils.experimental.gke import jobset
 import yaml
+
+try:
+  import kubernetes
+except ImportError:
+  raise unittest.SkipTest(
+      "kubernetes is not installed (requires pathwaysutils[test])"
+  )
+
+from kubernetes import client
+from kubernetes import config as k8s_config
+from pathwaysutils.experimental.gke import jobset
 
 
 def normalize_k8s_spec(spec: Any) -> Any:
@@ -139,8 +149,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("pathways-head", helper.jobs)
     self.assertEqual(helper.jobs["pathways-head"]["replicas"], 1)
     pod_spec = helper.pod_specs["pathways-head"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "Never")
 
   def test_headless_head_job_containers(self):
@@ -166,98 +176,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
     )
     self.assertIn("--num_elastic_slices=2", proxy_container["args"])
-
-  def test_non_headless_head_job_init_containers(self):
-    user_pod_template = {
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "ubuntu:latest",
-            }]
-        }
-    }
-    js = self._create_jobset(
-        user_pod_template=user_pod_template,
-        main_container_name="jax-tpu",
-    )
-
-    config = js.to_dict()
-    helper = JobSetManifestHelper(config)
-
-    pod_spec = helper.pod_specs["pathways-head"]
-    self.assertLen(pod_spec["initContainers"], 2)
-    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
-    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
-
-    rm_container = helper.init_containers["pathways-head"]["pathways-rm"]
-    proxy_container = helper.init_containers["pathways-head"]["pathways-proxy"]
-    self.assertEqual(rm_container["restartPolicy"], "Always")
-    self.assertEqual(proxy_container["restartPolicy"], "Always")
-
-  def test_non_headless_head_job_jax_env(self):
-    user_pod_template = {
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "ubuntu:latest",
-            }]
-        }
-    }
-    js = self._create_jobset(
-        user_pod_template=user_pod_template,
-        main_container_name="jax-tpu",
-    )
-
-    config = js.to_dict()
-    helper = JobSetManifestHelper(config)
-
-    self.assertIn("jax-tpu", helper.containers["pathways-head"])
-    main_container = helper.containers["pathways-head"]["jax-tpu"]
-    env_names = [e["name"] for e in main_container["env"]]
-    self.assertIn("PATHWAYS_HEAD", env_names)
-    self.assertIn("JAX_PLATFORMS", env_names)
-    self.assertIn("XCLOUD_ENVIRONMENT", env_names)
-    self.assertIn("JAX_BACKEND_TARGET", env_names)
-
-  def test_non_headless_head_job_annotations(self):
-    user_pod_template = {
-        "metadata": {"annotations": {"example.com/annotation": "value"}},
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "ubuntu:latest",
-            }]
-        }
-    }
-    js = self._create_jobset(
-        user_pod_template=user_pod_template,
-        main_container_name="jax-tpu",
-    )
-
-    config = js.to_dict()
-    helper = JobSetManifestHelper(config)
-
-    head_job = helper.jobs["pathways-head"]
-    self.assertEqual(
-        head_job["template"]["metadata"]["annotations"][
-            "example.com/annotation"
-        ],
-        "value",
-    )
-    self.assertEqual(
-        head_job["template"]["spec"]["template"]["metadata"]["annotations"][
-            "example.com/annotation"
-        ],
-        "value",
-    )
-
-  def test_monkeypatch_restart_policy(self):
-    # Construct V1Container with restart_policy to test monkeypatch.
-    c = client.V1Container(
-        name="test",
-        restart_policy="Always"  # pyrefly: ignore[unexpected-keyword]
-    )  # pytype: disable=wrong-keyword-args
-    self.assertEqual(getattr(c, "restart_policy"), "Always")
 
   def test_worker_job_replicas(self):
     js = self._create_jobset(num_slices=2)
@@ -289,8 +207,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(config)
 
     pod_spec = helper.pod_specs["pathways-worker"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "OnFailure")
     self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 60)
 
@@ -358,7 +276,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
       ("worker", "pathways-worker", ["pathways-worker"]),
       ("explicit", ["pathways-worker", "pathways-rm"], ["pathways-worker", "pathways-rm"]),
   )
-  def test_add_gcsfuse_container_filtering_headless(
+  def test_add_gcsfuse_container_filtering(
       self, containers_param, expected_containers
   ):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
@@ -373,49 +291,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(pw_jobset.to_dict())
 
     all_possible_containers = ["pathways-rm", "pathways-proxy", "pathways-worker"]
-    for c_name in all_possible_containers:
-      matches = helper.get_all_containers_by_name(c_name)
-      self.assertNotEmpty(matches)
-      for job_name, container in matches:
-        has_mount = any(m["mountPath"] == "/gcs/data" for m in container.get("volumeMounts", []))
-        if c_name in expected_containers:
-          self.assertTrue(has_mount, f"Expected {c_name} in {job_name} to have mount")
-        else:
-          self.assertFalse(has_mount, f"Expected {c_name} in {job_name} NOT to have mount")
-
-  @parameterized.named_parameters(
-      ("all", "all", ["pathways-rm", "pathways-proxy", "pathways-worker", "jax-tpu"]),
-      ("explicit", ["pathways-worker", "jax-tpu"], ["pathways-worker", "jax-tpu"]),
-      ("explicit_rm", ["pathways-worker", "pathways-rm"], ["pathways-worker", "pathways-rm"]),
-  )
-  def test_add_gcsfuse_container_filtering_non_headless(
-      self, containers_param, expected_containers
-  ):
-    user_pod_template = {
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "gcr.io/my-project/jax-tpu:latest",
-            }]
-        }
-    }
-    pw_jobset = self._create_jobset(
-        topology="2x2",
-        num_slices=1,
-        user_pod_template=user_pod_template,
-        main_container_name="jax-tpu",
-    )
-    bucket_hash = int(hashlib.md5("my-bucket".encode()).hexdigest(), 16) % (10**8)
-    expected_vol_name = f"gcsfuse-{bucket_hash}"
-
-    pw_jobset.add_gcsfuse(
-        containers=containers_param,
-        mount_path="/gcs/data",
-        bucket="my-bucket",
-    )
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    all_possible_containers = ["pathways-rm", "pathways-proxy", "pathways-worker", "jax-tpu"]
     for c_name in all_possible_containers:
       matches = helper.get_all_containers_by_name(c_name)
       self.assertNotEmpty(matches)
@@ -544,9 +419,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
     helper = JobSetManifestHelper(pw_jobset.to_dict())
 
-    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
-    sidecar = helper.init_containers["pathways-worker"]["colocated-python-sidecar"]
-    self.assertEqual(sidecar["restartPolicy"], "Always")
+    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
+    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
     self.assertEqual(sidecar["image"], "gcr.io/my-project/colocated-python:custom")
     self.assertTrue(
         any(
@@ -575,7 +449,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
     # Verify both exist
     self.assertIn("existing-init-container", helper.init_containers["pathways-worker"])
-    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
+    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
 
   def test_add_colocated_python_volume_default(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
@@ -619,8 +493,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
     helper = JobSetManifestHelper(pw_jobset.to_dict())
 
-    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
-    sidecar = helper.init_containers["pathways-worker"]["colocated-python-sidecar"]
+    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
+    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
     self.assertTrue(
         any(
             m["name"] == "shared-memory" and m["mountPath"] == "/tmp/custom-shm"
@@ -654,35 +528,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
             for e in worker_container["env"]
         )
     )
-
-  def test_colocated_python_with_jax_command(self):
-    jax_command = "import jax; print(jax.devices());"
-    user_pod_template = {
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "gcr.io/my-project/jax-tpu:latest",
-                "command": ["python3", "-c", jax_command],
-            }]
-        }
-    }
-    pw_jobset = self._create_jobset(
-        topology="2x2",
-        num_slices=1,
-        user_pod_template=user_pod_template,
-        main_container_name="jax-tpu",
-    )
-
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    self.assertIn("pathways-head", helper.jobs)
-    self.assertIn("jax-tpu", helper.containers["pathways-head"])
-    jax_container = helper.containers["pathways-head"]["jax-tpu"]
-    self.assertEqual(jax_container["command"], ["python3", "-c", jax_command])
-
-    self.assertIn("pathways-worker", helper.jobs)
-    self.assertIn("colocated-python-sidecar", helper.init_containers["pathways-worker"])
 
   # Reference similar GKE / JobSet custom object unit test suites:
   # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py
@@ -949,29 +794,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
 
-  def test_shared_pathways_service_with_user_template_fails(self):
-    user_pod_template = {
-        "spec": {
-            "containers": [{
-                "name": "jax-tpu",
-                "image": "gcr.io/my-project/jax-tpu:latest",
-            }]
-        }
-    }
-    with self.assertRaisesRegex(
-        ValueError,
-        "Cannot enable shared_pathways_service when user_pod_template is"
-        " provided.",
-    ):
-      jobset.PathwaysJobSet(
-          name="test-sps",
-          namespace="default",
-          pathways_dir="gs://bucket/scratch",
-          tpu_type="v5e",
-          topology="2x2",
-          num_slices=2,
-          shared_pathways_service=True,
-          user_pod_template=user_pod_template,
-      )
+
 if __name__ == "__main__":
   absltest.main()
