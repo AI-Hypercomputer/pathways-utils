@@ -99,28 +99,37 @@ class Manager:
 
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
   all_slice_indices: Set[int]
-  active_slice_indices: Set[int]
-  inactive_slice_indices: Set[int]
-  available_inactive_slices: Set[int]
+  _active_slice_indices: Set[int]
+  available_inactive_slice_indices: Set[int]
+  _lock: threading.RLock
+  _poll_interval: float
   _stop_event: threading.Event | None
   _monitor_thread: threading.Thread | None
-  def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
+
+  def __init__(
+      self,
+      devices: Sequence[jax.Device] | None = None,
+      min_slice_count: int = 1,
+  ) -> None:
     """Initializes the manager.
 
     Args:
       devices: The devices to use. If None, jax.devices() is used.
+      min_slice_count: Minimum number of active slices required at init.
     """
+    self._lock = threading.RLock()
+    self.available_inactive_slice_indices = frozenset()
+    self._poll_interval = 10.0
     if devices is None:
       devices = jax.devices()
     self.slice_to_devices = elastic.get_slice_to_devices(devices)
-
     self.all_slice_indices = frozenset(self.slice_to_devices.keys())
 
-    self.active_slice_indices = elastic.get_active_slice_indices(
-        slice_to_devices=self.slice_to_devices
+    initial_active_slices = elastic.wait_for_slices(
+        slice_count=min_slice_count,
+        slice_to_devices=self.slice_to_devices,
     )
-    self.inactive_slice_indices = self.all_slice_indices - self.active_slice_indices
-    self.available_inactive_slices = frozenset()
+    self.active_slice_indices = initial_active_slices
 
     self._stop_event = None
     self._monitor_thread = None
@@ -135,6 +144,7 @@ class Manager:
       _logger.warning("Monitor thread is already running.")
       return
 
+    self._poll_interval = float(poll_interval)
     self._stop_event = threading.Event()
     self._monitor_thread = threading.Thread(
         target=self._monitor_new_slices,
@@ -151,10 +161,12 @@ class Manager:
     if self._monitor_thread is not None:
       _logger.info("Closing manager, waiting for monitor thread to stop...")
       try:
-        self._monitor_thread.join(timeout=5)
+        join_timeout = max(5.0, self._poll_interval + 2.0)
+        self._monitor_thread.join(timeout=join_timeout)
         if self._monitor_thread.is_alive():
           _logger.warning(
-              "Elastic monitor thread failed to stop within 5s timeout."
+              "Elastic monitor thread failed to stop within %ss timeout.",
+              join_timeout,
           )
       except RuntimeError as e:
         if "cannot join thread" in str(e):
@@ -181,9 +193,38 @@ class Manager:
       raise ValueError("No active slices") from error
 
   @property
+  def active_slice_indices(self) -> Set[int]:
+    """Set of active slice indices."""
+    with self._lock:
+      return self._active_slice_indices
+
+  @active_slice_indices.setter
+  def active_slice_indices(self, slice_indices: Set[int]) -> None:
+    """Sets active slice indices and clears available inactive slice indices."""
+    with self._lock:
+      self._active_slice_indices = frozenset(slice_indices)
+      self.available_inactive_slice_indices = frozenset()
+
+  @property
+  def inactive_slice_indices(self) -> Set[int]:
+    """Set of inactive slice indices."""
+    with self._lock:
+      return self.all_slice_indices - self._active_slice_indices
+
+  @property
   def active_slice_count(self) -> int:
     """The number of active slices."""
     return len(self.active_slice_indices)
+
+  @property
+  def available_inactive_slices(self) -> Set[int]:
+    """Deprecated alias for available_inactive_slice_indices."""
+    return self.available_inactive_slice_indices
+
+  @available_inactive_slices.setter
+  def available_inactive_slices(self, slices: Set[int]) -> None:
+    """Deprecated alias setter for available_inactive_slice_indices."""
+    self.available_inactive_slice_indices = frozenset(slices)
 
   @property
   def new_slice_event(self) -> threading.Event:
@@ -192,7 +233,7 @@ class Manager:
     TODO: b/527183831 - Remove this property once MaxText CL 2 is submitted.
     """
     event = threading.Event()
-    if self.available_inactive_slices:
+    if self.available_inactive_slice_indices:
       event.set()
     return event
 
@@ -228,18 +269,20 @@ class Manager:
       array.delete()
 
   def _check_inactive_slices(self) -> None:
-    """Checks inactive slices and updates available_inactive_slices."""
-    if not self.inactive_slice_indices:
+    """Checks inactive slices and updates available_inactive_slice_indices."""
+    with self._lock:
+      inactive_indices = self.all_slice_indices - self._active_slice_indices
+      current_active = self._active_slice_indices
+
+    if not inactive_indices:
       _logger.debug("No inactive slices to check.")
-      if self.available_inactive_slices:
-        self.available_inactive_slices = frozenset()
       return
 
     _logger.debug(
-        "Now checking inactive slices %s", self.inactive_slice_indices
+        "Now checking inactive slices %s", inactive_indices
     )
     inactive_slice_to_devices = {
-        i: self.slice_to_devices[i] for i in self.inactive_slice_indices
+        i: self.slice_to_devices[i] for i in inactive_indices
     }
     found_slices = elastic.get_active_slice_indices(
         inactive_slice_to_devices
@@ -249,15 +292,16 @@ class Manager:
         "Found available and inactive slices %s", found_slices
     )
 
-    # Filter against active_slice_indices in case the main thread initiated scale-up
-    # and claimed these slices while this background health check was running.
-    found_slices = found_slices - self.active_slice_indices
+    with self._lock:
+      # Filter against active_slice_indices in case the main thread initiated scale-up
+      # and claimed these slices while this background health check was running.
+      found_slices = found_slices - self._active_slice_indices
 
-    if found_slices != self.available_inactive_slices:
-      _logger.info(
-          "Newly available but inactive slices %s", found_slices
-      )
-      self.available_inactive_slices = frozenset(found_slices)
+      if found_slices != self.available_inactive_slice_indices:
+        _logger.info(
+            "Newly available but inactive slices %s", found_slices
+        )
+        self.available_inactive_slice_indices = frozenset(found_slices)
 
   def _monitor_new_slices(
       self, stop_event: threading.Event, poll_interval: float | int
@@ -372,12 +416,6 @@ class Manager:
               poll_interval=poll_interval,
               timeout=timeout,
           )
-          self.inactive_slice_indices = (
-              self.all_slice_indices - self.active_slice_indices
-          )
-          # Reset available_inactive_slices at attempt start since
-          # active_slice_indices has just been updated by wait_for_slices.
-          self.available_inactive_slices = frozenset()
           if pre_callback is not None:
             pre_callback()
 
