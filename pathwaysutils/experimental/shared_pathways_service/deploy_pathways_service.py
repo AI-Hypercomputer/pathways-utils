@@ -4,7 +4,6 @@ from collections.abc import Callable, Sequence
 import dataclasses
 import logging
 import math
-import os
 from typing import Any
 from absl import app
 from absl import flags
@@ -142,7 +141,6 @@ def calculate_vms_per_slice(topology: str, chips_per_vm: int) -> int:
     ) from e
 
 
-
 def deploy_jobset(jobset_yaml: dict[str, Any]) -> None:
   """Deploys the JobSet to the current Kubernetes cluster."""
   try:
@@ -185,6 +183,9 @@ def run_deployment(
       topology=topology,
       num_slices=num_slices,
       shared_pathways_service=True,
+      # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
+      # implemented
+      max_slice_restarts=1000000,
   )
 
   # If custom server_image is provided, mutate the templates to use it.
