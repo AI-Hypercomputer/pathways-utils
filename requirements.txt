@@ -5,3 +5,5 @@ orbax-checkpoint
 uvicorn
 requests
 packaging
+kubernetes
+pyyaml
