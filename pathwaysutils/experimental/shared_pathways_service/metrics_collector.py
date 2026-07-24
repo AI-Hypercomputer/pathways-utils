@@ -243,6 +243,15 @@ class MetricsCollector:
     """Creates a metric descriptor if not already present."""
     metric_type = METRIC_PREFIX + name
     display_name = display_name or name
+    descriptor_name = (
+        f"projects/{self.project_id}/metricDescriptors/{metric_type}"
+    )
+    try:
+      self.client.get_metric_descriptor(name=descriptor_name)
+      _logger.debug("Metric descriptor %s already exists.", metric_type)
+      return
+    except exceptions.NotFound:
+      pass
 
     try:
       self.client.create_metric_descriptor(
