@@ -320,8 +320,6 @@ class PathwaysJobSet:
       containers.append(proxy_container)
 
     head_pod_spec = client.V1PodSpec(
-        host_network=True,
-        dns_policy="ClusterFirstWithHostNet",
         containers=containers,
         restart_policy="Never",
     )
@@ -466,8 +464,6 @@ class PathwaysJobSet:
                 ),
             )
         ],
-        host_network=True,
-        dns_policy="ClusterFirstWithHostNet",
         restart_policy="OnFailure",
     )
     if termination_grace_period_seconds is not None:

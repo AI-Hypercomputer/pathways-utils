@@ -149,8 +149,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("pathways-head", helper.jobs)
     self.assertEqual(helper.jobs["pathways-head"]["replicas"], 1)
     pod_spec = helper.pod_specs["pathways-head"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "Never")
 
   def test_headless_head_job_containers(self):
@@ -207,8 +207,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(config)
 
     pod_spec = helper.pod_specs["pathways-worker"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "OnFailure")
     self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 60)
 
