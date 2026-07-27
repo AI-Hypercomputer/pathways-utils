@@ -116,11 +116,12 @@ class Manager:
 
     self.all_slice_indices = frozenset(self.slice_to_devices.keys())
 
+    self._active_slice_indices = frozenset()
+    self.available_inactive_slices = frozenset()
+
     self.active_slice_indices = elastic.get_active_slice_indices(
         slice_to_devices=self.slice_to_devices
     )
-    self.inactive_slice_indices = self.all_slice_indices - self.active_slice_indices
-    self.available_inactive_slices = frozenset()
 
     self._stop_event = None
     self._monitor_thread = None
@@ -181,20 +182,24 @@ class Manager:
       raise ValueError("No active slices") from error
 
   @property
+  def active_slice_indices(self) -> frozenset[int]:
+    """The indices of active slices."""
+    return self._active_slice_indices
+
+  @active_slice_indices.setter
+  def active_slice_indices(self, value: Set[int]) -> None:
+    self._active_slice_indices = frozenset(value)
+    self.inactive_slice_indices = (
+        self.all_slice_indices - self._active_slice_indices
+    )
+    self.available_inactive_slices = frozenset(
+        self.available_inactive_slices - self._active_slice_indices
+    )
+
+  @property
   def active_slice_count(self) -> int:
     """The number of active slices."""
     return len(self.active_slice_indices)
-
-  @property
-  def new_slice_event(self) -> threading.Event:
-    """Deprecated compatibility property for un-updated MaxText code.
-
-    TODO: b/527183831 - Remove this property once MaxText CL 2 is submitted.
-    """
-    event = threading.Event()
-    if self.available_inactive_slices:
-      event.set()
-    return event
 
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
@@ -371,9 +376,6 @@ class Manager:
               slice_to_devices=self.slice_to_devices,
               poll_interval=poll_interval,
               timeout=timeout,
-          )
-          self.inactive_slice_indices = (
-              self.all_slice_indices - self.active_slice_indices
           )
           # Reset available_inactive_slices at attempt start since
           # active_slice_indices has just been updated by wait_for_slices.
