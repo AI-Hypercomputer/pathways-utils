@@ -80,10 +80,11 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 
 ## Instructions
 
-### 1. Clone `pathwaysutils`.
+### 1. Clone `pathwaysutils` and install the requirements.
 
 ```shell
 git clone https://github.com/AI-Hypercomputer/pathways-utils.git
+pip install ./pathways-utils
 ```
 
 ### 2. Use the `isc_pathways` Context Manager
@@ -111,7 +112,7 @@ python3 pathwaysutils/experimental/shared_pathways_service/run_connect_example.p
 --gcs_bucket="gs://user-bucket" \
 --pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001" \
 --tpu_type="tpuv6e:2x2" \
---tpu_count=1
+--tpu_count=1  # number of slices
 ```
 
 The connect block will deploy a proxy pod dedicated to your client and connect
