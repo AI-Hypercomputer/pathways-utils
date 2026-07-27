@@ -206,7 +206,7 @@ def run_deployment(
   worker_spec = pw_jobset.worker_job_template.spec.template.spec
 
   # 1. Add extra logging env vars to sidecar.
-  for container in worker_spec.init_containers:
+  for container in ((worker_spec.containers or []) + (worker_spec.init_containers or [])):
     if container.name == "colocated-python-sidecar":
       container.env.extend([
           client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
