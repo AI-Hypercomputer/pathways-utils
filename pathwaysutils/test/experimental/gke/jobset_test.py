@@ -654,6 +654,57 @@ class PathwaysJobSetTest(parameterized.TestCase):
         normalize_k8s_spec(imported_jobset.to_dict()),
     )
 
+  def test_configurable_images(self):
+    pw_jobset = jobset.PathwaysJobSet(
+        name="test-workload",
+        namespace="default",
+        pathways_dir="gs://bucket/scratch",
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+        pathways_version="v2.0",
+        pathways_rm_and_worker_image="gcr.io/custom/server",
+        pathways_proxy_image="gcr.io/custom/proxy:tagged",
+    )
+
+    self.assertEqual(
+        pw_jobset.pathways_rm_and_worker_image, "gcr.io/custom/server"
+    )
+    self.assertEqual(
+        pw_jobset.pathways_proxy_image, "gcr.io/custom/proxy:tagged"
+    )
+
+    # Verify head job containers.
+    head_containers = {
+        c.name: c.image
+        for c in pw_jobset.head_job_template.spec.template.spec.containers
+    }
+    self.assertEqual(head_containers["pathways-rm"], "gcr.io/custom/server:v2.0")
+    self.assertEqual(
+        head_containers["pathways-proxy"], "gcr.io/custom/proxy:tagged"
+    )
+
+    # Verify worker job container.
+    worker_image = (
+        pw_jobset.worker_job_template.spec.template.spec.containers[0].image
+    )
+    self.assertEqual(worker_image, "gcr.io/custom/server:v2.0")
+
+    # Verify roundtrip import.
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "jobset_custom.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported_jobset = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+
+    self.assertEqual(
+        imported_jobset.pathways_rm_and_worker_image,
+        "gcr.io/custom/server:v2.0",
+    )
+    self.assertEqual(
+        imported_jobset.pathways_proxy_image, "gcr.io/custom/proxy:tagged"
+    )
+
   def test_import_validation_failures(self):
     temp_dir = self.create_tempdir().full_path
 

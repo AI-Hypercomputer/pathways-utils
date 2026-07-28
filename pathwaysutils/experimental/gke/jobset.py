@@ -81,6 +81,16 @@ MACHINE_TYPE_TO_GKE_ACCELERATOR_TYPE_MAP = {
 }
 
 
+def _format_image(image: str, default_tag: str) -> str:
+  """Appends default_tag if image does not already specify a tag or digest."""
+  if "@" in image:
+    return image
+  last_slash = image.rfind("/")
+  if ":" in image[last_slash + 1:]:
+    return image
+  return f"{image}:{default_tag}"
+
+
 def _deserialize_dict(
     api_client: Any, data_dict: Mapping[str, Any], klass: Any
 ) -> Any:
@@ -112,6 +122,8 @@ class PathwaysJobSet:
       labels: Mapping[str, str] | None = None,
       annotations: Mapping[str, str] | None = None,
       shared_pathways_service: bool = False,
+      pathways_rm_and_worker_image: str = DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE,
+      pathways_proxy_image: str = DEFAULT_PATHWAYS_PROXY_IMAGE,
   ):
     """Initializes the instance.
 
@@ -131,8 +143,13 @@ class PathwaysJobSet:
       labels: Optional labels for the JobSet.
       annotations: Optional annotations for the JobSet.
       shared_pathways_service: Whether to run only RM for Shared Pathways Service.
+      pathways_rm_and_worker_image: Base Docker image for Resource Manager and
+        Worker containers.
+      pathways_proxy_image: Base Docker image for Proxy container.
     """
     self._shared_pathways_service = shared_pathways_service
+    self._pathways_rm_and_worker_image = pathways_rm_and_worker_image
+    self._pathways_proxy_image = pathways_proxy_image
 
     self._name = name
     self._namespace = namespace
@@ -170,6 +187,8 @@ class PathwaysJobSet:
         image_tag=image_tag,
         elastic_slices=elastic_slices,
         shared_pathways_service=shared_pathways_service,
+        pathways_rm_and_worker_image=pathways_rm_and_worker_image,
+        pathways_proxy_image=pathways_proxy_image,
     )
 
     # Build worker template.
@@ -182,6 +201,7 @@ class PathwaysJobSet:
         image_tag=image_tag,
         max_slice_restarts=max_slice_restarts,
         termination_grace_period_seconds=termination_grace_period_seconds,
+        pathways_rm_and_worker_image=pathways_rm_and_worker_image,
     )
 
     self._success_policy = None
@@ -199,6 +219,14 @@ class PathwaysJobSet:
   def worker_job_template(self) -> client.V1JobTemplateSpec:
     return self._worker_job_template
 
+  @property
+  def pathways_rm_and_worker_image(self) -> str:
+    return self._pathways_rm_and_worker_image
+
+  @property
+  def pathways_proxy_image(self) -> str:
+    return self._pathways_proxy_image
+
   def _build_head_job_template(
       self,
       pathways_dir: str,
@@ -207,6 +235,8 @@ class PathwaysJobSet:
       image_tag: str,
       elastic_slices: int,
       shared_pathways_service: bool,
+      pathways_rm_and_worker_image: str,
+      pathways_proxy_image: str,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -217,12 +247,14 @@ class PathwaysJobSet:
       image_tag: Version tag for Pathways images.
       elastic_slices: Number of elastic slices.
       shared_pathways_service: Whether to run only RM for Shared Pathways Service.
+      pathways_rm_and_worker_image: Base Docker image for Resource Manager.
+      pathways_proxy_image: Base Docker image for Proxy container.
 
     Returns:
       The head job template.
     """
-    rm_image = f"{DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE}:{image_tag}"
-    proxy_image = f"{DEFAULT_PATHWAYS_PROXY_IMAGE}:{image_tag}"
+    rm_image = _format_image(pathways_rm_and_worker_image, image_tag)
+    proxy_image = _format_image(pathways_proxy_image, image_tag)
 
     rm_args = [
         f"--server_port={PATHWAYS_RM_PORT}",
@@ -355,8 +387,10 @@ class PathwaysJobSet:
       image_tag: str,
       max_slice_restarts: int,
       termination_grace_period_seconds: int | None,
+      pathways_rm_and_worker_image: str,
   ) -> client.V1JobTemplateSpec:
-    worker_image = f"{DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE}:{image_tag}"
+    """Builds the worker job template for the JobSet."""
+    worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
 
     args = [
         f"--resource_manager_address=$(PATHWAYS_HEAD):{PATHWAYS_RM_PORT}",
@@ -574,7 +608,9 @@ class PathwaysJobSet:
         ports=[client.V1ContainerPort(container_port=50051)],
         volume_mounts=[
             client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
-            client.V1VolumeMount(name=shm_volume_name, mount_path=shm_mount_path),
+            client.V1VolumeMount(
+                name=shm_volume_name, mount_path=shm_mount_path
+            ),
         ],
     )
 
@@ -630,7 +666,9 @@ class PathwaysJobSet:
 
     for job_template in (self._head_job_template, self._worker_job_template):
       pod_spec = job_template.spec.template.spec
-      all_containers = (pod_spec.containers or []) + (pod_spec.init_containers or [])
+      all_containers = (pod_spec.containers or []) + (
+          pod_spec.init_containers or []
+      )
 
       matching = self._filter_matching_containers(containers, all_containers)
       if not matching:
@@ -759,6 +797,25 @@ class PathwaysJobSet:
 
     instance._head_job_template = head_job_template
     instance._worker_job_template = worker_job_template
+
+    rm_image = DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE
+    proxy_image = DEFAULT_PATHWAYS_PROXY_IMAGE
+    if (
+        head_job_template.spec
+        and head_job_template.spec.template
+        and head_job_template.spec.template.spec
+    ):
+      pod_spec = head_job_template.spec.template.spec
+      all_containers = (pod_spec.containers or []) + (
+          pod_spec.init_containers or []
+      )
+      for c in all_containers:
+        if c.name == "pathways-rm" and c.image:
+          rm_image = c.image
+        elif c.name == "pathways-proxy" and c.image:
+          proxy_image = c.image
+    instance._pathways_rm_and_worker_image = rm_image
+    instance._pathways_proxy_image = proxy_image
 
     instance._success_policy = config["spec"].get("successPolicy")
     return instance
