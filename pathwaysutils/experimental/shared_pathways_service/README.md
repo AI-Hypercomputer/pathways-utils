@@ -18,8 +18,6 @@ You have a GKE cluster with at least 1 TPU slice (v5e, v5p or v6e).
 
 Start the Shared Pathways Service by running `deploy_pathways_service.py`.
 
-`server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
-
 ```shell
 python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_service \
 --jobset_name ${SERVICE_JOBSET_NAME} \
@@ -29,6 +27,8 @@ python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_se
 --topology ${TOPOLOGY} \
 --num_slices ${NUM_SLICES} [--sidecar_image ${SIDECAR_IMAGE}] [--dry_run]
 ```
+
+Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
 
 ### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
