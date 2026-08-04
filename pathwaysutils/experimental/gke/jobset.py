@@ -159,6 +159,11 @@ class PathwaysJobSet:
     self._labels = dict(labels) if labels else {}
     self._annotations = dict(annotations) if annotations else {}
 
+    if elastic_slices > num_slices:
+      raise ValueError(
+          f"elastic_slices ({elastic_slices}) cannot be greater than "
+          f"num_slices ({num_slices})"
+      )
     tpu_version = MACHINE_TYPE_TO_TPU_VERSION_MAP.get(tpu_type.lower())
     if not tpu_version:
       raise ValueError(f"Unsupported TPU type: {tpu_type}")
