@@ -43,6 +43,7 @@ gke = [
     "pyyaml",
 ]
 test = [
+    "httpx",
     "kubernetes",
     "pyyaml",
     "pytest",
