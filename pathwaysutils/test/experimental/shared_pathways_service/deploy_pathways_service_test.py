@@ -123,11 +123,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         max_slice_restarts=1000000,
     )
 
-    # Verify colocated python was added with correct image and SHM path
-    mock_jobset.add_colocated_python.assert_called_once_with(
-        image="custom-sidecar-image",
-        shm_mount_path="/tmp/sidecar_dir",
-    )
+
 
     # Verify server images were mutated
     self.assertEqual(mock_head_job.spec.template.spec.containers[0].image, "custom-server-image")

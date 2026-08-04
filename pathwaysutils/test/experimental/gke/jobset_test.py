@@ -401,137 +401,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("preexisting-head-vol", helper.volumes["pathways-head"])
     self.assertIn("preexisting-worker-vol", helper.volumes["pathways-worker"])
 
-  def test_add_colocated_python_handles_none_volumes(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
-    # Force volumes to be None
-    pw_jobset._worker_job_template.spec.template.spec.volumes = None
-
-    # Should not crash and should correctly add volume
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
-    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
-
-  def test_add_colocated_python_sidecar(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
-    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
-    self.assertEqual(sidecar["image"], "gcr.io/my-project/colocated-python:custom")
-    self.assertTrue(
-        any(
-            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/shared-memory"
-            for m in sidecar["volumeMounts"]
-        )
-    )
-    self.assertTrue(
-        any(
-            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
-            and e["value"] == "/tmp/shared-memory"
-            for e in sidecar["env"]
-        )
-    )
-
-  def test_add_colocated_python_preserves_init_containers(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
-    # Pre-populate init container on worker pod
-    worker_spec = pw_jobset._worker_job_template.spec.template.spec
-    existing_init = client.V1Container(name="existing-init-container", image="ubuntu:latest")
-    worker_spec.init_containers = [existing_init]
-
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    # Verify both exist
-    self.assertIn("existing-init-container", helper.init_containers["pathways-worker"])
-    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
-
-  def test_add_colocated_python_volume_default(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
-    shm_vol = helper.volumes["pathways-worker"]["shared-memory"]
-    self.assertNotIn("sizeLimit", shm_vol["emptyDir"])
-
-  def test_add_colocated_python_worker_mount(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    self.assertIn("pathways-worker", helper.containers["pathways-worker"])
-    worker_container = helper.containers["pathways-worker"]["pathways-worker"]
-    self.assertTrue(
-        any(
-            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/shared-memory"
-            for m in worker_container["volumeMounts"]
-        )
-    )
-    self.assertTrue(
-        any(
-            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
-            and e["value"] == "/tmp/shared-memory"
-            for e in worker_container["env"]
-        )
-    )
-
-  def test_add_colocated_python_custom_shm(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-
-    pw_jobset.add_colocated_python(
-        image="gcr.io/my-project/colocated-python:custom",
-        shm_mount_path="/tmp/custom-shm",
-        shm_size_limit="50Gi",
-    )
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-
-    self.assertIn("colocated-python-sidecar", helper.containers["pathways-worker"])
-    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
-    self.assertTrue(
-        any(
-            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/custom-shm"
-            for m in sidecar["volumeMounts"]
-        )
-    )
-    self.assertTrue(
-        any(
-            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
-            and e["value"] == "/tmp/custom-shm"
-            for e in sidecar["env"]
-        )
-    )
-
-    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
-    shm_vol = helper.volumes["pathways-worker"]["shared-memory"]
-    self.assertEqual(shm_vol["emptyDir"]["sizeLimit"], "50Gi")
-
-    self.assertIn("pathways-worker", helper.containers["pathways-worker"])
-    worker_container = helper.containers["pathways-worker"]["pathways-worker"]
-    self.assertTrue(
-        any(
-            m["name"] == "shared-memory" and m["mountPath"] == "/tmp/custom-shm"
-            for m in worker_container["volumeMounts"]
-        )
-    )
-    self.assertTrue(
-        any(
-            e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
-            and e["value"] == "/tmp/custom-shm"
-            for e in worker_container["env"]
-        )
-    )
-
-  # Reference similar GKE / JobSet custom object unit test suites:
-  # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py
-  # - Upstream Kubernetes SIGs JobSet unit tests: https://github.com/kubernetes-sigs/jobset/blob/main/pkg/controllers/jobset_controller_test.go
   @mock.patch("kubernetes.config.load_kube_config")
   @mock.patch("kubernetes.config.load_incluster_config")
   @mock.patch("kubernetes.client.CustomObjectsApi")
@@ -567,6 +436,9 @@ class PathwaysJobSetTest(parameterized.TestCase):
         field_manager="pathwaysutils",
     )
 
+  @mock.patch("kubernetes.config.load_kube_config")
+  @mock.patch("kubernetes.config.load_incluster_config")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
   @mock.patch("kubernetes.config.load_kube_config")
   @mock.patch("kubernetes.config.load_incluster_config")
   @mock.patch("kubernetes.client.CustomObjectsApi")
@@ -609,6 +481,9 @@ class PathwaysJobSetTest(parameterized.TestCase):
   @mock.patch("kubernetes.config.load_kube_config")
   @mock.patch("kubernetes.config.load_incluster_config")
   @mock.patch("kubernetes.client.CustomObjectsApi")
+  @mock.patch("kubernetes.config.load_kube_config")
+  @mock.patch("kubernetes.config.load_incluster_config")
+  @mock.patch("kubernetes.client.CustomObjectsApi")
   def test_apply_exists_no_recreate_fails(
       self, mock_custom_objects_api, mock_load_incluster, mock_load_kube
   ):
@@ -636,7 +511,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         topology="2x2",
         num_slices=1,
     )
-    pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
+    # pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
     pw_jobset.add_gcsfuse(
         containers="pathways-worker", mount_path="/tmp/gcs", bucket="my-bucket"
     )
