@@ -42,6 +42,13 @@ gke = [
     "kubernetes",
     "pyyaml",
 ]
+sps = [
+    "portpicker",
+    "google-cloud-monitoring",
+]
+sps_without_monitoring = [
+    "portpicker",
+]
 test = [
     "httpx",
     "kubernetes",

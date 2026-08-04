@@ -16,13 +16,19 @@ You have a GKE cluster with at least 1 TPU slice (v5e, v5p or v6e).
 
 ### 2. Deploy the Pathways head pod
 
-Start the Shared Pathways Service by using [pw-service-example.yaml](yamls/pw-service-example.yaml).
-Make sure to modify the following values to deploy the Pathways pods:
+Start the Shared Pathways Service by running `deploy_pathways_service.py`.
 
-- A unique Jobset name for the head pod
-- GCS bucket path
-- TPU type and topology
-- Number of slices
+```shell
+python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_service \
+--jobset_name ${SERVICE_JOBSET_NAME} \
+--gcs_bucket ${GCS_BUCKET} \
+--server_image ${SERVER_IMAGE} \
+--tpu_type ${TPU_TYPE} \
+--topology ${TOPOLOGY} \
+--num_slices ${NUM_SLICES} [--sidecar_image ${SIDECAR_IMAGE}] [--dry_run]
+```
+
+Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
 
 ### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
@@ -55,13 +61,13 @@ pathways-cluster-worker-1-0-km2rf          1/1     Running   0          3m36s   
 
 ```shell
 # e.g., pathways-cluster
-$ JOBSET_NAME=<your-jobset-name>  # same as you used in [pw-service-example.yaml](#pw-service-yaml)
+$ SERVICE_JOBSET_NAME=<your-jobset-name>  # same as you used in [pw-service-example.yaml](#pw-service-yaml)
 
 # e.g., pathways-cluster-pathways-head-0-0-zzmn2
-$ HEAD_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep head)
+$ HEAD_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${SERVICE_JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep head)
 
 # e.g., pathways-cluster-worker-0-0-bdzq4
-$ WORKER0_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep 'worker-0-0-')
+$ WORKER0_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=${SERVICE_JOBSET_NAME} -o jsonpath='{.items[?(@.status.phase=="Running")].metadata.name}' | sed 's/ /\n/g' | grep 'worker-0-0-')
 ```
 
 #### Option 3: Check project logs
@@ -80,15 +86,34 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 
 ## Instructions
 
-### 1. Clone `pathwaysutils`.
+### 1. Install `pathwaysutils` and SPS dependencies.
 
 ```shell
-git clone https://github.com/AI-Hypercomputer/pathways-utils.git
+pip install --upgrade
+git+https://github.com/AI-Hypercomputer/pathways-utils[sps]
+
+# Note: google-cloud-monitoring is optional. If you don't wish to collect SPS usage metrics, install with pathways-utils[sps_without_monitoring].
 ```
 
-### 2. Use the `isc_pathways` Context Manager
+### 2. Either use `run_workload.py` or move your workload under the `isc_pathways` Context Manager
 
-In your script,
+Make sure to use the proxy image compatible with the server image used while deploying SPS.
+
+```shell
+python3 -m pathwaysutils.experimental.shared_pathways_service.run_workload \
+--cluster=$CLUSTER_NAME \
+--project=$PROJECT \
+--region=$REGION \
+--gcs_bucket=$GCS_BUCKET \
+--pathways_service="$SERVICE_JOBSET_NAME-pathways-head-0-0.$SERVICE_JOBSET_NAME:29001" \
+--tpu_type="$TPU_TYPE:$TOPOLOGY" \
+--tpu_count=$NUM_SLICES \
+--proxy_server_image=$PROXY_IMAGE \
+--collect_service_metrics \
+--command="python3 run_my_sample_workload.py" [--proxy_options=sidecar:true]
+```
+
+Alternatively, in your script,
 
 1.  Import `isc_pathways`
 2. Add `with isc_pathways.connect(...)` statement. The function takes the below values:
@@ -97,6 +122,10 @@ In your script,
     - Region
     - GCS bucket name
     - Pathways Service (See instructions to find the RM address [here](#4-find-the-pathways-service-address))
+    - Expected TPU instances
+    - Proxy server image
+    - Proxy options
+    - Whether to collect SPS usage metrics
 <a name="ml-code"></a>
 3. Write your ML code under this context manager (the `with` block) to run your JAX code on the underlying TPUs.
 
@@ -111,7 +140,8 @@ python3 pathwaysutils/experimental/shared_pathways_service/run_connect_example.p
 --gcs_bucket="gs://user-bucket" \
 --pathways_service="pathways-cluster-pathways-head-0-0.pathways-cluster:29001" \
 --tpu_type="tpuv6e:2x2" \
---tpu_count=1
+--tpu_count=1 \
+--proxy_server_image="proxy_image"
 ```
 
 The connect block will deploy a proxy pod dedicated to your client and connect
