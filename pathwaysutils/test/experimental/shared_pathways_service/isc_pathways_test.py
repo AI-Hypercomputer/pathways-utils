@@ -104,11 +104,40 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     self.assertIn("--gcs_scratch_location=test-bucket", substituted_yaml)
     self.assertIn("--virtual_slices=tpuv6e:2x2,tpuv6e:2x2", substituted_yaml)
-    self.assertIn("image: test-image:latest", substituted_yaml)
+    self.assertIn('image: "test-image:latest"', substituted_yaml)
     # Extract the env section and check that it doesn't contain any - name:
     # entries.
     env_section = substituted_yaml.split("env:\n")[1].split("ports:")[0]
     self.assertNotIn("- name:", env_section)
+
+  def test_deploy_pathways_proxy_server_image_escaping(self):
+    mock_deploy_gke_yaml = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "deploy_gke_yaml", autospec=True
+        )
+    )
+    pathways_service = "test-service:8080"
+    proxy_name = "test-proxy"
+    expected_instances = {"tpuv6e:2x2": 1}
+    gcs_bucket = "test-bucket"
+    malicious_image = 'gcr.io/image:latest"\n- command: [pwn]\\\n'
+
+    isc_pathways._deploy_pathways_proxy_server(
+        pathways_service=pathways_service,
+        proxy_job_name=proxy_name,
+        expected_instances=expected_instances,
+        gcs_scratch_location=gcs_bucket,
+        proxy_server_image=malicious_image,
+        proxy_options=isc_pathways.ProxyOptions(use_insecure_credentials=False),
+    )
+
+    mock_deploy_gke_yaml.assert_called_once()
+    substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
+    self.assertIn(
+        'image: "gcr.io/image:latest\\"\\n- command: [pwn]\\\\\\n"',
+        substituted_yaml,
+    )
+
 
   def test_deploy_pathways_proxy_server_with_insecure_credentials_success(self):
     mock_deploy_gke_yaml = self.enter_context(
