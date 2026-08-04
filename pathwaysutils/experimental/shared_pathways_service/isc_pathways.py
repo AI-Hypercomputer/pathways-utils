@@ -146,6 +146,12 @@ def _deploy_pathways_proxy_server(
   if proxy_options.sidecar:
     proxy_args_str += "\n        - --sidecar_name=external"
 
+  escaped_proxy_server_image = (
+      proxy_server_image.replace("\\", "\\\\")
+      .replace('"', '\\"')
+      .replace("\n", "\\n")
+  )
+
   template = string.Template(yaml_template)
   substituted_yaml = template.substitute(
       PROXY_JOB_NAME=proxy_job_name,
@@ -154,7 +160,7 @@ def _deploy_pathways_proxy_server(
       PATHWAYS_HEAD_PORT=pathways_head_port,
       EXPECTED_INSTANCES=instances_str,
       GCS_SCRATCH_LOCATION=gcs_scratch_location,
-      PROXY_SERVER_IMAGE=proxy_server_image,
+      PROXY_SERVER_IMAGE=f'"{escaped_proxy_server_image}"',
       PROXY_ENV=proxy_env_str,
       PROXY_ARGS=proxy_args_str,
   )
