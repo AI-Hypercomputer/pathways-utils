@@ -89,9 +89,9 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 ### 1. Install `pathwaysutils` and SPS dependencies.
 
 ```shell
-pip install --upgrade git+https://github.com/AI-Hypercomputer/pathways-utils
-pip install portpicker
-pip install google-cloud-monitoring  # optional if you don't collect SPS usage metrics
+pip install --upgrade
+git+https://github.com/AI-Hypercomputer/pathways-utils[sps]
+Note: google-cloud-monitoring is optional. If you don't wish to collect SPS usage metrics, install with pathways-utils[sps_without_monitoring].
 ```
 
 ### 2. Either use `run_workload.py` or move your workload under the `isc_pathways` Context Manager
