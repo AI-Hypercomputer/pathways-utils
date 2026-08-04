@@ -1,5 +1,6 @@
 absl-py
 fastapi
+httpx
 jax>=0.8.0
 orbax-checkpoint
 uvicorn

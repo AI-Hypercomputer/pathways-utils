@@ -223,6 +223,18 @@ class ValidatorsTest(parameterized.TestCase):
           testcase_name="host_with_region",
           image="us-docker.pkg.dev/project/repo/image:tag",
       ),
+      dict(
+          testcase_name="with_special_characters",
+          image="alpine/alpine:latest\n command: [sh, -c, 'id']",
+      ),
+      dict(
+          testcase_name="spaces_in_image",
+          image="gcr.io/project/image:tag extra_args",
+      ),
+      dict(
+          testcase_name="invalid_punctuation",
+          image="gcr.io/project/image:tag;echo pwn",
+      ),
   )
   def test_validate_proxy_server_image_success(self, image):
     """Tests that valid proxy server image strings pass validation."""
