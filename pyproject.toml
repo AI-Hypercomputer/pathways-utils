@@ -42,6 +42,10 @@ gke = [
     "kubernetes",
     "pyyaml",
 ]
+sps = [
+    "portpicker",
+    "google-cloud-monitoring",
+]
 test = [
     "kubernetes",
     "pyyaml",
