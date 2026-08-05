@@ -50,9 +50,9 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - run: pip --version
     - if: matrix.jax-version == 'nightly'
-      run: pip install -e . -U --pre jax jaxlib -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+      run: pip install -e ".[test]" -U --pre jax jaxlib -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
     - if: matrix.jax-version != 'nightly'
-      run: pip install -e . "jax==${JAX_VERSION}"
+      run: pip install -e ".[test]" "jax==${JAX_VERSION}"
       env:
         JAX_VERSION: ${{ matrix.jax-version }}
     - run: pip freeze
