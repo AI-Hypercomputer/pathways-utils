@@ -14,8 +14,10 @@
 
 import json
 import logging
-from unittest import mock
 from typing import Any
+import os
+from unittest import mock
+import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -105,6 +107,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters(1000, 1234)
@@ -123,6 +126,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": duration_ms,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters("127.0.0.1", "localhost", "192.168.1.1")
@@ -141,6 +145,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
         },
+        headers={},
     )
 
   @parameterized.parameters(
@@ -160,6 +165,7 @@ class ProfilingTest(parameterized.TestCase):
             "duration_ms": 1000,
             "repository_path": log_dir,
         },
+        headers={},
     )
 
   @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
@@ -216,9 +222,7 @@ class ProfilingTest(parameterized.TestCase):
       "not_a_gcs_path",
   )
   def test_start_trace_log_dir_error(self, log_dir):
-    with self.assertRaisesRegex(
-        ValueError, "log_dir must be a GCS bucket path"
-    ):
+    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
       profiling.start_trace(log_dir)
 
   def test_lock_released_on_success(self):
@@ -238,9 +242,10 @@ class ProfilingTest(parameterized.TestCase):
         self.mock_plugin_executable_cls.return_value.call.return_value[1]
     )
     mock_result.result.side_effect = RuntimeError("start failed")
-    with self.assertRaisesRegex(
-        RuntimeError, "start failed"
-    ), mock.patch.object(profiling._logger, "exception"):
+    with (
+        self.assertRaisesRegex(RuntimeError, "start failed"),
+        mock.patch.object(profiling._logger, "exception"),
+    ):
       profiling.start_trace("gs://test_bucket/test_dir2")
     self.assertFalse(profiling._profile_state.lock.locked())
 
@@ -312,7 +317,9 @@ class ProfilingTest(parameterized.TestCase):
     profiling.start_trace("gs://test_bucket/test_dir", profiler_options=options)
 
     expected_request = self._get_expected_profile_request(
-        "gs://test_bucket/test_dir", max_num_hosts=1, session_id="options_session"
+        "gs://test_bucket/test_dir",
+        max_num_hosts=1,
+        session_id="options_session",
     )
     self.mock_plugin_executable_cls.assert_called_once_with(
         json.dumps(expected_request)
@@ -323,7 +330,9 @@ class ProfilingTest(parameterized.TestCase):
     self.assertEqual(call_args["log_dir"], "gs://test_bucket/test_dir")
     self.assertFalse(call_args["create_perfetto_link"])
     self.assertFalse(call_args["create_perfetto_trace"])
-    self.assertEqual(call_args["profiler_options"].session_id, "options_session")
+    self.assertEqual(
+        call_args["profiler_options"].session_id, "options_session"
+    )
 
   def test_start_trace_no_toy_computation_second_time(self):
     profiling.start_trace("gs://test_bucket/test_dir")
@@ -405,9 +414,55 @@ class ProfilingTest(parameterized.TestCase):
         mock.patch.object(profiling.threading, "Thread", autospec=True)
     )
     profiling.start_server(9000)
-    mock_thread.assert_called_once_with(target=mock.ANY, args=(9000,))
+    mock_thread.assert_called_once_with(
+        target=mock.ANY, args=(9000, "0.0.0.0", None)
+    )
     mock_thread.return_value.start.assert_called_once()
     self.assertIsNotNone(profiling._profiler_thread)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="unset", env_host=None, expected_host="0.0.0.0"),
+      dict(testcase_name="empty", env_host="", expected_host=""),
+      dict(
+          testcase_name="all_ipv4",
+          env_host="0.0.0.0",
+          expected_host="0.0.0.0",
+      ),
+      dict(
+          testcase_name="localhost",
+          env_host="127.0.0.1",
+          expected_host="127.0.0.1",
+      ),
+      dict(
+          testcase_name="public_ip",
+          env_host="192.15.2.4",
+          expected_host="192.15.2.4",
+      ),
+      dict(
+          testcase_name="private_ip",
+          env_host="10.0.0.3",
+          expected_host="10.0.0.3",
+      ),
+      dict(testcase_name="all_ipv6", env_host="[::]", expected_host="[::]"),
+  )
+  def test_start_server_host_env_var(
+      self, env_host: str | None, expected_host: str
+  ):
+    mock_thread = self.enter_context(
+        mock.patch.object(profiling.threading, "Thread", autospec=True)
+    )
+    env = dict(profiling.os.environ)
+    if env_host is not None:
+      env["PATHWAYS_PROFILING_SERVER_HOST"] = env_host
+    else:
+      env.pop("PATHWAYS_PROFILING_SERVER_HOST", None)
+
+    with mock.patch.dict(profiling.os.environ, env, clear=True):
+      profiling.start_server(9000)
+
+    mock_thread.assert_called_once_with(
+        target=mock.ANY, args=(9000, expected_host, None)
+    )
 
   def test_start_server_twice_raises_error(self):
     self.enter_context(
@@ -526,7 +581,10 @@ class ProfilingTest(parameterized.TestCase):
 
     profiler_module.start_server(1234, requires_backend=False)
 
-    mocks["start_server"].assert_called_once_with(1234, requires_backend=False)
+    mocks["start_server"].assert_called_once_with(
+        1234,
+        requires_backend=False,
+    )
 
   @parameterized.named_parameters(
       dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
@@ -598,12 +656,8 @@ class ProfilingTest(parameterized.TestCase):
                 "pwTraceOptions": {
                     "enablePythonTracer": True,
                     "advancedConfiguration": {
-                        "tpu_num_chips_to_profile_per_task": {
-                            "int64Value": 3
-                        },
-                        "tpu_num_sparse_core_tiles_to_trace": {
-                            "int64Value": 5
-                        },
+                        "tpu_num_chips_to_profile_per_task": {"int64Value": 3},
+                        "tpu_num_sparse_core_tiles_to_trace": {"int64Value": 5},
                         "tpu_trace_mode": {"stringValue": "TRACE_COMPUTE"},
                         "tpu_num_sparse_cores_to_trace": {"int64Value": 1},
                         "tpu_enable_flag": {"boolValue": True},
@@ -653,7 +707,6 @@ class ProfilingTest(parameterized.TestCase):
           },
       ),
   )
-
   def test_start_pathways_trace_from_profile_request(self, profile_request):
     profiling._start_pathways_trace_from_profile_request(profile_request)
 
@@ -714,6 +767,200 @@ class ProfilingTest(parameterized.TestCase):
       profiling.start_trace(
           "gs://test_bucket/test_dir", profiler_options=options
       )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="allowed_bucket",
+          log_dir="gs://bucket1/dir",
+      ),
+  )
+  def test_validate_gcs_bucket_env_var_allowed(self, log_dir: str):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://bucket1,gs://bucket2"},
+    ):
+      profiling._validate_gcs_bucket(log_dir)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="disallowed_bucket",
+          log_dir="gs://bucket3/dir",
+      ),
+  )
+  def test_validate_gcs_bucket_env_var_disallowed(self, log_dir: str):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://bucket1,gs://bucket2"},
+    ):
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket(log_dir)
+
+  def test_start_trace_rollback_on_original_failure(self):
+    self.mock_original_start_trace.side_effect = RuntimeError(
+        "original start trace error"
+    )
+    with self.assertRaisesRegex(RuntimeError, "original start trace error"):
+      profiling.start_trace("gs://test_bucket/test_dir")
+
+    self.assertIsNone(profiling._profile_state.executable)
+    self.assertFalse(profiling._profile_state.lock.locked())
+
+  def test_collect_profile_without_auth_token(self):
+    env = dict(profiling.os.environ)
+    env.pop("PATHWAYS_PROFILING_AUTH_TOKEN", None)
+
+    with mock.patch.dict(profiling.os.environ, env, clear=True):
+      result = profiling.collect_profile(
+          port=8000,
+          duration_ms=1000,
+          host="127.0.0.1",
+          log_dir="gs://test_bucket/test_dir",
+      )
+
+      self.assertTrue(result)
+      self.mock_post.assert_called_once_with(
+          "http://127.0.0.1:8000/profiling",
+          json={
+              "duration_ms": 1000,
+              "repository_path": "gs://test_bucket/test_dir",
+          },
+          headers={},
+      )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="valid_token",
+          env_token="secret_token",
+          expected_result=True,
+          http_error=None,
+      ),
+      dict(
+          testcase_name="http_error",
+          env_token="wrong_token",
+          expected_result=False,
+          http_error=requests.exceptions.HTTPError(
+              "401 Client Error: Unauthorized"
+          ),
+      ),
+  )
+  def test_collect_profile_with_auth_token(
+      self,
+      env_token: str,
+      expected_result: bool,
+      http_error: Exception | None,
+  ):
+    env = dict(profiling.os.environ)
+    env["PATHWAYS_PROFILING_AUTH_TOKEN"] = env_token
+
+    if http_error:
+      self.mock_post.return_value.raise_for_status.side_effect = http_error
+
+    with mock.patch.dict(profiling.os.environ, env, clear=True):
+      result = profiling.collect_profile(
+          port=8000,
+          duration_ms=1000,
+          host="127.0.0.1",
+          log_dir="gs://test_bucket/test_dir",
+      )
+
+      self.assertEqual(result, expected_result)
+      self.mock_post.assert_called_once_with(
+          "http://127.0.0.1:8000/profiling",
+          json={
+              "duration_ms": 1000,
+              "repository_path": "gs://test_bucket/test_dir",
+          },
+          headers={"Authorization": f"Bearer {env_token}"},
+      )
+
+  def _get_server_app(self) -> Any:
+    with (
+        mock.patch.object(profiling.threading, "Thread") as mock_thread,
+        mock.patch.object(profiling.uvicorn, "run") as mock_uvicorn,
+    ):
+      profiling.start_server(9000)
+      server_loop_fn = mock_thread.call_args[1]["target"]
+      args = mock_thread.call_args[1]["args"]
+      server_loop_fn(*args)
+      return mock_uvicorn.call_args[0][0]
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="valid_token",
+          server_token="secret_token",
+          request_headers={"Authorization": "Bearer secret_token"},
+          expected_status=200,
+          expected_detail_substring=None,
+      ),
+      dict(
+          testcase_name="missing_token",
+          server_token="secret_token",
+          request_headers=None,
+          expected_status=401,
+          expected_detail_substring=(
+              "Unauthorized: invalid or missing authentication token"
+          ),
+      ),
+      dict(
+          testcase_name="wrong_token",
+          server_token="secret_token",
+          request_headers={"Authorization": "Bearer invalid_token"},
+          expected_status=401,
+          expected_detail_substring=(
+              "Unauthorized: invalid or missing authentication token"
+          ),
+      ),
+      dict(
+          testcase_name="token_when_not_needed",
+          server_token=None,
+          request_headers={"Authorization": "Bearer unneeded_token"},
+          expected_status=200,
+          expected_detail_substring=None,
+      ),
+      dict(
+          testcase_name="no_token_when_not_needed",
+          server_token=None,
+          request_headers=None,
+          expected_status=200,
+          expected_detail_substring=None,
+      ),
+  )
+  @unittest.skipIf(
+      os.environ.get("GITHUB_ACTIONS") == "true",
+      "Skipping FastAPI server test in GitHub CI",
+  )
+  def test_server_auth(
+      self,
+      server_token: str | None,
+      request_headers: dict[str, str] | None,
+      expected_status: int,
+      expected_detail_substring: str | None,
+  ):
+    from fastapi import testclient
+    env = dict(profiling.os.environ)
+    if server_token is not None:
+      env["PATHWAYS_PROFILING_AUTH_TOKEN"] = server_token
+    else:
+      env.pop("PATHWAYS_PROFILING_AUTH_TOKEN", None)
+
+    with (
+        mock.patch.dict(profiling.os.environ, env, clear=True),
+        mock.patch.object(profiling, "start_trace"),
+        mock.patch.object(profiling, "stop_trace"),
+        mock.patch.object(profiling.asyncio, "sleep"),
+    ):
+      app = self._get_server_app()
+      client = testclient.TestClient(app)
+      response = client.post(
+          "/profiling",
+          json={"duration_ms": 100, "repository_path": "gs://test_bucket/dir"},
+          headers=request_headers,
+      )
+      self.assertEqual(response.status_code, expected_status)
+      if expected_status == 200:
+        self.assertEqual(response.json(), {"response": "profiling completed"})
+      if expected_detail_substring:
+        self.assertIn(expected_detail_substring, response.json()["detail"])
 
 
 if __name__ == "__main__":

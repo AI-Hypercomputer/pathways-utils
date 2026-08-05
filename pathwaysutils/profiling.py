@@ -20,6 +20,7 @@ import datetime
 import json
 import logging
 import os
+import secrets
 import threading
 from typing import Any
 import urllib.parse
@@ -31,7 +32,6 @@ from jax.extend import backend
 from pathwaysutils import plugin_executable
 import requests
 import uvicorn
-
 
 _logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ class _ProfileState:
     profile_request: The mapping containing the profile request options.
     lock: A thread lock to protect access to the state.
   """
+
   executable: plugin_executable.PluginExecutable | None = None
   profile_request: Mapping[str, Any] | None = None
   lock: threading.Lock
@@ -225,6 +226,40 @@ def _start_pathways_trace_from_profile_request(
       raise
 
 
+def _validate_path(path: str) -> None:
+  """Validates that the path is a valid GCS path."""
+  path_str = str(path)
+  if not path_str or not path_str.startswith("gs://"):
+    raise ValueError(f"Path must be a GCS path, got {path_str}")
+
+
+def _validate_gcs_bucket(log_dir: str) -> None:
+  """Validates that log_dir is a valid GCS path and is allowed.
+
+  It validates that the log_dir is in the list of allowed buckets specified
+  in the environment variable `PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS`. If the
+  environment variable is not set, it assumes all buckets are allowed.
+
+  Args:
+    log_dir: The GCS path to validate.
+
+  Raises:
+    ValueError: If the log_dir is not a valid GCS path or is not in allowed
+      buckets.
+  """
+  _validate_path(log_dir)
+
+  if env_buckets := os.environ.get("PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS"):
+    allowed_buckets = {b.strip() for b in env_buckets.split(",") if b.strip()}
+    if allowed_buckets and not any(
+        log_dir.startswith(bucket_name) for bucket_name in allowed_buckets
+    ):
+      raise ValueError(
+          f"GCS bucket '{log_dir}' is not in allowed buckets list: "
+          f"{allowed_buckets}"
+      )
+
+
 def start_trace(
     log_dir: os.PathLike[str] | str,
     *,
@@ -263,8 +298,7 @@ def start_trace(
     max_num_hosts: An optional integer to limit the number of hosts profiled
       (defaults to 1).
   """
-  if not str(log_dir).startswith("gs://"):
-    raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
+  _validate_gcs_bucket(str(log_dir))
 
   if create_perfetto_link or create_perfetto_trace:
     _logger.warning(
@@ -275,8 +309,8 @@ def start_trace(
   if jax.version.__version_info__ < (0, 9, 2):
     if profiler_options is not None:
       _logger.warning(
-          "ProfileOptions are not supported until JAX 0.9.2 and will be omitted. "
-          "Some options can be specified via command line flags."
+          "ProfileOptions are not supported until JAX 0.9.2 and will be"
+          " omitted. Some options can be specified via command line flags."
       )
       profiler_options = None
   else:
@@ -297,19 +331,24 @@ def start_trace(
 
   _start_pathways_trace_from_profile_request(profile_request)
 
-  if jax.version.__version_info__ >= (0, 9, 2):
-    _original_start_trace(
-        log_dir=log_dir,
-        create_perfetto_link=create_perfetto_link,
-        create_perfetto_trace=create_perfetto_trace,
-        profiler_options=profiler_options,
-    )
-  else:
-    _original_start_trace(
-        log_dir=log_dir,
-        create_perfetto_link=create_perfetto_link,
-        create_perfetto_trace=create_perfetto_trace,
-    )
+  try:
+    if jax.version.__version_info__ >= (0, 9, 2):
+      _original_start_trace(
+          log_dir=log_dir,
+          create_perfetto_link=create_perfetto_link,
+          create_perfetto_trace=create_perfetto_trace,
+          profiler_options=profiler_options,
+      )
+    else:
+      _original_start_trace(
+          log_dir=log_dir,
+          create_perfetto_link=create_perfetto_link,
+          create_perfetto_trace=create_perfetto_trace,
+      )
+  except Exception:
+    with _profile_state.lock:
+      _profile_state.reset()
+    raise
 
 
 def stop_trace() -> None:
@@ -336,13 +375,31 @@ def start_server(port: int, requires_backend: bool = True) -> None:
   to the server is returned because there is no
   `xla_client.profiler.ProfilerServer` to return.
 
+  The server will listen on the host specified by the environment variable
+  `PATHWAYS_PROFILING_SERVER_HOST`, or `0.0.0.0` if not set.
+
+  The server will verify the token provided in the
+  `X-Auth-Token` or `Authorization` header against the value of the
+  environment variable `PATHWAYS_PROFILING_AUTH_TOKEN` (if set). If the token is
+  not provided or does not match the expected value (which should be equal to
+  `PATHWAYS_PROFILING_AUTH_TOKEN` used to start the server), the server will reject the
+  request with a 401 error.
+
   Args:
     port: The port to start the server on.
     requires_backend: Unused in Pathways; accepted for parameter parity.
   """
   del requires_backend
-  def server_loop(port: int):
-    _logger.debug("Starting JAX profiler server on port %s", port)
+  if allowed_buckets := os.environ.get("PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS"):
+    for bucket in allowed_buckets.split(","):
+      _validate_path(bucket.strip())
+  host = os.environ.get("PATHWAYS_PROFILING_SERVER_HOST", "0.0.0.0")
+  token_to_verify = os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN")
+
+  def server_loop(port: int, host: str, token_to_verify: str | None):
+    _logger.info(
+        "Starting Pathways profiler server on host %s port %s", host, port
+    )
     app = fastapi.FastAPI()
 
     @dataclasses.dataclass
@@ -350,22 +407,49 @@ def start_server(port: int, requires_backend: bool = True) -> None:
       duration_ms: int
       repository_path: str
 
-    @app.post("/profiling")
+    security = fastapi.security.HTTPBearer(auto_error=False)
+
+    def verify_auth_token(
+        credentials: (
+            fastapi.security.HTTPAuthorizationCredentials | None
+        ) = fastapi.Depends(security),
+    ) -> None:
+      if token_to_verify is None:
+        return
+      if not credentials or not secrets.compare_digest(
+          credentials.credentials, token_to_verify
+      ):
+        raise fastapi.HTTPException(
+            status_code=fastapi.status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: invalid or missing authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.post("/profiling", dependencies=[fastapi.Depends(verify_auth_token)])
     async def profiling(pc: ProfilingConfig) -> Mapping[str, str]:
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
-      _logger.debug("Writing profiling data to %s", pc.repository_path)
-      await asyncio.to_thread(jax.profiler.start_trace, pc.repository_path)
-      await asyncio.sleep(pc.duration_ms / 1e3)
-      await asyncio.to_thread(jax.profiler.stop_trace)
+      log_dir = pc.repository_path.strip()
+      _logger.debug("Writing profiling data to %s", log_dir)
+      _validate_gcs_bucket(log_dir)
+
+      await asyncio.to_thread(start_trace, log_dir)
+      try:
+        await asyncio.sleep(pc.duration_ms / 1e3)
+      finally:
+        await asyncio.to_thread(stop_trace)
+
       return {"response": "profiling completed"}
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="debug")
+    uvicorn.run(app, host=host, port=port, log_level="debug")
 
   global _profiler_thread
   if _profiler_thread is not None:
     raise RuntimeError("Only one profiler server can be active at a time.")
 
-  _profiler_thread = threading.Thread(target=server_loop, args=(port,))
+  _profiler_thread = threading.Thread(
+      target=server_loop,
+      args=(port, host, token_to_verify),
+  )
   _profiler_thread.start()
 
 
@@ -386,6 +470,13 @@ def collect_profile(
 ) -> bool:
   """Collects a JAX profile and saves it to the specified directory.
 
+  This function sends a POST request to the Pathways profiler server running on
+  the specified host and port. The server will then collect the profile for the
+  specified duration and save it to the specified directory.
+
+  Authentication is handled via the `Authorization` header with a Bearer token, which should contain
+  the value of the environment variable `PATHWAYS_PROFILING_AUTH_TOKEN`.
+
   Args:
     port: The port on which the JAX profiler server is running.
     duration_ms: The duration in milliseconds for which to collect the profile.
@@ -398,16 +489,19 @@ def collect_profile(
   Raises:
     ValueError: If the log_dir is not a GCS path.
   """
-  if not str(log_dir).startswith("gs://"):
-    raise ValueError(f"log_dir must be a GCS bucket path, got {log_dir}")
+  _validate_path(str(log_dir))
 
   request_json = {
       "duration_ms": duration_ms,
       "repository_path": log_dir,
   }
+  headers = {}
+  if effective_token := os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN"):
+    headers["Authorization"] = f"Bearer {effective_token}"
+
   address = urllib.parse.urljoin(f"http://{host}:{port}", "profiling")
   try:
-    response = requests.post(address, json=request_json)
+    response = requests.post(address, json=request_json, headers=headers)
     response.raise_for_status()
   except requests.exceptions.RequestException:
     _logger.exception("Failed to collect profiling data")

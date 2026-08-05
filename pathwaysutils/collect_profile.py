@@ -67,7 +67,10 @@ def main() -> None:
   args = parser.parse_args()
 
   if profiling.collect_profile(
-      args.port, args.duration_ms, args.host, args.log_dir
+      args.port,
+      args.duration_ms,
+      args.host,
+      args.log_dir,
   ):
     _logger.info("Dumped profiling information in: %s", args.log_dir)
   else:
