@@ -50,8 +50,10 @@ sps_without_monitoring = [
     "portpicker",
 ]
 test = [
+    "google-cloud-monitoring",
     "httpx",
     "kubernetes",
+    "portpicker",
     "pyyaml",
     "pytest",
 ]
