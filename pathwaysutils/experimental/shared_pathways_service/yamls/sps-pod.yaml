@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {WORKLOAD_NAME}
+  labels:
+    app: {WORKLOAD_NAME}
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - name: pathways-remote-env
+    image: {IMAGE}
+    imagePullPolicy: Always
+    ports:
+    - containerPort: {PORT}
+    env:
+    - name: PORT
+      value: "{PORT}"
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      readOnlyRootFilesystem: false
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      seccompProfile:
+        type: RuntimeDefault
+  nodeSelector:
+    node.kubernetes.io/instance-type: "{INSTANCE_TYPE}"
