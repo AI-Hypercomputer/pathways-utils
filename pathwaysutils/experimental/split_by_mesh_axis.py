@@ -162,16 +162,37 @@ def split_by_mesh_axis(
       for x in flat_arrays
   ]
 
-  flat_split_arrays = pw_jax.split_by_mesh_axis(
-      arrays=flat_arrays,
-      sharded_dim_idxs=sharded_dim_idxs,
-      mesh_axis_sizes=mesh.axis_sizes,
-      mesh_axis_idx=mesh_axis_idx,
-      mesh_axis_sections=mesh_axis_sections,
-      # TODO: b/491156211 - Remove cast once type mismatch is fixed.
-      submesh_shardings=cast(Any, submesh_shardings),
-      donate=donate,
-  )
+  # Check if we are dealing with abstract arrays (e.g. ShapeDtypeStruct) or Tracers
+  is_concrete = all(type(x).__name__ == "ArrayImpl" for x in flat_arrays)
+
+  if is_concrete:
+    flat_split_arrays = pw_jax.split_by_mesh_axis(
+        arrays=flat_arrays,
+        sharded_dim_idxs=sharded_dim_idxs,
+        mesh_axis_sizes=mesh.axis_sizes,
+        mesh_axis_idx=mesh_axis_idx,
+        mesh_axis_sections=mesh_axis_sections,
+        # TODO: b/491156211 - Remove cast once type mismatch is fixed.
+        submesh_shardings=cast(Any, submesh_shardings),
+        donate=donate,
+    )
+  else:
+    # Fallback to Python-level splitting for abstract arrays (ShapeDtypeStruct)
+    flat_split_arrays = []
+    mesh_axis_size = mesh.axis_sizes[mesh_axis_idx]
+    for array_idx, x in enumerate(flat_arrays):
+      sharded_dim = sharded_dim_idxs[array_idx]
+      py_submesh_results = []
+      for submesh_idx in range(len(submeshes)):
+        submesh_axis_size = mesh_axis_sections[submesh_idx] - (mesh_axis_sections[submesh_idx-1] if submesh_idx > 0 else 0)
+        sub_shape = list(x.shape)
+        if sharded_dim >= 0:
+          sub_shape[sharded_dim] = sub_shape[sharded_dim] // mesh_axis_size * submesh_axis_size
+        new_sharding = submesh_shardings[array_idx][submesh_idx]
+        py_submesh_results.append(
+            jax.ShapeDtypeStruct(tuple(sub_shape), x.dtype, sharding=new_sharding)
+        )
+      flat_split_arrays.append(py_submesh_results)
 
   # Convert the flat arrays to a list of a PyTree per submesh.
   outer_treedef = jax.tree.structure(["*"] * len(flat_split_arrays))
