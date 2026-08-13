@@ -100,7 +100,6 @@ class Manager:
   slice_to_devices: Mapping[int, Sequence[jax.Device]]
   all_slice_indices: Set[int]
   active_slice_indices: Set[int]
-  inactive_slice_indices: Set[int]
   available_inactive_slices: Set[int]
   _stop_event: threading.Event | None
   _monitor_thread: threading.Thread | None
@@ -119,7 +118,6 @@ class Manager:
     self.active_slice_indices = elastic.get_active_slice_indices(
         slice_to_devices=self.slice_to_devices
     )
-    self.inactive_slice_indices = self.all_slice_indices - self.active_slice_indices
     self.available_inactive_slices = frozenset()
 
     self._stop_event = None
@@ -184,6 +182,11 @@ class Manager:
   def active_slice_count(self) -> int:
     """The number of active slices."""
     return len(self.active_slice_indices)
+
+  @property
+  def inactive_slice_indices(self) -> Set[int]:
+    """The set of inactive slice indices."""
+    return self.all_slice_indices - self.active_slice_indices
 
   @property
   def new_slice_event(self) -> threading.Event:
@@ -371,9 +374,6 @@ class Manager:
               slice_to_devices=self.slice_to_devices,
               poll_interval=poll_interval,
               timeout=timeout,
-          )
-          self.inactive_slice_indices = (
-              self.all_slice_indices - self.active_slice_indices
           )
           # Reset available_inactive_slices at attempt start since
           # active_slice_indices has just been updated by wait_for_slices.
