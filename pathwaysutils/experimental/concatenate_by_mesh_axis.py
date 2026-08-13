@@ -42,9 +42,9 @@ def concatenate_by_mesh_axis(
   if not array_trees:
     return array_trees
 
-  def _get_named_sharding(array: jax.Array) -> jax.sharding.NamedSharding:
-    if not isinstance(array, jax.Array):
-      raise ValueError(f"Elements must be jax.Array. Got {type(array)}")
+  def _get_named_sharding(array: Any) -> jax.sharding.NamedSharding:
+    if not hasattr(array, "sharding"):
+      raise ValueError(f"Elements must have a sharding attribute. Got {type(array)}")
     sharding = array.sharding
     if not isinstance(sharding, jax.sharding.NamedSharding):
       raise ValueError(f"Expected NamedSharding. Got {type(sharding)}")
@@ -113,7 +113,7 @@ def concatenate_by_mesh_axis(
   )
 
   def _get_output_sharding(
-      arrays: Sequence[jax.Array],
+      arrays: Sequence[Any],
   ) -> jax.sharding.NamedSharding:
     reference_sharding = _get_named_sharding(arrays[0])
     reference_spec = reference_sharding.spec
@@ -139,14 +139,33 @@ def concatenate_by_mesh_axis(
       _sharded_dim_idx_for_sharding(sharding) for sharding in out_shardings
   ]
 
-  flat_output_arrays = pw_jax.concatenate_by_mesh_axis(
-      arrays=input_flat_arrays,
-      sharded_dim_idxs=sharded_dim_idxs,
-      mesh_axis_sizes=concatenated_mesh.axis_sizes,
-      mesh_axis_idx=mesh_axis_idx,
-      mesh_axis_sections=mesh_axis_sections,
-      out_shardings=out_shardings,
-      donate=True,
+  is_concrete = all(
+      all(type(x).__name__ == "ArrayImpl" for x in arrays)
+      for arrays in input_flat_arrays
   )
+  if is_concrete:
+    flat_output_arrays = pw_jax.concatenate_by_mesh_axis(
+        arrays=input_flat_arrays,
+        sharded_dim_idxs=sharded_dim_idxs,
+        mesh_axis_sizes=concatenated_mesh.axis_sizes,
+        mesh_axis_idx=mesh_axis_idx,
+        mesh_axis_sections=mesh_axis_sections,
+        out_shardings=out_shardings,
+        donate=True,
+    )
+  else:
+    flat_output_arrays = []
+    for array_idx, arrays in enumerate(input_flat_arrays):
+      sharded_dim = sharded_dim_idxs[array_idx]
+      out_shape = list(arrays[0].shape)
+      if sharded_dim >= 0:
+        out_shape[sharded_dim] = sum(x.shape[sharded_dim] for x in arrays)
+      flat_output_arrays.append(
+          jax.ShapeDtypeStruct(
+              tuple(out_shape),
+              arrays[0].dtype,
+              sharding=out_shardings[array_idx],
+          )
+      )
 
   return jax.tree_util.tree_unflatten(input_treedef, flat_output_arrays)

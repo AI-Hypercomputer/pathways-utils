@@ -162,10 +162,7 @@ def split_by_mesh_axis(
       for x in flat_arrays
   ]
 
-  # Check if we are dealing with abstract arrays (e.g. ShapeDtypeStruct) or Tracers
   is_concrete = all(type(x).__name__ == "ArrayImpl" for x in flat_arrays)
-  print(f"b/545736733 bad cast fix: following branch pathwaywaysutils scale_test, where is_concrete: {is_concrete} ", flush=True)
-
   if is_concrete:
     flat_split_arrays = pw_jax.split_by_mesh_axis(
         arrays=flat_arrays,
@@ -178,20 +175,25 @@ def split_by_mesh_axis(
         donate=donate,
     )
   else:
-    # Fallback to Python-level splitting for abstract arrays (ShapeDtypeStruct)
     flat_split_arrays = []
     mesh_axis_size = mesh.axis_sizes[mesh_axis_idx]
     for array_idx, x in enumerate(flat_arrays):
       sharded_dim = sharded_dim_idxs[array_idx]
       py_submesh_results = []
       for submesh_idx in range(len(submeshes)):
-        submesh_axis_size = mesh_axis_sections[submesh_idx] - (mesh_axis_sections[submesh_idx-1] if submesh_idx > 0 else 0)
+        submesh_axis_size = mesh_axis_sections[submesh_idx] - (
+            mesh_axis_sections[submesh_idx - 1] if submesh_idx > 0 else 0
+        )
         sub_shape = list(x.shape)
         if sharded_dim >= 0:
-          sub_shape[sharded_dim] = sub_shape[sharded_dim] // mesh_axis_size * submesh_axis_size
+          sub_shape[sharded_dim] = (
+              sub_shape[sharded_dim] // mesh_axis_size * submesh_axis_size
+          )
         new_sharding = submesh_shardings[array_idx][submesh_idx]
         py_submesh_results.append(
-            jax.ShapeDtypeStruct(tuple(sub_shape), x.dtype, sharding=new_sharding)
+            jax.ShapeDtypeStruct(
+                tuple(sub_shape), x.dtype, sharding=new_sharding
+            )
         )
       flat_split_arrays.append(py_submesh_results)
 
