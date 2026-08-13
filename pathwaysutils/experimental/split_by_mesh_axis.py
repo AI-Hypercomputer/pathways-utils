@@ -164,6 +164,7 @@ def split_by_mesh_axis(
 
   # Check if we are dealing with abstract arrays (e.g. ShapeDtypeStruct) or Tracers
   is_concrete = all(type(x).__name__ == "ArrayImpl" for x in flat_arrays)
+  print(f"b/545736733 bad cast fix: following branch pathwaywaysutils scale_test, where is_concrete: {is_concrete} ", flush=True)
 
   if is_concrete:
     flat_split_arrays = pw_jax.split_by_mesh_axis(
