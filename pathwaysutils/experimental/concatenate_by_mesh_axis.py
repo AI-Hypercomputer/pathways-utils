@@ -159,7 +159,7 @@ def concatenate_by_mesh_axis(
       _sharded_dim_idx_for_sharding(sharding) for sharding in out_shardings
   ]
   is_concrete = all(
-      all(isinstance(x, jax.Array) for x in arrays)
+      all(isinstance(x, jax.Array) or _is_prng_key(x) for x in arrays)
       for arrays in input_flat_arrays
   )
   if is_concrete:

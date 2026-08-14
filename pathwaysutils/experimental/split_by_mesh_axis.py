@@ -180,7 +180,7 @@ def split_by_mesh_axis(
       for x in flat_arrays
   ]
 
-  is_concrete = all(isinstance(x, jax.Array) for x in flat_arrays)
+  is_concrete = all(isinstance(x, jax.Array) or _is_prng_key(x) for x in flat_arrays)
   if is_concrete:
     unwrapped_flat_arrays = [_unwrap_if_prng_key(x) for x in flat_arrays]
     flat_split_arrays = pw_jax.split_by_mesh_axis(
