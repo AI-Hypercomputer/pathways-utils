@@ -139,13 +139,35 @@ def concatenate_by_mesh_axis(
       _sharded_dim_idx_for_sharding(sharding) for sharding in out_shardings
   ]
 
+def _is_prng_key(x: Any) -> bool:
+  return (
+      hasattr(x, "dtype")
+      and hasattr(x, "shape")
+      and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key)
+  )
+
+
+def _unwrap_if_prng_key(x: Any) -> Any:
+  return jax.random.key_data(x) if _is_prng_key(x) else x
+
+
+def _wrap_if_prng_key(x: Any, orig_x: Any) -> Any:
+  if _is_prng_key(orig_x):
+    return jax.random.wrap_key_data(x, dtype=orig_x.dtype)
+  return x
+
+
   is_concrete = all(
       all(isinstance(x, jax.Array) for x in arrays)
       for arrays in input_flat_arrays
   )
   if is_concrete:
+    unwrapped_flat_arrays = [
+        [_unwrap_if_prng_key(x) for x in arrays]
+        for arrays in input_flat_arrays
+    ]
     flat_output_arrays = pw_jax.concatenate_by_mesh_axis(
-        arrays=input_flat_arrays,
+        arrays=unwrapped_flat_arrays,
         sharded_dim_idxs=sharded_dim_idxs,
         mesh_axis_sizes=concatenated_mesh.axis_sizes,
         mesh_axis_idx=mesh_axis_idx,
@@ -153,6 +175,10 @@ def concatenate_by_mesh_axis(
         out_shardings=out_shardings,
         donate=True,
     )
+    flat_output_arrays = [
+        _wrap_if_prng_key(out_arr, input_flat_arrays[arr_idx][0])
+        for arr_idx, out_arr in enumerate(flat_output_arrays)
+    ]
   else:
     flat_output_arrays = []
     for array_idx, arrays in enumerate(input_flat_arrays):
