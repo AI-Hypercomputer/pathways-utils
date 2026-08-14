@@ -41,6 +41,8 @@ def _wrap_if_prng_key(x: Any, orig_x: Any) -> Any:
 def concatenate_by_mesh_axis(
     array_trees: Sequence[Any],
     mesh_axis: str,
+    *,
+    donate: bool = False,
 ) -> Any:
   """Concatenates meshes by an axis. Returns arrays on the concatenated mesh.
 
@@ -172,7 +174,7 @@ def concatenate_by_mesh_axis(
         mesh_axis_idx=mesh_axis_idx,
         mesh_axis_sections=mesh_axis_sections,
         out_shardings=out_shardings,
-        donate=True,
+        donate=donate,
     )
     flat_output_arrays = [
         _wrap_if_prng_key(out_arr, input_flat_arrays[arr_idx][0])
