@@ -162,7 +162,7 @@ def split_by_mesh_axis(
       for x in flat_arrays
   ]
 
-  is_concrete = all(type(x).__name__ == "ArrayImpl" for x in flat_arrays)
+  is_concrete = all(isinstance(x, jax.Array) for x in flat_arrays)
   if is_concrete:
     flat_split_arrays = pw_jax.split_by_mesh_axis(
         arrays=flat_arrays,

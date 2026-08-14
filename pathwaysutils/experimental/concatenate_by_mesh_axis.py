@@ -140,7 +140,7 @@ def concatenate_by_mesh_axis(
   ]
 
   is_concrete = all(
-      all(type(x).__name__ == "ArrayImpl" for x in arrays)
+      all(isinstance(x, jax.Array) for x in arrays)
       for arrays in input_flat_arrays
   )
   if is_concrete:
