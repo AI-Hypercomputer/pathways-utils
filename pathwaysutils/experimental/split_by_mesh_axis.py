@@ -43,6 +43,24 @@ def _get_per_mesh_shardings(
   ]
 
 
+def _is_prng_key(x: Any) -> bool:
+  return (
+      hasattr(x, "dtype")
+      and hasattr(x, "shape")
+      and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key)
+  )
+
+
+def _unwrap_if_prng_key(x: Any) -> Any:
+  return jax.random.key_data(x) if _is_prng_key(x) else x
+
+
+def _wrap_if_prng_key(x: Any, orig_x: Any) -> Any:
+  if _is_prng_key(orig_x):
+    return jax.random.wrap_key_data(x, dtype=orig_x.dtype)
+  return x
+
+
 def split_by_mesh_axis(
     arrays: Any,
     mesh_axis: str,
@@ -161,24 +179,6 @@ def split_by_mesh_axis(
       )
       for x in flat_arrays
   ]
-
-def _is_prng_key(x: Any) -> bool:
-  return (
-      hasattr(x, "dtype")
-      and hasattr(x, "shape")
-      and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key)
-  )
-
-
-def _unwrap_if_prng_key(x: Any) -> Any:
-  return jax.random.key_data(x) if _is_prng_key(x) else x
-
-
-def _wrap_if_prng_key(x: Any, orig_x: Any) -> Any:
-  if _is_prng_key(orig_x):
-    return jax.random.wrap_key_data(x, dtype=orig_x.dtype)
-  return x
-
 
   is_concrete = all(isinstance(x, jax.Array) for x in flat_arrays)
   if is_concrete:
