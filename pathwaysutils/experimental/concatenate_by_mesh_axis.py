@@ -42,7 +42,7 @@ def concatenate_by_mesh_axis(
     array_trees: Sequence[Any],
     mesh_axis: str,
     *,
-    donate: bool = False,
+    donate: bool = True,
 ) -> Any:
   """Concatenates meshes by an axis. Returns arrays on the concatenated mesh.
 
