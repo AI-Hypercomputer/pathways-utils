@@ -80,18 +80,14 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
   that the devices are active and can perform computations.
   """
 
-  def _plus_one(self, x: jax.Array) -> jax.Array:
-    return x + 1
-
   def _simple_execution(self, devices: Sequence[jax.Device]) -> jax.Array:
     if not devices:
       raise ValueError("No devices")
 
-    test_input = np.zeros(len(devices), dtype=float) + (
-        _SIMPLE_EXECUTION_TEST_VALUE - 1
-    )
-
-    return jax.pmap(self._plus_one, devices=devices)(test_input)
+    test_input = np.zeros(len(devices), dtype=float) + _SIMPLE_EXECUTION_TEST_VALUE
+    mesh = jax.sharding.Mesh(np.array(devices), ("devices",))
+    sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("devices"))
+    return jax.device_put(test_input, sharding)
 
   def dispatch(self) -> None:
     self.results = {
@@ -110,6 +106,7 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
         jax.block_until_ready(x)
         if np.allclose(x, expected):
           active_slice_indices.add(slice_index)
+          _logger.info("Slice %s is healthy and available for scale-up!", slice_index)
         else:
           msg = (
               f"Error with _simple_execution for slice_index={slice_index}. "
@@ -118,8 +115,8 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
           _logger.error(msg)
           raise ValueError(msg)
       except jax.errors.JaxRuntimeError as error:
-        _logger.debug(
-            "Caught JaxRuntimeError for slice_index=%s: %s", slice_index, error
+        _logger.info(
+            "Slice %s is not ready yet during health check: %s", slice_index, error
         )
         if not is_error_due_to_slice_down(error, log_traceback=False):
           raise
