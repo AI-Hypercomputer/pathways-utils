@@ -90,14 +90,23 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
     return jax.device_put(test_input, sharding)
 
   def dispatch(self) -> None:
-    self.results = {
-        slice_index: self._simple_execution(devices)
-        for slice_index, devices in self.slice_to_devices.items()
-    }
+    self.results = {}
+    for slice_index, devices in self.slice_to_devices.items():
+      try:
+        self.results[slice_index] = self._simple_execution(devices)
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        _logger.info(
+            "Slice %s is not ready yet during dispatch: %s", slice_index, e
+        )
+        if isinstance(e, jax.errors.JaxRuntimeError) and not is_error_due_to_slice_down(e, log_traceback=False):
+          raise
+        self.results[slice_index] = None
 
   def validate(self) -> Set[int]:
     active_slice_indices = set()
     for slice_index, x in self.results.items():
+      if x is None:
+        continue
       expected = (
           np.zeros(len(self.slice_to_devices[slice_index]), dtype=float)
           + _SIMPLE_EXECUTION_TEST_VALUE
