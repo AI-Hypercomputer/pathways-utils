@@ -43,7 +43,7 @@ def concatenate_by_mesh_axis(
     return array_trees
 
   def _get_named_sharding(array: jax.Array) -> jax.sharding.NamedSharding:
-    if not isinstance(array, jax.Array):
+    if not isinstance(array, (jax.Array, jax.ShapeDtypeStruct)):
       raise ValueError(f"Elements must be jax.Array. Got {type(array)}")
     sharding = array.sharding
     if not isinstance(sharding, jax.sharding.NamedSharding):
@@ -139,14 +139,30 @@ def concatenate_by_mesh_axis(
       _sharded_dim_idx_for_sharding(sharding) for sharding in out_shardings
   ]
 
-  flat_output_arrays = pw_jax.concatenate_by_mesh_axis(
-      arrays=input_flat_arrays,
-      sharded_dim_idxs=sharded_dim_idxs,
-      mesh_axis_sizes=concatenated_mesh.axis_sizes,
-      mesh_axis_idx=mesh_axis_idx,
-      mesh_axis_sections=mesh_axis_sections,
-      out_shardings=out_shardings,
-      donate=True,
-  )
+  is_concrete = all(type(x).__name__ == "ArrayImpl" for x in flattened_arrays[0])
+  if is_concrete:
+    flat_output_arrays = pw_jax.concatenate_by_mesh_axis(
+        arrays=input_flat_arrays,
+        sharded_dim_idxs=sharded_dim_idxs,
+        mesh_axis_sizes=concatenated_mesh.axis_sizes,
+        mesh_axis_idx=mesh_axis_idx,
+        mesh_axis_sections=mesh_axis_sections,
+        out_shardings=out_shardings,
+        donate=True,
+    )
+  else:
+    flat_output_arrays = []
+    for array_idx, arrays in enumerate(input_flat_arrays):
+      reference_array = arrays[0]
+      out_sharding = out_shardings[array_idx]
+      sharded_dim = sharded_dim_idxs[array_idx]
+      out_shape = list(reference_array.shape)
+      if sharded_dim >= 0:
+        total_mesh_size = concatenated_mesh.axis_sizes[mesh_axis_idx]
+        single_submesh_size = reference_mesh.axis_sizes[mesh_axis_idx]
+        out_shape[sharded_dim] = (out_shape[sharded_dim] // single_submesh_size) * total_mesh_size
+      flat_output_arrays.append(
+          jax.ShapeDtypeStruct(tuple(out_shape), reference_array.dtype, sharding=out_sharding)
+      )
 
   return jax.tree_util.tree_unflatten(input_treedef, flat_output_arrays)
