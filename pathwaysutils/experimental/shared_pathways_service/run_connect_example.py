@@ -5,7 +5,10 @@ import pprint
 
 from absl import app
 from absl import flags
+import jax
 import jax.numpy as jnp
+import jax.sharding as jsharding
+import pathwaysutils
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
 
@@ -75,11 +78,36 @@ def main(argv: Sequence[str]) -> None:
       proxy_options=FLAGS.proxy_options,
       collect_service_metrics=FLAGS.collect_service_metrics,
   ):
-    orig_matrix = jnp.zeros(5)
-    result_matrix = orig_matrix + 1
-    print("Original Random Matrix:")
+    # your-workload
+    tpu_devices = jax.devices()
+    for device in tpu_devices:
+      print("Device: %s, Kind: %s", device, device.device_kind)
+      if "tpu" not in device.device_kind.lower():
+        print("Error! TPUs not found")
+        exit()
+      if not pathwaysutils.is_pathways_backend_used():
+        print("Error! TPUs not found")
+        exit()
+    print(
+        "All devices are confirmed to be TPUs. TPU devices found:"
+        f" {tpu_devices}"
+    )
+    num_devices = len(tpu_devices)
+    mesh = jsharding.Mesh(tpu_devices, axis_names=("data",))
+    sharding = jsharding.NamedSharding(mesh, jsharding.PartitionSpec("data"))
+
+    @jax.jit
+    def tpu_add_one(x):
+      return x + 1
+
+    orig_matrix = jnp.zeros(num_devices)
+    orig_matrix_tpu = jax.device_put(orig_matrix, sharding)
+    result_matrix_tpu = tpu_add_one(orig_matrix_tpu)
+    result_matrix = jax.device_get(result_matrix_tpu)
+
+    print(f"Original Matrix (on all {num_devices} devices):")
     pprint.pprint(orig_matrix)
-    print("\nMatrix after adding 1:")
+    print("\nResult Matrix after parallel addition:")
     pprint.pprint(result_matrix)
 
 
