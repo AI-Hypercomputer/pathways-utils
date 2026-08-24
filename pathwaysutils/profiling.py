@@ -356,13 +356,20 @@ def stop_trace() -> None:
   try:
     with _profile_state.lock:
       if _profile_state.executable is None:
-        raise RuntimeError("stop_trace called before a trace is being taken!")
+        _logger.warning(
+            "stop_trace called before a trace was started; ignoring."
+        )
+        return
       try:
         _profile_state.call_profile_executable()
       finally:
         _profile_state.reset()
   finally:
-    _original_stop_trace()
+    try:
+      _original_stop_trace()
+    except RuntimeError as e:
+      if "No profile started" not in str(e):
+        raise
 
 
 _profiler_thread: threading.Thread | None = None

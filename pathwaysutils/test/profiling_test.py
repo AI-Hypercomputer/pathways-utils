@@ -403,11 +403,12 @@ class ProfilingTest(parameterized.TestCase):
       self.assertEqual(out_aval.shape, (1,))
       self.assertEqual(out_aval.dtype, jnp.object_)
 
-  def test_stop_trace_before_start_error(self):
-    with self.assertRaisesRegex(
-        RuntimeError, "stop_trace called before a trace is being taken!"
-    ):
+  def test_stop_trace_before_start_warns_and_returns(self):
+    with mock.patch.object(profiling._logger, "warning") as mock_warn:
       profiling.stop_trace()
+      mock_warn.assert_called_once_with(
+          "stop_trace called before a trace was started; ignoring."
+      )
 
   def test_start_server_starts_thread(self):
     mock_thread = self.enter_context(
