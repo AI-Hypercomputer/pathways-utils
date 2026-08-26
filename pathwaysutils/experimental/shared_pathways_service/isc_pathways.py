@@ -430,6 +430,21 @@ class _ISCPathways:
     _logger.info("JAX variables restored.")
 
 
+def _get_username() -> str:
+  """Gets the username from the environment.
+
+  If the username contains an underscore, splits on '_' and uses the first
+  portion.
+
+  Returns:
+    The sanitized username, or 'user' if unavailable.
+  """
+  username = os.environ.get("USER", "user")
+  if "_" in username:
+    username = username.split("_")[0]
+  return username or "user"
+
+
 @contextlib.contextmanager
 def connect(
     *,
@@ -484,11 +499,12 @@ def connect(
       validators.validate_sidecar_image_versions(sidecar_image)
   _logger.info("Validation complete.")
 
-  proxy_job_name = (
-      proxy_job_name
-      or f"isc-proxy-{os.environ.get('USER', 'user')}-"
-      f"{''.join(random.choices(string.ascii_lowercase + string.digits, k=5))}"
-  )
+  if not proxy_job_name:
+    username = _get_username()
+    random_suffix = "".join(
+        random.choices(string.ascii_lowercase + string.digits, k=5)
+    )
+    proxy_job_name = f"isc-proxy-{username}-{random_suffix}"
 
   _logger.info("Starting ISCPathways context.")
   with _ISCPathways(

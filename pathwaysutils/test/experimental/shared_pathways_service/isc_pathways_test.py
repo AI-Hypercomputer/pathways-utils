@@ -876,6 +876,125 @@ class ISCPathwaysTest(parameterized.TestCase):
         "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
     )
 
+  @parameterized.named_parameters(
+      ("no_underscore", "testuser", "testuser"),
+      ("single_underscore", "test_user", "test"),
+      ("multiple_underscores", "akshu_google_com", "akshu"),
+      ("trailing_underscore", "user_", "user"),
+  )
+  def test_get_username(self, env_user, expected_username):
+    with mock.patch.dict(os.environ, {"USER": env_user}):
+      self.assertEqual(isc_pathways._get_username(), expected_username)
+
+  def test_get_username_unset_returns_default(self):
+    with mock.patch.dict(os.environ, clear=True):
+      self.assertEqual(isc_pathways._get_username(), "user")
+
+  def test_get_username_empty_returns_default(self):
+    with mock.patch.dict(os.environ, {"USER": ""}):
+      self.assertEqual(isc_pathways._get_username(), "user")
+
+  def test_connect_with_underscore_username(self):
+    """Tests that connect uses the portion before '_' for proxy job name."""
+    self.enter_context(
+        mock.patch.dict(os.environ, {"USER": "akshu_google_com"})
+    )
+    mock_random = self.enter_context(
+        mock.patch(
+            "pathwaysutils.experimental.shared_pathways_service.isc_pathways.random",
+            autospec=True,
+        )
+    )
+    mock_random.choices.return_value = list("abcde")
+    expected_proxy_job_name = "isc-proxy-akshu-abcde"
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.validators, "validate_tpu_instances", autospec=True
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.validators,
+            "validate_proxy_server_image",
+            autospec=True,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    mock_manager_instance = (
+        mock_isc_pathways.return_value.__enter__.return_value
+    )
+    mock_manager_instance.proxy_pod_name = "test-pod-123"
+    mock_manager_instance.expected_tpu_instances = {"tpuv6e:2x2": 1}
+
+    with isc_pathways.connect(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+    ):
+      pass
+
+    mock_isc_pathways.assert_called_once()
+    _, kwargs = mock_isc_pathways.call_args
+    self.assertEqual(kwargs["proxy_job_name"], expected_proxy_job_name)
+
+  def test_connect_with_explicit_proxy_job_name(self):
+    """Tests that connect uses explicitly provided proxy_job_name."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.validators, "validate_tpu_instances", autospec=True
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.validators,
+            "validate_proxy_server_image",
+            autospec=True,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    mock_manager_instance = (
+        mock_isc_pathways.return_value.__enter__.return_value
+    )
+    mock_manager_instance.proxy_pod_name = "test-pod-123"
+    mock_manager_instance.expected_tpu_instances = {"tpuv6e:2x2": 1}
+
+    with isc_pathways.connect(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="custom-proxy-job",
+    ):
+      pass
+
+    mock_isc_pathways.assert_called_once()
+    _, kwargs = mock_isc_pathways.call_args
+    self.assertEqual(kwargs["proxy_job_name"], "custom-proxy-job")
+
 
 if __name__ == "__main__":
   absltest.main()
