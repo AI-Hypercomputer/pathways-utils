@@ -13,6 +13,8 @@
 # limitations under the License.
 """Initialization functions for Pathways-on-Cloud utilities."""
 
+from collections.abc import Sequence
+import concurrent.futures
 import datetime
 import logging
 import os
@@ -106,3 +108,48 @@ def initialize() -> None:
     _logger.debug(
         "Did not detect Pathways-on-Cloud backend. No changes applied."
     )
+
+
+def wait_for_devices_ready(
+    devices: Sequence[jax.Device] | None = None,
+    timeout: float | int | None = None,
+) -> None:
+  """Waits for the given devices to be ready and available for computation.
+
+  Args:
+    devices: The sequence of JAX devices to wait for. If None, defaults to all
+      available devices via `jax.devices()`.
+    timeout: The maximum number of seconds to wait. If None, there is no timeout
+      (waits indefinitely).
+
+  Raises:
+    TimeoutError: If the timeout is reached before the devices become ready.
+  """
+  if devices is None:
+    devices = jax.devices()
+
+  if not devices:
+    return
+
+  _logger.info(
+      "Waiting for %d devices to be ready (timeout=%s).", len(devices), timeout
+  )
+  fn = lambda x: x + 1
+  results = [jax.jit(fn, device=d)(0) for d in devices]
+  if timeout is None:
+    jax.block_until_ready(results)
+  else:
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(jax.block_until_ready, results)
+    try:
+      future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError as e:
+      executor.shutdown(wait=False, cancel_futures=True)
+      raise TimeoutError(
+          f"Timed out waiting for {len(devices)} devices to be ready after"
+          f" {timeout} seconds."
+      ) from e
+    else:
+      executor.shutdown(wait=True)
+
+  _logger.info("All %d devices are ready.", len(devices))
