@@ -37,6 +37,14 @@ _DRY_RUN = flags.DEFINE_boolean(
     False,
     "If true, only print the generated YAML without deploying.",
 )
+_USE_DNS_ENDPOINT = flags.DEFINE_boolean(
+    "use_dns_endpoint",
+    True,
+    "If true (default), fetch cluster credentials via the cluster's DNS "
+    "endpoint. Set to false for fully-private clusters whose DNS and public "
+    "endpoints are both disabled, so credentials are fetched via the reachable "
+    "private IP endpoint instead.",
+)
 
 _TEMPLATE_FILE = os.path.join(
     os.path.dirname(__file__), "yamls/code-server.yaml"
@@ -150,6 +158,7 @@ def main(argv):
       cluster_name=_CLUSTER.value,
       project_id=_PROJECT.value,
       location=_REGION.value,
+      use_dns_endpoint=_USE_DNS_ENDPOINT.value,
   )
   try:
     _deploy_vscode(service_name, deployment_yaml)
