@@ -9,6 +9,8 @@ import time
 import urllib.parse
 
 import portpicker
+from kubernetes import client
+from kubernetes import config
 
 _logger = logging.getLogger(__name__)
 
@@ -530,4 +532,36 @@ def get_worker_sidecar_image(
 
   return None
 
+
+def get_default_cpu_instance_type():
+  """Uses Kubernetes API to dynamically discover an available CPU nodepool instance type.
+  Returns:
+    The first discovered CPU node instance type as a string, or None if none found.
+  """
+  try:
+    try:
+      config.load_kube_config()
+    except config.ConfigException:
+      config.load_incluster_config()
+
+    v1 = client.CoreV1Api()
+    nodes = v1.list_node()
+    for node in nodes.items:
+      labels = node.metadata.labels or {}
+      # CPU nodes generally lack GPU/TPU accelerator tags
+      is_cpu = (
+          "cloud.google.com/gke-accelerator" not in labels
+          and "cloud.google.com/gke-tpu-topology" not in labels
+          and "cloud.google.com/gke-tpu-accelerator" not in labels
+      )
+      if is_cpu and "node.kubernetes.io/instance-type" in labels:
+        found_type = labels["node.kubernetes.io/instance-type"]
+        _logger.info("Auto-detected CPU instance type: %s", found_type)
+        return found_type
+
+    _logger.warning("No CPU node could be found in the current cluster.")
+    return None
+  except Exception as e:
+    _logger.warning("Failed to auto-detect CPU nodepool via K8s API: %s", e)
+    return None
 

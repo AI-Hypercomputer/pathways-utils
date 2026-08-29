@@ -1,0 +1,47 @@
+# 1. Create a Role that allows managing jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: isc-pathways-job-manager
+rules:
+- apiGroups: ["batch", "extensions"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# 2. Bind that role to the service account your pod uses
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: isc-pathways-job-manager-binding
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: default # If your pod uses a custom service account, change this name
+  namespace: default
+roleRef:
+  kind: Role
+  name: isc-pathways-job-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {SESSION}
+  labels:
+    app: {SESSION}
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - name: sps-remote-jax
+    image: {IMAGE}
+    imagePullPolicy: Always
+    command: ["sleep", "infinity"]
+    ports:
+    - containerPort: {PORT}
+    env:
+    - name: PORT
+      value: "{PORT}"
+
+  nodeSelector:
+    node.kubernetes.io/instance-type: "{INSTANCE_TYPE}"
