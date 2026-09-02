@@ -89,8 +89,7 @@ I1208 20:10:18.148825       ...] argv[2]: '--resource_manager_address=pathways-c
 ### 1. Install `pathwaysutils` and SPS dependencies.
 
 ```shell
-pip install --upgrade
-git+https://github.com/AI-Hypercomputer/pathways-utils[sps]
+pip install --upgrade "pathwaysutils[sps] @ git+https://github.com/AI-Hypercomputer/pathways-utils.git"
 
 # Note: google-cloud-monitoring is optional. If you don't wish to collect SPS usage metrics, install with pathways-utils[sps_without_monitoring].
 ```
