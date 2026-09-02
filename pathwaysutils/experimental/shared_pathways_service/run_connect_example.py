@@ -36,7 +36,8 @@ flags.DEFINE_string(
 flags.DEFINE_string(
     "proxy_server_image",
     None,
-    "The proxy server image to use. If not provided, a default will be used.",
+    "Deprecated: The proxy server image to use. If not provided, it will be"
+    " auto-detected from the Pathways service.",
 )
 flags.DEFINE_list(
     "proxy_options",
@@ -73,8 +74,7 @@ def main(argv: Sequence[str]) -> None:
       pathways_service=FLAGS.pathways_service,
       expected_tpu_instances={FLAGS.tpu_type: FLAGS.tpu_count},
       proxy_job_name=FLAGS.proxy_job_name,
-      proxy_server_image=FLAGS.proxy_server_image
-      or isc_pathways.DEFAULT_PROXY_IMAGE,
+      proxy_server_image=FLAGS.proxy_server_image,
       proxy_options=FLAGS.proxy_options,
       collect_service_metrics=FLAGS.collect_service_metrics,
   ):

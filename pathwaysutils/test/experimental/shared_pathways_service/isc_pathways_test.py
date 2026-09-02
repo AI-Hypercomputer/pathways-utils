@@ -600,17 +600,19 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.validators, "validate_tpu_instances", autospec=True
         )
     )
-    mock_validate_proxy_image = self.enter_context(
-        mock.patch.object(
-            isc_pathways.validators,
-            "validate_proxy_server_image",
-            autospec=True,
-        )
-    )
     mock_fetch_creds = self.enter_context(
         mock.patch.object(
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        None,
     )
     mock_isc_pathways = self.enter_context(
         mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
@@ -623,7 +625,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     project = "test-project"
     region = "test-region"
     bucket = "test-bucket"
-    pathways_service = "test-service:1234"
+    pathways_service = "test-service-pathways-head:1234"
     expected_instances = {"tpuv5:4x4x4": 1}
 
     mock_manager_instance = (
@@ -645,9 +647,6 @@ class ISCPathwaysTest(parameterized.TestCase):
     ) as tm:
       # Assert
       mock_validate_tpu.assert_called_once_with(expected_instances)
-      mock_validate_proxy_image.assert_called_once_with(
-          isc_pathways.DEFAULT_PROXY_IMAGE
-      )
       mock_fetch_creds.assert_called_once_with(
           cluster_name=cluster, project_id=project, location=region
       )
@@ -719,23 +718,6 @@ class ISCPathwaysTest(parameterized.TestCase):
       ):
         self.fail("ISCPathways context should not be entered.")
 
-  def test_connect_with_invalid_proxy_image_raises_error(self):
-    """Tests that connect raises an error for invalid proxy image."""
-    with self.assertRaisesRegex(
-        ValueError,
-        "Proxy server image cannot be empty.",
-    ):
-      with isc_pathways.connect(
-          cluster="test-cluster",
-          project="test-project",
-          region="test-zone",
-          gcs_bucket="test-bucket",
-          pathways_service="test-service:1234",
-          expected_tpu_instances={"tpuv6e:2x2": 1},
-          proxy_server_image="",
-      ):
-        self.fail("ISCPathways context should not be entered.")
-
   def test_connect_passes_collect_service_metrics(self):
     """Tests that connect passes collect_service_metrics to _ISCPathways."""
     self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
@@ -744,6 +726,15 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
     )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        None,
+    )
     mock_isc_pathways = self.enter_context(
         mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
     )
@@ -751,13 +742,6 @@ class ISCPathwaysTest(parameterized.TestCase):
     self.enter_context(
         mock.patch.object(
             isc_pathways.validators, "validate_tpu_instances", autospec=True
-        )
-    )
-    self.enter_context(
-        mock.patch.object(
-            isc_pathways.validators,
-            "validate_proxy_server_image",
-            autospec=True,
         )
     )
 
@@ -772,7 +756,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         project="test-project",
         region="test-region",
         gcs_bucket="test-bucket",
-        pathways_service="test-service:1234",
+        pathways_service="test-service-pathways-head:1234",
         expected_tpu_instances={"tpuv6e:2x2": 1},
         collect_service_metrics=True,
     ):
@@ -789,13 +773,14 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
     )
-    mock_get_sidecar = self.enter_context(
+    mock_get_images = self.enter_context(
         mock.patch.object(
-            isc_pathways.gke_utils, "get_worker_sidecar_image", autospec=True
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
         )
     )
-    mock_get_sidecar.return_value = (
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
     )
     mock_validate_versions = self.enter_context(
         mock.patch.object(
@@ -820,14 +805,14 @@ class ISCPathwaysTest(parameterized.TestCase):
         project="test-project",
         region="test-region",
         gcs_bucket="test-bucket",
-        pathways_service="test-service:1234",
+        pathways_service="test-service-pathways-head:1234",
         expected_tpu_instances={"tpuv6e:2x2": 1},
         proxy_options=["sidecar:true"],
     ):
       pass
 
-    mock_get_sidecar.assert_called_once_with(
-        pathways_service="test-service:1234"
+    mock_get_images.assert_called_once_with(
+        "test-service-pathways-head:1234"
     )
     mock_validate_versions.assert_called_once_with(
         "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
@@ -840,13 +825,14 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
     )
-    mock_get_sidecar = self.enter_context(
+    mock_get_images = self.enter_context(
         mock.patch.object(
-            isc_pathways.gke_utils, "get_worker_sidecar_image", autospec=True
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
         )
     )
-    mock_get_sidecar.return_value = (
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
     )
     mock_validate_versions = self.enter_context(
         mock.patch.object(
@@ -863,14 +849,14 @@ class ISCPathwaysTest(parameterized.TestCase):
           project="test-project",
           region="test-region",
           gcs_bucket="test-bucket",
-          pathways_service="test-service:1234",
+          pathways_service="test-service-pathways-head:1234",
           expected_tpu_instances={"tpuv6e:2x2": 1},
           proxy_options=["sidecar:true"],
       ):
         pass
 
-    mock_get_sidecar.assert_called_once_with(
-        pathways_service="test-service:1234"
+    mock_get_images.assert_called_once_with(
+        "test-service-pathways-head:1234"
     )
     mock_validate_versions.assert_called_once_with(
         "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
@@ -914,15 +900,17 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     self.enter_context(
         mock.patch.object(
-            isc_pathways.validators,
-            "validate_proxy_server_image",
-            autospec=True,
-        )
-    )
-    self.enter_context(
-        mock.patch.object(
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        None,
     )
     mock_isc_pathways = self.enter_context(
         mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
@@ -940,7 +928,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         project="test-project",
         region="test-region",
         gcs_bucket="test-bucket",
-        pathways_service="test-service:1234",
+        pathways_service="test-service-pathways-head:1234",
         expected_tpu_instances={"tpuv6e:2x2": 1},
     ):
       pass
@@ -959,15 +947,17 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     self.enter_context(
         mock.patch.object(
-            isc_pathways.validators,
-            "validate_proxy_server_image",
-            autospec=True,
-        )
-    )
-    self.enter_context(
-        mock.patch.object(
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        None,
     )
     mock_isc_pathways = self.enter_context(
         mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
@@ -985,7 +975,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         project="test-project",
         region="test-region",
         gcs_bucket="test-bucket",
-        pathways_service="test-service:1234",
+        pathways_service="test-service-pathways-head:1234",
         expected_tpu_instances={"tpuv6e:2x2": 1},
         proxy_job_name="custom-proxy-job",
     ):
@@ -994,6 +984,187 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_isc_pathways.assert_called_once()
     _, kwargs = mock_isc_pathways.call_args
     self.assertEqual(kwargs["proxy_job_name"], "custom-proxy-job")
+
+  def test_connect_auto_detect_proxy_image_success(self):
+    """Tests that connect auto-detects compatible proxy image when not provided."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        None,
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    with isc_pathways.connect(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service-pathways-head:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+    ):
+      pass
+
+    mock_isc_pathways.assert_called_once()
+    _, kwargs = mock_isc_pathways.call_args
+    self.assertEqual(
+        kwargs["proxy_server_image"],
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+    )
+
+  def test_connect_incompatible_proxy_image_replaced_with_warning(self):
+    """Tests that an incompatible proxy image is replaced with compatible one and logs a warning."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        None,
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    with self.assertLogs(isc_pathways._logger, level="WARNING") as log_cm:
+      with isc_pathways.connect(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service-pathways-head:1234",
+          expected_tpu_instances={"tpuv6e:2x2": 1},
+          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+      ):
+        pass
+
+    self.assertTrue(any("incompatible" in msg for msg in log_cm.output))
+    mock_isc_pathways.assert_called_once()
+    _, kwargs = mock_isc_pathways.call_args
+    self.assertEqual(
+        kwargs["proxy_server_image"],
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+    )
+
+  def test_connect_compatible_proxy_image_no_warning(self):
+    """Tests that a compatible proxy image is used without replacement warning."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        None,
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    with isc_pathways.connect(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service-pathways-head:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+    ):
+      pass
+
+    mock_isc_pathways.assert_called_once()
+    _, kwargs = mock_isc_pathways.call_args
+    self.assertEqual(
+        kwargs["proxy_server_image"],
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+    )
+
+  def test_connect_autodetect_fails_fallback_to_default(self):
+    """Tests that connect raises an error when auto-detection fails."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.side_effect = RuntimeError("Failed to get server image")
+
+    with self.assertRaises(RuntimeError):
+      with isc_pathways.connect(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service-pathways-head:1234",
+          expected_tpu_instances={"tpuv6e:2x2": 1},
+      ):
+        pass
+
+  def test_connect_proxy_server_image_deprecation_warning(self):
+    """Tests that passing proxy_server_image emits a DeprecationWarning."""
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        None,
+    )
+    self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    with self.assertWarns(DeprecationWarning):
+      with isc_pathways.connect(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service-pathways-head:1234",
+          expected_tpu_instances={"tpuv6e:2x2": 1},
+          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+      ):
+        pass
 
 
 if __name__ == "__main__":

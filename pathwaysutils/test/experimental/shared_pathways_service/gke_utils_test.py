@@ -5,15 +5,121 @@ import io
 import json
 import socket
 import subprocess
+from typing import Any
 from unittest import mock
 
 from absl.testing import absltest
+from kubernetes import client
+from kubernetes import config as k8s_config
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
 import portpicker
 
 
 class GKEUtilsTest(absltest.TestCase):
   """Tests for gke_utils.py."""
+
+  def setUp(self):
+    super().setUp()
+    gke_utils._init_k8s_config.cache_clear()
+    gke_utils._get_k8s_core_api.cache_clear()
+    gke_utils._get_k8s_custom_objects_api.cache_clear()
+
+  def _make_jobset(
+      self,
+      name: str = "my-jobset",
+      replicated_jobs: list[dict[str, Any]] | None = None,
+  ) -> dict[str, Any]:
+    return {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+            "name": name,
+            "namespace": "default",
+        },
+        "spec": {
+            "replicatedJobs": replicated_jobs or [],
+        },
+    }
+
+  def _make_replicated_job(
+      self,
+      name: str = "pathways-worker",
+      containers: list[dict[str, Any]] | None = None,
+      init_containers: list[dict[str, Any]] | None = None,
+  ) -> dict[str, Any]:
+    return {
+        "name": name,
+        "template": {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": containers or [],
+                        "initContainers": init_containers or [],
+                    }
+                }
+            }
+        },
+    }
+
+  def test_get_k8s_core_api_load_kube_config_success(self):
+    mock_load = self.enter_context(
+        mock.patch.object(k8s_config, "load_kube_config", autospec=True)
+    )
+    api = gke_utils._get_k8s_core_api()
+    self.assertIsInstance(api, client.CoreV1Api)
+    mock_load.assert_called_once()
+
+  def test_get_k8s_core_api_caches_result(self):
+    mock_load = self.enter_context(
+        mock.patch.object(k8s_config, "load_kube_config", autospec=True)
+    )
+    api1 = gke_utils._get_k8s_core_api()
+    api2 = gke_utils._get_k8s_core_api()
+    self.assertIs(api1, api2)
+    mock_load.assert_called_once()
+
+  def test_get_k8s_core_api_incluster_fallback(self):
+    self.enter_context(
+        mock.patch.object(
+            k8s_config,
+            "load_kube_config",
+            side_effect=Exception("Failed to load kubeconfig"),
+        )
+    )
+    mock_incluster = self.enter_context(
+        mock.patch.object(k8s_config, "load_incluster_config", autospec=True)
+    )
+    api = gke_utils._get_k8s_core_api()
+    self.assertIsInstance(api, client.CoreV1Api)
+    mock_incluster.assert_called_once()
+
+  def test_get_k8s_core_api_failure_raises(self):
+    self.enter_context(
+        mock.patch.object(
+            k8s_config,
+            "load_kube_config",
+            side_effect=Exception("Failed to load kubeconfig"),
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            k8s_config,
+            "load_incluster_config",
+            side_effect=Exception("Failed in cluster"),
+        )
+    )
+    with self.assertRaises(RuntimeError):
+      gke_utils._get_k8s_core_api()
+
+  def test_get_k8s_custom_objects_api_caches_result(self):
+    mock_load = self.enter_context(
+        mock.patch.object(k8s_config, "load_kube_config", autospec=True)
+    )
+    api1 = gke_utils._get_k8s_custom_objects_api()
+    api2 = gke_utils._get_k8s_custom_objects_api()
+    self.assertIs(api1, api2)
+    self.assertIsInstance(api1, client.CustomObjectsApi)
+    mock_load.assert_called_once()
 
   def test_fetch_cluster_credentials_success(self):
     """Tests that fetch_cluster_credentials calls gcloud with the correct arguments."""
@@ -721,242 +827,259 @@ class GKEUtilsTest(absltest.TestCase):
       gke_utils.delete_gke_resource("deployment", "name-123",
                                     "invalid_namespace")
 
-  def test_get_worker_sidecar_image_success_with_jobset_name(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+  def test_get_pathways_service_images_success(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
     )
-    pods_json = {
-        "items": [
-            {
-                "metadata": {
-                    "name": "my-jobset-worker-0-0",
-                    "labels": {
-                        "jobset.sigs.k8s.io/jobset-name": "my-jobset"
-                    }
-                },
-                "spec": {
-                    "initContainers": [
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_jobset(
+            replicated_jobs=[
+                self._make_replicated_job(
+                    name="pathways-worker",
+                    containers=[
+                        {
+                            "name": "pathways-worker",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                        },
                         {
                             "name": "colocated-python-sidecar",
                             "image": (
                                 "us-docker.pkg.dev/cloud-tpu-v2-images/"
                                 "pathways-colocated-python/sidecar:"
                                 "20260423-python_3.12-jax_0.10.0"
-                            )
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout=json.dumps(pods_json),
+                            ),
+                        },
+                    ],
+                )
+            ]
+        )
     )
-    image = gke_utils.get_worker_sidecar_image(
+    server_img, sidecar_img = gke_utils.get_pathways_service_images(
         pathways_service="my-jobset-pathways-head-0-0:8080"
     )
     self.assertEqual(
-        image,
-        ("us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/"
-         "sidecar:20260423-python_3.12-jax_0.10.0"),
+        server_img,
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+    )
+    self.assertEqual(
+        sidecar_img,
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/"
+            "sidecar:20260423-python_3.12-jax_0.10.0"
+        ),
+    )
+    mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="default",
+        plural="jobsets",
+        name="my-jobset",
     )
 
-  def test_get_worker_sidecar_image_failure_none(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+  def test_get_pathways_service_images_without_sidecar(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
     )
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout="missing sidecar image",
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_jobset(
+            replicated_jobs=[
+                self._make_replicated_job(
+                    name="pathways-worker",
+                    containers=[
+                        {
+                            "name": "pathways-worker",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                        }
+                    ],
+                )
+            ]
+        )
     )
-    image = gke_utils.get_worker_sidecar_image(
+    server_img, sidecar_img = gke_utils.get_pathways_service_images(
         pathways_service="my-jobset-pathways-head-0-0:8080"
     )
-    self.assertIsNone(image)
+    self.assertEqual(
+        server_img,
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+    )
+    self.assertIsNone(sidecar_img)
 
-  def test_get_worker_sidecar_image_invalid_namespace(self):
+  def test_get_pathways_service_images_sidecar_in_init_containers(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_jobset(
+            replicated_jobs=[
+                self._make_replicated_job(
+                    name="pathways-worker",
+                    containers=[
+                        {
+                            "name": "pathways-worker",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                        }
+                    ],
+                    init_containers=[
+                        {
+                            "name": "colocated-python-sidecar",
+                            "image": "sidecar-image-url",
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    server_img, sidecar_img = gke_utils.get_pathways_service_images(
+        pathways_service="my-jobset-pathways-head-0-0:8080"
+    )
+    self.assertEqual(
+        server_img,
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+    )
+    self.assertEqual(sidecar_img, "sidecar-image-url")
+
+  def test_get_pathways_service_images_custom_namespace(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_jobset(
+            replicated_jobs=[
+                self._make_replicated_job(
+                    name="pathways-worker",
+                    containers=[
+                        {
+                            "name": "pathways-worker",
+                            "image": "server-image",
+                        }
+                    ],
+                )
+            ]
+        )
+    )
+    gke_utils.get_pathways_service_images(
+        pathways_service="my-jobset-pathways-head-0-0:8080",
+        namespace="my-custom-ns",
+    )
+    mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="my-custom-ns",
+        plural="jobsets",
+        name="my-jobset",
+    )
+
+  def test_get_pathways_service_images_invalid_namespace(self):
     with self.assertRaises(ValueError):
-      gke_utils.get_worker_sidecar_image(
+      gke_utils.get_pathways_service_images(
           pathways_service="my-jobset-pathways-head-0-0:8080",
           namespace="invalid namespace!",
       )
 
-  def test_get_worker_sidecar_image_no_pathways_head_in_hostname(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
-    )
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout="{}",
-    )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset:8080"
-    )
-    self.assertIsNone(image)
+  def test_get_pathways_service_images_no_pathways_head_in_hostname(self):
+    with self.assertRaises(ValueError):
+      gke_utils.get_pathways_service_images(pathways_service="my-jobset:8080")
 
-  def test_get_worker_sidecar_image_kubectl_error(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+  def test_get_pathways_service_images_missing_server_image_raises(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
     )
-    mock_run.side_effect = subprocess.CalledProcessError(
-        returncode=1, cmd=["kubectl", "get", "pods"], stderr="kubectl error"
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_jobset(replicated_jobs=[])
     )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080"
-    )
-    self.assertIsNone(image)
+    with self.assertRaises(RuntimeError):
+      gke_utils.get_pathways_service_images(
+          pathways_service="my-jobset-pathways-head-0-0:8080"
+      )
 
-  def test_get_worker_sidecar_image_success_with_pod_name_prefix(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+  def test_get_pathways_service_images_api_error_raises(self):
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
     )
-    pods_json = {
-        "items": [
-            {
-                "metadata": {
-                    "name": "my-jobset-worker-0-0",
-                    "labels": {}
-                },
-                "spec": {
-                    "initContainers": [
-                        {
-                            "name": "colocated-python-sidecar",
-                            "image": "sidecar-image-url"
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout=json.dumps(pods_json),
+    mock_custom_api.get_namespaced_custom_object.side_effect = (
+        client.rest.ApiException(status=500, reason="API error")
     )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080"
-    )
-    self.assertEqual(image, "sidecar-image-url")
+    with self.assertRaises(Exception):
+      gke_utils.get_pathways_service_images(
+          pathways_service="my-jobset-pathways-head-0-0:8080"
+      )
 
-  def test_get_worker_sidecar_image_success_in_containers(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
-    )
-    pods_json = {
-        "items": [
-            {
-                "metadata": {
-                    "name": "my-jobset-worker-0-0",
-                    "labels": {}
-                },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "colocated-python-sidecar",
-                            "image": "sidecar-image-url"
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout=json.dumps(pods_json),
-    )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080"
-    )
-    self.assertEqual(image, "sidecar-image-url")
-
-  def test_get_worker_sidecar_image_missing_sidecar_container(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
-    )
-    pods_json = {
-        "items": [
-            {
-                "metadata": {
-                    "name": "my-jobset-worker-0-0",
-                    "labels": {}
-                },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "some-other-container",
-                            "image": "some-image"
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout=json.dumps(pods_json),
-    )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080"
-    )
-    self.assertIsNone(image)
-
-  def test_get_worker_sidecar_image_missing_image_field(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
-    )
-    pods_json = {
-        "items": [
-            {
-                "metadata": {
-                    "name": "my-jobset-worker-0-0",
-                    "labels": {}
-                },
-                "spec": {
-                    "containers": [
-                        {
-                            "name": "colocated-python-sidecar",
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout=json.dumps(pods_json),
-    )
-    image = gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080"
-    )
-    self.assertIsNone(image)
-
-  def test_get_worker_sidecar_image_custom_namespace(self):
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
-    )
-    mock_run.return_value = subprocess.CompletedProcess(
-        args=["kubectl", "get", "pods"],
-        returncode=0,
-        stdout="{}",
-    )
-    gke_utils.get_worker_sidecar_image(
-        pathways_service="my-jobset-pathways-head-0-0:8080",
-        namespace="my-custom-ns",
-    )
-    mock_run.assert_called_once_with(
-        ["kubectl", "get", "pods", "-n", "my-custom-ns", "-o", "json"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
+  def test_get_compatible_proxy_server_image(self):
+    test_cases = [
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/unsanitized_server:staging",
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/unsanitized_proxy_server:staging",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/sanitized_server:nightly",
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/sanitized_proxy_server:nightly",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/server:latest",
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/proxy_server:latest",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_server:latest",
+            "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_proxy_server:latest",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server",
+        ),
+        (
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server@sha256:12345",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server@sha256:12345",
+        ),
+        (
+            "custom.registry.com/pathways/my_custom_image:1.0",
+            "custom.registry.com/pathways/my_custom_image:1.0",
+        ),
+        ("", ""),
+    ]
+    for server_img, expected_proxy_img in test_cases:
+      with self.subTest(server_img=server_img):
+        self.assertEqual(
+            gke_utils.get_compatible_proxy_server_image(server_img),
+            expected_proxy_img,
+        )
 if __name__ == "__main__":
   absltest.main()
+

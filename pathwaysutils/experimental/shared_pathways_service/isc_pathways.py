@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 from typing import Any
+import warnings
 
 import jax
 import jax.extend.backend as jax_backend
@@ -455,7 +456,7 @@ def connect(
     pathways_service: str,
     expected_tpu_instances: Mapping[str, int],
     proxy_job_name: str | None = None,
-    proxy_server_image: str = DEFAULT_PROXY_IMAGE,
+    proxy_server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
 ) -> Iterator["_ISCPathways"]:
@@ -471,8 +472,10 @@ def connect(
       of instances. For example: {"tpuv6e:2x2": 2}
     proxy_job_name: The name to use for the deployed proxy. If not provided, a
       random name will be generated.
-    proxy_server_image: The proxy server image to use. If not provided, a
-      default will be used.
+    proxy_server_image: (Deprecated) The proxy server image to use. If not
+      provided, it will be auto-detected from the Pathways service. If the given
+      proxy image is incompatible with the Pathways service, it will be
+      replaced with the compatible proxy image.
     proxy_options: Configuration options for the Pathways proxy. If not
       provided, no extra options will be used.
     collect_service_metrics: Whether to collect usage metrics for Shared
@@ -481,22 +484,44 @@ def connect(
   Yields:
     The Pathways manager.
   """
+  if proxy_server_image is not None:
+    warnings.warn(
+        "`proxy_server_image` is deprecated and will be removed in a future"
+        " release. The proxy server image is automatically detected from the"
+        " Pathways service.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
   _logger.info("Validating Pathways service and TPU instances...")
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
-  validators.validate_proxy_server_image(proxy_server_image)
   validators.validate_proxy_options(proxy_options)
   gke_utils.fetch_cluster_credentials(
       cluster_name=cluster, project_id=project, location=region
   )
 
-  proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar:
-    sidecar_image = gke_utils.get_worker_sidecar_image(
-        pathways_service=pathways_service
+  server_image, sidecar_image = gke_utils.get_pathways_service_images(
+      pathways_service
+  )
+  compatible_proxy_image = gke_utils.get_compatible_proxy_server_image(
+      server_image
+  )
+  _logger.info(
+      "Auto-detected compatible proxy server image: %s", compatible_proxy_image
+  )
+  if proxy_server_image and proxy_server_image != compatible_proxy_image:
+    _logger.warning(
+        "The provided proxy image '%s' is incompatible with the service"
+        " '%s'. Replacing it with the compatible proxy image '%s'.",
+        proxy_server_image,
+        pathways_service,
+        compatible_proxy_image,
     )
-    if sidecar_image:
-      validators.validate_sidecar_image_versions(sidecar_image)
+  proxy_server_image = compatible_proxy_image
+
+  proxy_options_obj = ProxyOptions.from_list(proxy_options)
+  if proxy_options_obj.sidecar and sidecar_image:
+    validators.validate_sidecar_image_versions(sidecar_image)
   _logger.info("Validation complete.")
 
   if not proxy_job_name:

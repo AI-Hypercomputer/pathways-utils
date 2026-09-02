@@ -22,6 +22,7 @@ import os
 import shlex
 import subprocess
 from typing import Any, ContextManager
+import warnings
 
 from absl import app
 from absl import flags
@@ -55,7 +56,8 @@ _TPU_COUNT = flags.DEFINE_integer("tpu_count", 1, "The number of TPU slices.")
 _PROXY_SERVER_IMAGE = flags.DEFINE_string(
     "proxy_server_image",
     "",
-    "The proxy server image to use. If not provided, a default will be used.",
+    "Deprecated: The proxy server image to use. If not provided, it will be"
+    " auto-detected from the Pathways service.",
 )
 _PROXY_OPTIONS = flags.DEFINE_list(
     "proxy_options",
@@ -103,7 +105,8 @@ def run_command(
     tpu_type: The TPU machine type and topology.
     tpu_count: The number of TPU slices.
     command: The command to run on TPUs.
-    proxy_server_image: The proxy server image to use.
+    proxy_server_image: (Deprecated) The proxy server image to use. If not
+      provided, it will be auto-detected from the Pathways service.
     proxy_options: Configuration options for the Pathways proxy.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service. Defaults to False.
@@ -113,6 +116,14 @@ def run_command(
   Raises:
     subprocess.CalledProcessError: If the workload command fails.
   """
+  if proxy_server_image:
+    warnings.warn(
+        "`proxy_server_image` is deprecated and will be removed in a future"
+        " release. The proxy server image is automatically detected from the"
+        " Pathways service.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
   logging.info("Connecting to Shared Pathways Service...")
   with connect_fn(
       cluster=cluster,
@@ -122,9 +133,7 @@ def run_command(
       pathways_service=pathways_service,
       expected_tpu_instances={tpu_type: tpu_count},
       proxy_server_image=(
-          proxy_server_image
-          if proxy_server_image
-          else isc_pathways.DEFAULT_PROXY_IMAGE
+          proxy_server_image if proxy_server_image else None
       ),
       proxy_options=proxy_options,
       collect_service_metrics=collect_service_metrics,

@@ -1,6 +1,6 @@
 """GKE utils for deploying and managing the Pathways proxy."""
 
-import json
+import functools
 import logging
 import re
 import socket
@@ -8,6 +8,8 @@ import subprocess
 import time
 import urllib.parse
 
+from kubernetes import client
+from kubernetes import config as k8s_config
 import portpicker
 
 _logger = logging.getLogger(__name__)
@@ -477,57 +479,116 @@ def is_local_port_free(port: int) -> bool:
   return portpicker.is_port_free(port)
 
 
-def get_worker_sidecar_image(
+@functools.lru_cache(maxsize=1)
+def _init_k8s_config() -> None:
+  """Initializes the Kubernetes configuration."""
+  try:
+    k8s_config.load_kube_config()
+  except Exception:  # pylint: disable=broad-except
+    try:
+      k8s_config.load_incluster_config()
+    except Exception as e:
+      raise RuntimeError("Failed to load Kubernetes configuration") from e
+
+
+@functools.lru_cache(maxsize=1)
+def _get_k8s_core_api() -> client.CoreV1Api:
+  """Initializes and returns the Kubernetes CoreV1Api client."""
+  _init_k8s_config()
+  return client.CoreV1Api()
+
+
+@functools.lru_cache(maxsize=1)
+def _get_k8s_custom_objects_api() -> client.CustomObjectsApi:
+  """Initializes and returns the Kubernetes CustomObjectsApi client."""
+  _init_k8s_config()
+  return client.CustomObjectsApi()
+
+
+def get_pathways_service_images(
     pathways_service: str, namespace: str = "default"
-) -> str | None:
-  """Gets the image of the sidecar container used by the workers."""
+) -> tuple[str, str | None]:
+  """Gets the server image and optional worker sidecar image from the JobSet."""
   pathways_head_hostname = pathways_service.split(":")[0]
   _validate_k8s_name(namespace)
 
   # Try to extract the jobset name from the Pathways service hostname.
-  jobset_name = None
-  if "-pathways-head" in pathways_head_hostname:
-    jobset_name = pathways_head_hostname.split("-pathways-head")[0]
-
-  command = ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
-  try:
-    result = subprocess.run(
-        command,
-        check=True,
-        capture_output=True,
-        text=True,
+  if "-pathways-head" not in pathways_head_hostname:
+    raise ValueError(
+        "Failed to extract jobset name from Pathways service hostname:"
+        f" {pathways_head_hostname}. Expected prefix format:"
+        " <jobset_name>-pathways-head"
     )
-  except subprocess.CalledProcessError as e:
-    _logger.exception("Failed to get pods. kubectl output:\n%r", e.stderr)
-    return None
+  jobset_name = pathways_head_hostname.split("-pathways-head")[0]
 
   try:
-    pods_data = json.loads(result.stdout)
-  except json.JSONDecodeError as e:
-    _logger.exception("Failed to parse kubectl get pods output: %r", e)
-    return None
+    custom_api = _get_k8s_custom_objects_api()
+    jobset = custom_api.get_namespaced_custom_object(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace=namespace,
+        plural="jobsets",
+        name=jobset_name,
+    )
+  except Exception as e:
+    _logger.exception("Failed to get JobSet: %r", e)
+    raise
 
-  items = pods_data.get("items", [])
+  server_image = None
+  sidecar_image = None
 
-  # Look for pods belonging to the jobset and having the sidecar
-  # container/initContainer.
-  if jobset_name:
-    for pod in items:
-      metadata = pod.get("metadata", {})
-      labels = metadata.get("labels", {})
-      pod_jobset_name = labels.get("jobset.sigs.k8s.io/jobset-name")
-      pod_name = metadata.get("name", "")
+  # Find the worker job and extract both images
+  for job in jobset.get("spec", {}).get("replicatedJobs", []):
+    if job.get("name") in ("pathways-worker", "worker"):
+      spec = (
+          job.get("template", {})
+          .get("spec", {})
+          .get("template", {})
+          .get("spec", {})
+      )
+      containers = spec.get("containers", []) + spec.get("initContainers", [])
+      for c in containers:
+        if c.get("name") == "pathways-worker" and c.get("image"):
+          server_image = c["image"]
+        elif c.get("name") == "colocated-python-sidecar" and c.get("image"):
+          sidecar_image = c["image"]
+      break
 
-      if pod_jobset_name == jobset_name or pod_name.startswith(jobset_name):
-        spec = pod.get("spec", {})
-        for container in spec.get("initContainers", []) + spec.get(
-            "containers", []
-        ):
-          if container.get("name") == "colocated-python-sidecar":
-            image = container.get("image")
-            if image:
-              return image
+  if not server_image:
+    raise RuntimeError(
+        "Failed to get server image of the worker job for Pathways service:"
+        f" {pathways_service} in namespace: {namespace}"
+    )
 
-  return None
+  return (server_image, sidecar_image)
+
+
+def get_compatible_proxy_server_image(server_image: str) -> str:
+  """Converts a Pathways server image to its compatible proxy server image."""
+  if not server_image:
+    return server_image
+
+  # Extract tag or digest if present.
+  if "@" in server_image:
+    repo, tag_or_digest = server_image.split("@", 1)
+    sep = "@"
+  else:
+    last_slash = server_image.rfind("/")
+    if ":" in server_image[last_slash + 1:]:
+      repo, tag_or_digest = server_image.rsplit(":", 1)
+      sep = ":"
+    else:
+      repo = server_image
+      tag_or_digest = None
+      sep = ""
+
+  prefix, sep_slash, last_component = repo.rpartition("/")
+  new_last_component = last_component.replace("server", "proxy_server")
+
+  new_repo = f"{prefix}{sep_slash}{new_last_component}"
+  if tag_or_digest is not None:
+    return f"{new_repo}{sep}{tag_or_digest}"
+  return new_repo
+
 
 
