@@ -27,6 +27,7 @@ import warnings
 from absl import app
 from absl import flags
 from absl import logging
+from pathwaysutils.experimental.shared_pathways_service import gke_utils
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 
 _CLUSTER = flags.DEFINE_string(
@@ -139,14 +140,25 @@ def run_command(
       collect_service_metrics=collect_service_metrics,
   ):
     logging.info("Connection established. Running command: %r", command)
+    command_args = shlex.split(command)
+    proc = subprocess.Popen(command_args, env=os.environ.copy())
     try:
-      command_args = shlex.split(command)
-      subprocess.run(command_args, check=True, env=os.environ.copy())
+      returncode = proc.wait()
+      if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, command_args)
     except subprocess.CalledProcessError:
       logging.error(
           "Command failed! Find the underlying error in the logs above, where"
           " the command is invoked."
       )
+      raise
+    except BaseException:
+      logging.warning(
+          "Command interrupted or terminated. Terminating child process (PID"
+          " %s)...",
+          getattr(proc, "pid", "unknown"),
+      )
+      gke_utils.terminate_process(proc, process_name="workload")
       raise
     finally:
       logging.info("Command execution finished.")

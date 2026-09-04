@@ -2,7 +2,6 @@
 """
 
 import io
-import json
 import socket
 import subprocess
 from typing import Any
@@ -1080,6 +1079,140 @@ class GKEUtilsTest(absltest.TestCase):
             gke_utils.get_compatible_proxy_server_image(server_img),
             expected_proxy_img,
         )
+
+  def test_start_port_forwarding_success(self):
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
+    )
+    mock_pick_port = self.enter_context(
+        mock.patch.object(portpicker, "pick_unused_port", autospec=True)
+    )
+    mock_pick_port.return_value = 29007
+    mock_process = mock_popen.return_value
+
+    port, process = gke_utils.start_port_forwarding("test-pod-123", 8080)
+
+    self.assertEqual(port, 29007)
+    self.assertEqual(process, mock_process)
+    mock_popen.assert_called_once_with(
+        [
+            "kubectl",
+            "port-forward",
+            "-n",
+            "default",
+            "--address",
+            "localhost",
+            "--",
+            "test-pod-123",
+            "29007:8080",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+  def test_wait_for_port_forwarding_success(self):
+    mock_create_connection = self.enter_context(
+        mock.patch.object(socket, "create_connection", autospec=True)
+    )
+    mock_process = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_process.stdout = io.StringIO(
+        "Forwarding from 127.0.0.1:29007 -> 8080\n"
+    )
+
+    gke_utils.wait_for_port_forwarding(mock_process, 29007)
+
+    mock_create_connection.assert_called_once_with(
+        ("localhost", 29007), timeout=30
+    )
+    mock_process.terminate.assert_not_called()
+
+  def test_enable_port_forwarding_interrupted_terminates_process(self):
+    mock_create_connection = self.enter_context(
+        mock.patch.object(socket, "create_connection", autospec=True)
+    )
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
+    )
+    mock_pick_port = self.enter_context(
+        mock.patch.object(portpicker, "pick_unused_port", autospec=True)
+    )
+    mock_pick_port.return_value = 29007
+    mock_process = mock_popen.return_value
+    mock_process.stdout = io.StringIO(
+        "Forwarding from 127.0.0.1:29007 -> 8080\n"
+    )
+    mock_create_connection.side_effect = KeyboardInterrupt()
+
+    with self.assertRaises(KeyboardInterrupt):
+      gke_utils.enable_port_forwarding("test-pod-123", 8080)
+
+    mock_process.terminate.assert_called_once()
+
+  def test_terminate_process_graceful_termination(self):
+    mock_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_proc.pid = 12345
+
+    gke_utils.terminate_process(mock_proc, timeout=5)
+
+    mock_proc.terminate.assert_called_once()
+    mock_proc.wait.assert_called_once_with(timeout=5)
+    mock_proc.kill.assert_not_called()
+
+  def test_terminate_process_timeout_falls_back_to_kill(self):
+    mock_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_proc.pid = 12345
+    mock_proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd="test", timeout=5),
+        0,
+    ]
+
+    gke_utils.terminate_process(mock_proc, timeout=5)
+
+    mock_proc.terminate.assert_called_once()
+    mock_proc.kill.assert_called_once()
+    self.assertEqual(mock_proc.wait.call_count, 2)
+    mock_proc.wait.assert_has_calls(
+        [mock.call(timeout=5), mock.call(timeout=5)]
+    )
+
+  def test_terminate_process_kill_timeout_does_not_raise(self):
+    mock_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_proc.pid = 12345
+    mock_proc.wait.side_effect = [
+        subprocess.TimeoutExpired(cmd="test", timeout=5),
+        subprocess.TimeoutExpired(cmd="test", timeout=5),
+    ]
+
+    gke_utils.terminate_process(mock_proc, timeout=5)
+
+    mock_proc.terminate.assert_called_once()
+    mock_proc.kill.assert_called_once()
+    self.assertEqual(mock_proc.wait.call_count, 2)
+
+  def test_terminate_process_handles_process_lookup_error(self):
+    mock_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_proc.pid = 12345
+    mock_proc.terminate.side_effect = ProcessLookupError()
+
+    gke_utils.terminate_process(mock_proc, timeout=5)
+
+    mock_proc.terminate.assert_called_once()
+    mock_proc.kill.assert_not_called()
+
+  def test_terminate_process_none_is_noop(self):
+    gke_utils.terminate_process(None)
+
+  def test_terminate_process_custom_timeout(self):
+    mock_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_proc.pid = 12345
+
+    gke_utils.terminate_process(mock_proc, timeout=10)
+
+    mock_proc.terminate.assert_called_once()
+    mock_proc.wait.assert_called_once_with(timeout=10)
+
+
 if __name__ == "__main__":
   absltest.main()
 

@@ -6,6 +6,7 @@ import re
 import socket
 import subprocess
 import time
+from typing import Any
 import urllib.parse
 
 from kubernetes import client
@@ -290,12 +291,12 @@ def _test_remote_connection(port: int) -> None:
     raise RuntimeError("Could not connect to the pod.") from exc
 
 
-def enable_port_forwarding(
+def start_port_forwarding(
     remote_server: str,
     server_port: int,
     namespace: str = "default",
 ) -> tuple[int, subprocess.Popen[str]]:
-  """Enables port forwarding for the given pod.
+  """Starts port forwarding for the given pod or service in the background.
 
   Args:
     remote_server: The name of the pod or service.
@@ -303,10 +304,10 @@ def enable_port_forwarding(
     namespace: The namespace of the pod.
 
   Returns:
-    A tuple containing the pod port and the port forwarding process.
+    A tuple containing the picked local port and the port forwarding process.
+
   Raises:
-    RuntimeError: If port forwarding fails to start or the pod connection
-      cannot be established.
+    RuntimeError: If finding a free port or starting port forwarding fails.
   """
   try:
     local_port = portpicker.pick_unused_port()
@@ -352,6 +353,23 @@ def enable_port_forwarding(
     _logger.exception("Error enabling port forwarding for the pod: %r", e)
     raise
 
+  return (local_port, port_forward_process)
+
+
+def wait_for_port_forwarding(
+    port_forward_process: subprocess.Popen[str],
+    local_port: int,
+) -> None:
+  """Blocks until the port forwarding process is ready and reachable.
+
+  Args:
+    port_forward_process: The running port forwarding subprocess.
+    local_port: The local port forwarded to.
+
+  Raises:
+    RuntimeError: If port forwarding fails to start or the pod connection
+      cannot be established.
+  """
   # Check that the port forwarding is ready.
   if port_forward_process.stdout is None:
     _logger.error("Port-forward process stdout is None. Terminating.")
@@ -362,7 +380,17 @@ def enable_port_forwarding(
         f"STDERR: {stderr}"
     )
 
-  ready_line = port_forward_process.stdout.readline()
+  try:
+    ready_line = port_forward_process.stdout.readline()
+  except BaseException:
+    _logger.warning(
+        "Terminating port forwarding process (PID %s) due to interrupt while"
+        " waiting for readiness.",
+        getattr(port_forward_process, "pid", "unknown"),
+    )
+    terminate_process(port_forward_process, process_name="Port forwarding")
+    raise
+
   if "Forwarding from" in ready_line:
     _logger.info("Port-forward is ready: %s", ready_line.strip())
   else:
@@ -379,11 +407,93 @@ def enable_port_forwarding(
 
   try:
     _test_remote_connection(local_port)
-  except Exception:
-    port_forward_process.terminate()
+  except BaseException:
+    _logger.warning(
+        "Terminating port forwarding process (PID %s) due to connection error"
+        " or interrupt.",
+        getattr(port_forward_process, "pid", "unknown"),
+    )
+    terminate_process(port_forward_process, process_name="Port forwarding")
     raise
 
+
+def enable_port_forwarding(
+    remote_server: str,
+    server_port: int,
+    namespace: str = "default",
+) -> tuple[int, subprocess.Popen[str]]:
+  """Enables port forwarding for the given pod.
+
+  Args:
+    remote_server: The name of the pod or service.
+    server_port: The port of the server to forward to.
+    namespace: The namespace of the pod.
+
+  Returns:
+    A tuple containing the pod port and the port forwarding process.
+
+  Raises:
+    RuntimeError: If port forwarding fails to start or the pod connection
+      cannot be established.
+  """
+  local_port, port_forward_process = start_port_forwarding(
+      remote_server, server_port, namespace
+  )
+  wait_for_port_forwarding(port_forward_process, local_port)
   return (local_port, port_forward_process)
+
+
+def terminate_process(
+    process: subprocess.Popen[Any] | None,
+    timeout: float = 5,
+    process_name: str = "process",
+) -> None:
+  """Terminates a process gracefully with SIGTERM, falling back to SIGKILL.
+
+  Args:
+    process: The process to terminate. If None, this function is a no-op.
+    timeout: The time in seconds to wait for the process to terminate before
+      killing it.
+    process_name: A human-understandable name for the process (e.g. "Port
+      forwarding").
+  """
+  if process is None:
+    return
+
+  pid = getattr(process, "pid", "unknown")
+  proc_label = (
+      f"{process_name} (PID {pid})"
+      if process_name.endswith("process")
+      else f"{process_name} process (PID {pid})"
+  )
+  try:
+    process.terminate()
+    try:
+      process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+      _logger.warning(
+          "%s did not terminate within %s seconds. Sending SIGKILL.",
+          proc_label,
+          timeout,
+      )
+      try:
+        process.kill()
+        process.wait(timeout=timeout)
+      except (ProcessLookupError, OSError):
+        return
+      except subprocess.TimeoutExpired:
+        _logger.exception(
+            "%s failed to terminate after SIGKILL within %s seconds.",
+            proc_label,
+            timeout,
+        )
+      except Exception as kill_err:  # pylint: disable=broad-exception-caught
+        _logger.exception("Failed to kill %s: %r", proc_label, kill_err)
+  except (ProcessLookupError, OSError):
+    # Process has already terminated.
+    return
+  except Exception as e:  # pylint: disable=broad-exception-caught
+    _logger.exception("Failed to terminate %s: %r", proc_label, e)
 
 
 def stream_pod_logs(pod_name: str) -> subprocess.Popen[str]:

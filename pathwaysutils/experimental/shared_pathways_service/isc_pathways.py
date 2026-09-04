@@ -1,5 +1,6 @@
 """Module for connecting to a Pathways server for interactive supercomputing."""
 
+import atexit
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 import contextlib
 import dataclasses
@@ -7,8 +8,10 @@ import gc
 import logging
 import os
 import random
+import signal
 import string
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -21,6 +24,10 @@ from pathwaysutils.experimental.shared_pathways_service import gke_utils
 from pathwaysutils.experimental.shared_pathways_service import metrics_collector
 from pathwaysutils.experimental.shared_pathways_service import validators
 
+
+_CLEANUP_SIGNALS = [signal.SIGTERM, signal.SIGINT]
+if hasattr(signal, "SIGHUP"):  # SIGHUP is not available on Windows.
+  _CLEANUP_SIGNALS.append(signal.SIGHUP)
 
 PROXY_FILEPATH = os.path.join(
     os.path.dirname(__file__), "yamls/pw-proxy.yaml"
@@ -173,56 +180,54 @@ def _deploy_pathways_proxy_server(
 
 
 def _wait_for_placement(
-    pod_name: str,
+    log_process: subprocess.Popen[str],
     num_slices: int,
-    stream_logs_func=gke_utils.stream_pod_logs,
     metrics_collector_inst: Any = None,
     start_time: float | None = None,
     total_chips: int = 0,
 ) -> None:
   """Waits for the placement to be complete by checking proxy logs."""
   _logger.info("Streaming proxy logs until the placement is complete...")
-  with stream_logs_func(pod_name) as log_process:
-    keywords = [
-        "placement",
-        "Signaling to RM",
-        "Transition slice",
-        "FAILED_PRECONDITION",
-    ]
-    end_phrase = "unplaced -> placed"
-    placement_count = 0
+  keywords = [
+      "placement",
+      "Signaling to RM",
+      "Transition slice",
+      "FAILED_PRECONDITION",
+  ]
+  end_phrase = "unplaced -> placed"
+  placement_count = 0
 
-    if not log_process.stdout:
-      _logger.error("Log streaming process stdout is empty. Terminating.")
-      log_process.terminate()
-      _, stderr = log_process.communicate()
-      raise RuntimeError(
-          "Failed to stream proxy logs: stdout not available.\n"
-          f"STDERR: {stderr}"
-      )
+  if not log_process.stdout:
+    _logger.error("Log streaming process stdout is empty. Terminating.")
+    log_process.terminate()
+    _, stderr = log_process.communicate()
+    raise RuntimeError(
+        "Failed to stream proxy logs: stdout not available.\n"
+        f"STDERR: {stderr}"
+    )
 
-    for line in log_process.stdout:
-      line_lower = line.lower()
-      if any(keyword.lower() in line_lower for keyword in keywords):
-        _logger.info("Proxy log: %s", line.strip())
+  for line in log_process.stdout:
+    line_lower = line.lower()
+    if any(keyword.lower() in line_lower for keyword in keywords):
+      _logger.info("Proxy log: %s", line.strip())
 
-      if end_phrase.lower() in line_lower:
-        placement_count += 1
-        if placement_count < num_slices:
-          _logger.info(
-              "TPU slice %d/%d placed!",
-              placement_count,
-              num_slices,
-          )
-        else:
-          _logger.info("TPU placement for %d slice(s) complete!", num_slices)
-          metrics_collector_inst.record_active_user(True)
-          metrics_collector_inst.record_capacity_in_use(total_chips)
-          if start_time:
-            duration = time.time() - start_time
-            metrics_collector_inst.record_assignment_time(duration)
-            metrics_collector_inst.record_successful_request()
-          break
+    if end_phrase.lower() in line_lower:
+      placement_count += 1
+      if placement_count < num_slices:
+        _logger.info(
+            "TPU slice %d/%d placed!",
+            placement_count,
+            num_slices,
+        )
+      else:
+        _logger.info("TPU placement for %d slice(s) complete!", num_slices)
+        metrics_collector_inst.record_active_user(True)
+        metrics_collector_inst.record_capacity_in_use(total_chips)
+        if start_time:
+          duration = time.time() - start_time
+          metrics_collector_inst.record_assignment_time(duration)
+          metrics_collector_inst.record_successful_request()
+        break
 
 
 def _restore_env_var(key: str, original_value: str | None) -> None:
@@ -281,6 +286,7 @@ class _ISCPathways:
     self._proxy_job_name = proxy_job_name
     self.proxy_pod_name: str = ""
     self._port_forward_process = None
+    self._log_process = None
     self._proxy_port = None
     self.proxy_server_image = proxy_server_image
     self.proxy_options = proxy_options or ProxyOptions()
@@ -300,6 +306,51 @@ class _ISCPathways:
     self._old_jax_platforms_config = None
     self._old_jax_backend_target_config = None
     self.total_chips = self._get_total_chips()
+    self._cleaned_up = False
+    self._cleanup_lock = threading.Lock()
+    self._original_signal_handlers: dict[signal.Signals, Any] = {}
+
+  def _register_signal_handlers(self) -> None:
+    """Registers signal handlers to ensure cleanup on termination."""
+    if threading.current_thread() is not threading.main_thread():
+      # Python only allows signal handlers to be registered in the main thread.
+      return
+
+    def _handle_signal(signum, frame):
+      del frame
+      _logger.warning(
+          "Received signal %d. Triggering Pathways proxy cleanup...", signum
+      )
+      self._cleanup()
+      if signum == signal.SIGINT:
+        raise KeyboardInterrupt()
+      sys.exit(128 + signum)
+
+    for sig in _CLEANUP_SIGNALS:
+      try:
+        self._original_signal_handlers[sig] = signal.signal(sig, _handle_signal)
+      except (ValueError, OSError) as e:
+        _logger.debug("Could not register handler for signal %s: %s", sig, e)
+
+  def _restore_signal_handlers(self) -> None:
+    """Restores original signal handlers.
+
+    Signal handlers are global process state. If the handlers aren't restored,
+    the new behavior (triggering Pathways cleanup and exiting) persists for the
+    remainder of the process's life, even after the _ISCPathways context has
+    finished.
+    """
+    if threading.current_thread() is not threading.main_thread():
+      # Only restore signal handlers in the main thread because this is the
+      # thread that registered them.
+      return
+
+    for sig, original_handler in self._original_signal_handlers.items():
+      try:
+        signal.signal(sig, original_handler)
+      except (ValueError, OSError) as e:
+        _logger.debug("Could not restore handler for signal %s: %s", sig, e)
+    self._original_signal_handlers.clear()
 
   def __repr__(self):
     return (
@@ -326,6 +377,9 @@ class _ISCPathways:
 
   def __enter__(self):
     """Enters the context manager, ensuring cluster exists."""
+    atexit.register(self._cleanup)
+    self._register_signal_handlers()
+
     self.metrics_collector.record_requested_capacity(self.total_chips)
 
     self._old_jax_platforms = os.environ.get(_JAX_PLATFORMS_KEY.upper())
@@ -358,10 +412,15 @@ class _ISCPathways:
       _logger.info("View proxy logs in Cloud Logging: %s", cloud_logging_link)
 
       self.proxy_pod_name = gke_utils.wait_for_pod(self._proxy_job_name)
+
       self._proxy_port, self._port_forward_process = (
-          gke_utils.enable_port_forwarding(
-              f"pod/{self.proxy_pod_name}", PROXY_SERVER_PORT
+          gke_utils.start_port_forwarding(
+              f"pod/{self.proxy_pod_name}",
+              PROXY_SERVER_PORT,
           )
+      )
+      gke_utils.wait_for_port_forwarding(
+          self._port_forward_process, self._proxy_port
       )
 
       # Update the JAX backend to use the proxy.
@@ -380,7 +439,7 @@ class _ISCPathways:
           self.cluster,
       )
       return self
-    except Exception as e:
+    except BaseException as e:
       _logger.exception("Error setting up Pathways proxy: %r", e)
       # If any part of setup fails after deployment, cleanup.
       self._cleanup()
@@ -393,42 +452,71 @@ class _ISCPathways:
 
   def _cleanup(self) -> None:
     """Cleans up resources created by the ISCPathways context."""
-    # Clear JAX caches and run garbage collection.
-    _logger.info("Starting Pathways proxy cleanup.")
-    jax_backend.clear_backends()
-    jax.clear_caches()
-    gc.collect()
-    _logger.info("Cleared JAX caches and ran garbage collection.")
+    with self._cleanup_lock:
+      # Ensure that cleanup logic only runs once, even if triggered by
+      # multiple events (like a signal and a normal context exit).
+      if self._cleaned_up:
+        return
+      self._cleaned_up = True
 
-    # Terminate the port forwarding process.
-    if self._port_forward_process:
-      _logger.info("Terminating port forwarding process...")
-      self._port_forward_process.terminate()
-      try:
-        self._port_forward_process.wait(timeout=10)
-      except subprocess.TimeoutExpired as e:
-        _logger.exception(
-            "Failed to terminate port forwarding process. Not treating as an "
-            "error: %r",
-            e,
+      atexit.unregister(self._cleanup)
+      self._restore_signal_handlers()
+
+      # Clear JAX caches and run garbage collection.
+      _logger.info("Starting Pathways proxy cleanup.")
+      jax_backend.clear_backends()
+      jax.clear_caches()
+      gc.collect()
+      _logger.info("Cleared JAX caches and ran garbage collection.")
+
+      # Terminate the port forwarding process.
+      if self._port_forward_process:
+        _logger.info(
+            "Terminating port forwarding process (PID %s)...",
+            getattr(self._port_forward_process, "pid", "unknown"),
         )
+        try:
+          gke_utils.terminate_process(
+              self._port_forward_process, process_name="Port forwarding"
+          )
+        finally:
+          self._port_forward_process = None
 
-    # Delete the proxy GKE job.
-    _logger.info("Deleting Pathways proxy...")
-    gke_utils.delete_gke_resource("job", self._proxy_job_name)
-    _logger.info("Pathways proxy GKE job deletion complete.")
+      # Terminate the log streaming process.
+      if self._log_process:
+        _logger.info(
+            "Terminating log streaming process (PID %s)...",
+            getattr(self._log_process, "pid", "unknown"),
+        )
+        try:
+          gke_utils.terminate_process(
+              self._log_process, process_name="Log streaming"
+          )
+        finally:
+          self._log_process = None
 
-    # Restore JAX variables.
-    _logger.info("Restoring JAX env and config variables...")
-    _restore_env_var(_JAX_PLATFORMS_KEY.upper(), self._old_jax_platforms)
-    _restore_env_var(
-        _JAX_BACKEND_TARGET_KEY.upper(), self._old_jax_backend_target
-    )
-    jax.config.update(_JAX_PLATFORMS_KEY, self._old_jax_platforms_config)
-    jax.config.update(
-        _JAX_BACKEND_TARGET_KEY, self._old_jax_backend_target_config
-    )
-    _logger.info("JAX variables restored.")
+      # Delete the proxy GKE job.
+      if self._proxy_job_name:
+        _logger.info("Deleting Pathways proxy...")
+        try:
+          gke_utils.delete_gke_resource("job", self._proxy_job_name)
+          _logger.info("Pathways proxy GKE job deletion complete.")
+        except Exception as e:  # pylint: disable=broad-exception-caught
+          _logger.exception(
+              "Failed to delete Pathways proxy GKE job: %r", e
+          )
+
+      # Restore JAX variables.
+      _logger.info("Restoring JAX env and config variables...")
+      _restore_env_var(_JAX_PLATFORMS_KEY.upper(), self._old_jax_platforms)
+      _restore_env_var(
+          _JAX_BACKEND_TARGET_KEY.upper(), self._old_jax_backend_target
+      )
+      jax.config.update(_JAX_PLATFORMS_KEY, self._old_jax_platforms_config)
+      jax.config.update(
+          _JAX_BACKEND_TARGET_KEY, self._old_jax_backend_target_config
+      )
+      _logger.info("JAX variables restored.")
 
 
 def _get_username() -> str:
@@ -546,12 +634,12 @@ def connect(
   ) as t:
     if t.proxy_pod_name:
       num_slices = sum(t.expected_tpu_instances.values())
+      t._log_process = gke_utils.stream_pod_logs(t.proxy_pod_name)
       placement_thread = threading.Thread(
           target=_wait_for_placement,
           args=(
-              t.proxy_pod_name,
+              t._log_process,
               num_slices,
-              gke_utils.stream_pod_logs,
               t.metrics_collector,
               t.start_time,
               t.total_chips,

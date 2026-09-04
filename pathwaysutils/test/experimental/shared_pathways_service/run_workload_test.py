@@ -43,9 +43,11 @@ class RunTpuWorkloadTest(absltest.TestCase):
       with fake as f:
         yield f
 
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
     )
+    mock_proc = mock_popen.return_value
+    mock_proc.wait.return_value = 0
 
     run_workload.run_command(
         cluster="test-cluster",
@@ -71,9 +73,10 @@ class RunTpuWorkloadTest(absltest.TestCase):
       self.assertTrue(fake.exited)
 
     with self.subTest("Command executed"):
-      mock_run.assert_called_once_with(
-          ["echo", "hello"], check=True, env=mock.ANY
+      mock_popen.assert_called_once_with(
+          ["echo", "hello"], env=mock.ANY
       )
+      mock_proc.wait.assert_called_once()
 
   def test_run_command_runs_command_inside_context(self):
     """Verifies that the command is executed while the connection is active."""
@@ -84,14 +87,16 @@ class RunTpuWorkloadTest(absltest.TestCase):
       del kwargs
       yield None
 
-    def mock_run_side_effect(*args: Any, **kwargs: Any) -> None:
+    def mock_wait_side_effect(*args: Any, **kwargs: Any) -> int:
       nonlocal connection_active_during_run
       connection_active_during_run = True
+      return 0
 
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
     )
-    mock_run.side_effect = mock_run_side_effect
+    mock_proc = mock_popen.return_value
+    mock_proc.wait.side_effect = mock_wait_side_effect
 
     run_workload.run_command(
         cluster="test-cluster",
@@ -114,10 +119,11 @@ class RunTpuWorkloadTest(absltest.TestCase):
       del kwargs
       yield None
 
-    mock_run = self.enter_context(
-        mock.patch.object(subprocess, "run", autospec=True)
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
     )
-    mock_run.side_effect = subprocess.CalledProcessError(1, "false")
+    mock_proc = mock_popen.return_value
+    mock_proc.wait.return_value = 1
 
     with self.assertRaises(subprocess.CalledProcessError):
       run_workload.run_command(
@@ -131,6 +137,34 @@ class RunTpuWorkloadTest(absltest.TestCase):
           command="false",
           connect_fn=fake_connect_fn,
       )
+
+  def test_run_command_interrupted_terminates_subprocess(self):
+
+    @contextlib.contextmanager
+    def fake_connect_fn(**kwargs: Any) -> Generator[None, None, None]:
+      del kwargs
+      yield None
+
+    mock_popen = self.enter_context(
+        mock.patch.object(subprocess, "Popen", autospec=True)
+    )
+    mock_proc = mock_popen.return_value
+    mock_proc.wait.side_effect = KeyboardInterrupt()
+
+    with self.assertRaises(KeyboardInterrupt):
+      run_workload.run_command(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service:1234",
+          tpu_type="tpuv6e:4x8",
+          tpu_count=1,
+          command="sleep 100",
+          connect_fn=fake_connect_fn,
+      )
+
+    mock_proc.terminate.assert_called_once()
 
   @flagsaver.flagsaver(
       cluster="test-cluster",

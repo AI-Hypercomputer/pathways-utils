@@ -2,6 +2,7 @@
 """
 import io
 import os
+import signal
 import subprocess
 from unittest import mock
 
@@ -15,6 +16,14 @@ from pathwaysutils.experimental.shared_pathways_service import isc_pathways
 class ISCPathwaysTest(parameterized.TestCase):
   """Tests for the ISCPathways class."""
 
+  def setUp(self):
+    super().setUp()
+    self.mock_stream_pod_logs = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "stream_pod_logs", autospec=True
+        )
+    )
+
   def test_wait_for_placement_success(self):
     """Tests that _wait_for_placement correctly processes logs."""
     mock_process = mock.create_autospec(subprocess.Popen, instance=True)
@@ -22,53 +31,42 @@ class ISCPathwaysTest(parameterized.TestCase):
         "Some log\nPlacement info\nTransition slice\nSignaling to RM\nunplaced"
         " -> placed\n"
     )
-
-    mock_stream_func = mock.MagicMock()
-    mock_stream_func.return_value.__enter__.return_value = mock_process
+    mock_metrics_collector = mock.Mock()
 
     isc_pathways._wait_for_placement(
-        "test-pod",
+        mock_process,
         num_slices=1,
-        stream_logs_func=mock_stream_func,
-        metrics_collector_inst=mock.Mock(),
+        metrics_collector_inst=mock_metrics_collector,
     )
 
-    mock_stream_func.assert_called_once_with("test-pod")
+    mock_metrics_collector.record_active_user.assert_called_once_with(True)
 
-  def test_wait_for_placement_timeout(self):
-    """Tests that _wait_for_placement kills the process on timeout."""
+  def test_wait_for_placement_empty_stdout_raises(self):
+    """Tests that _wait_for_placement terminates and raises if stdout is None."""
     mock_process = mock.create_autospec(subprocess.Popen, instance=True)
-    mock_process.stdout = io.StringIO("unplaced -> placed\n")
-    mock_process.wait.side_effect = subprocess.TimeoutExpired(
-        cmd="wait", timeout=5
-    )
+    mock_process.stdout = None
+    mock_process.communicate.return_value = ("", "error details")
 
-    mock_stream_func = mock.MagicMock()
-    mock_stream_func.return_value.__enter__.return_value = mock_process
-
-    isc_pathways._wait_for_placement(
-        "test-pod",
-        num_slices=1,
-        stream_logs_func=mock_stream_func,
-        metrics_collector_inst=mock.Mock(),
-    )
+    with self.assertRaises(RuntimeError):
+      isc_pathways._wait_for_placement(
+          mock_process,
+          num_slices=1,
+          metrics_collector_inst=mock.Mock(),
+      )
+    mock_process.terminate.assert_called_once()
 
   def test_wait_for_placement_reports_metrics(self):
     """Tests that _wait_for_placement reports metrics on success."""
     mock_process = mock.create_autospec(subprocess.Popen, instance=True)
     mock_process.stdout = io.StringIO("Some log\nunplaced -> placed\n")
 
-    mock_stream_func = mock.MagicMock()
-    mock_stream_func.return_value.__enter__.return_value = mock_process
-
     mock_metrics_collector = mock.Mock()
     start_time = 100.0
 
     with mock.patch("time.time", return_value=150.0):
       isc_pathways._wait_for_placement(
-          "test-pod",
+          mock_process,
           num_slices=1,
-          stream_logs_func=mock_stream_func,
           metrics_collector_inst=mock_metrics_collector,
           start_time=start_time,
       )
@@ -664,13 +662,17 @@ class ISCPathwaysTest(parameterized.TestCase):
       )
       self.assertIs(tm, mock_manager_instance)
 
-      # Verify thread start
+      # Verify log process captured and thread start
+      self.mock_stream_pod_logs.assert_called_once_with("test-pod-123")
+      self.assertIs(
+          mock_manager_instance._log_process,
+          self.mock_stream_pod_logs.return_value,
+      )
       mock_thread.assert_called_once_with(
           target=isc_pathways._wait_for_placement,
           args=(
-              "test-pod-123",
+              self.mock_stream_pod_logs.return_value,
               1,
-              isc_pathways.gke_utils.stream_pod_logs,
               mock_manager_instance.metrics_collector,
               mock_manager_instance.start_time,
               mock_manager_instance.total_chips,
@@ -984,6 +986,206 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_isc_pathways.assert_called_once()
     _, kwargs = mock_isc_pathways.call_args
     self.assertEqual(kwargs["proxy_job_name"], "custom-proxy-job")
+
+  def test_cleanup_idempotent(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    mock_delete = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+    manager._cleanup()
+    mock_delete.assert_called_once_with("job", "test-proxy")
+    # Second cleanup should be a no-op
+    manager._cleanup()
+    mock_delete.assert_called_once_with("job", "test-proxy")
+
+  def test_enter_base_exception_triggers_cleanup(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways,
+            "_deploy_pathways_proxy_server",
+            side_effect=KeyboardInterrupt(),
+        )
+    )
+    mock_cleanup = self.enter_context(
+        mock.patch.object(manager, "_cleanup", wraps=manager._cleanup)
+    )
+
+    with self.assertRaises(KeyboardInterrupt):
+      manager.__enter__()
+
+    mock_cleanup.assert_called_once()
+
+  def test_signal_handler_triggers_cleanup_and_exits(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    mock_cleanup = self.enter_context(
+        mock.patch.object(manager, "_cleanup", autospec=True)
+    )
+
+    manager._register_signal_handlers()
+    try:
+      self.assertIn(signal.SIGTERM, manager._original_signal_handlers)
+      sigterm_handler = signal.getsignal(signal.SIGTERM)
+      self.assertTrue(callable(sigterm_handler))
+      assert callable(sigterm_handler)
+      with mock.patch("sys.exit") as mock_exit:
+        sigterm_handler(signal.SIGTERM, None)
+        mock_cleanup.assert_called_once()
+        mock_exit.assert_called_once_with(128 + signal.SIGTERM)
+    finally:
+      manager._restore_signal_handlers()
+
+  def test_signal_handler_sigint_raises_keyboard_interrupt(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    mock_cleanup = self.enter_context(
+        mock.patch.object(manager, "_cleanup", autospec=True)
+    )
+
+    manager._register_signal_handlers()
+    try:
+      self.assertIn(signal.SIGINT, manager._original_signal_handlers)
+      sigint_handler = signal.getsignal(signal.SIGINT)
+      self.assertTrue(callable(sigint_handler))
+      assert callable(sigint_handler)
+      with self.assertRaises(KeyboardInterrupt):
+        sigint_handler(signal.SIGINT, None)
+      mock_cleanup.assert_called_once()
+    finally:
+      manager._restore_signal_handlers()
+
+  def test_enter_port_forward_interrupted_triggers_cleanup(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways,
+            "_deploy_pathways_proxy_server",
+            autospec=True,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "wait_for_pod",
+            return_value="test-pod-123",
+            autospec=True,
+        )
+    )
+    mock_pf_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "start_port_forwarding",
+            return_value=(29007, mock_pf_proc),
+            autospec=True,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "wait_for_port_forwarding",
+            side_effect=KeyboardInterrupt(),
+            autospec=True,
+        )
+    )
+    mock_delete = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+    mock_terminate = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "terminate_process", autospec=True
+        )
+    )
+    with self.assertRaises(KeyboardInterrupt):
+      manager.__enter__()
+    mock_delete.assert_called_once_with("job", "test-proxy")
+    mock_terminate.assert_called_once_with(
+        mock_pf_proc, process_name="Port forwarding"
+    )
+
+  def test_cleanup_terminates_port_forward_and_log_processes(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    mock_pf_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_log_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    manager._port_forward_process = mock_pf_proc
+    manager._log_process = mock_log_proc
+
+    mock_terminate = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "terminate_process", autospec=True
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+
+    manager._cleanup()
+
+    mock_terminate.assert_has_calls([
+        mock.call(mock_pf_proc, process_name="Port forwarding"),
+        mock.call(mock_log_proc, process_name="Log streaming"),
+    ])
+    self.assertIsNone(manager._port_forward_process)
+    self.assertIsNone(manager._log_process)
 
   def test_connect_auto_detect_proxy_image_success(self):
     """Tests that connect auto-detects compatible proxy image when not provided."""
