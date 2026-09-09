@@ -14,10 +14,11 @@
 
 import json
 import logging
-from typing import Any
 import os
-from unittest import mock
+import threading
+from typing import Any
 import unittest
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -415,10 +416,39 @@ class ProfilingTest(parameterized.TestCase):
     )
     profiling.start_server(9000)
     mock_thread.assert_called_once_with(
-        target=mock.ANY, args=(9000, "0.0.0.0", None)
+        target=mock.ANY, args=(9000, "0.0.0.0", None), daemon=mock.ANY
     )
     mock_thread.return_value.start.assert_called_once()
     self.assertIsNotNone(profiling._profiler_thread)
+
+  def test_start_server_thread_not_joined_on_shutdown(self):
+    server_started = threading.Event()
+    stop_event = threading.Event()
+
+    def fake_run(*args, **kwargs):
+      server_started.set()
+      stop_event.wait()
+
+    self.enter_context(
+        mock.patch.object(profiling.uvicorn, "run", side_effect=fake_run)
+    )
+    profiling.start_server(9000)
+    self.assertTrue(
+        server_started.wait(timeout=5),
+        "Profiler server thread failed to start within timeout.",
+    )
+
+    self.assertIsNotNone(profiling._profiler_thread)
+    assert profiling._profiler_thread is not None
+    self.assertTrue(profiling._profiler_thread.is_alive())
+
+    mock_join = self.enter_context(
+        mock.patch.object(profiling._profiler_thread, "join")
+    )
+    threading._shutdown()  # pyrefly: ignore[missing-attribute]
+
+    mock_join.assert_not_called()
+    stop_event.set()
 
   @parameterized.named_parameters(
       dict(testcase_name="unset", env_host=None, expected_host="0.0.0.0"),
@@ -461,7 +491,7 @@ class ProfilingTest(parameterized.TestCase):
       profiling.start_server(9000)
 
     mock_thread.assert_called_once_with(
-        target=mock.ANY, args=(9000, expected_host, None)
+        target=mock.ANY, args=(9000, expected_host, None), daemon=mock.ANY
     )
 
   def test_start_server_twice_raises_error(self):

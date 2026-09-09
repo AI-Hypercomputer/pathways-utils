@@ -449,6 +449,7 @@ def start_server(port: int, requires_backend: bool = True) -> None:
   _profiler_thread = threading.Thread(
       target=server_loop,
       args=(port, host, token_to_verify),
+      daemon=True,
   )
   _profiler_thread.start()
 
