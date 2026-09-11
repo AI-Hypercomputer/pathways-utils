@@ -13,10 +13,13 @@
 # limitations under the License.
 
 import os
+import time
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+import pathwaysutils
 from pathwaysutils import _initialize
 
 
@@ -98,6 +101,63 @@ class InitializeTest(parameterized.TestCase):
 
     del os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
     self.assertFalse(_initialize._is_persistence_enabled())
+
+  def test_wait_for_devices_ready_default(self):
+    # Should execute without errors on default devices.
+    pathwaysutils.wait_for_devices_ready()
+
+  def test_wait_for_devices_ready_explicit_devices(self):
+    devices = jax.devices()[:1]
+    pathwaysutils.wait_for_devices_ready(devices)
+
+  def test_wait_for_devices_ready_empty(self):
+    pathwaysutils.wait_for_devices_ready([])
+
+  def test_wait_for_devices_ready_calls_jit_and_block_until_ready(self):
+    mock_dev1 = mock.create_autospec(jax.Device, instance=True)
+    mock_dev2 = mock.create_autospec(jax.Device, instance=True)
+    mock_devices = [mock_dev1, mock_dev2]
+
+    mock_jit_fn = mock.MagicMock(return_value="result")
+    mock_jit = self.enter_context(
+        mock.patch.object(jax, "jit", return_value=mock_jit_fn)
+    )
+    mock_block = self.enter_context(mock.patch.object(jax, "block_until_ready"))
+
+    pathwaysutils.wait_for_devices_ready(mock_devices)
+
+    self.assertEqual(mock_jit.call_count, 2)
+    mock_jit.assert_any_call(mock.ANY, device=mock_dev1)
+    mock_jit.assert_any_call(mock.ANY, device=mock_dev2)
+    self.assertIs(
+        mock_jit.call_args_list[0][0][0], mock_jit.call_args_list[1][0][0]
+    )
+    mock_block.assert_called_once_with(["result", "result"])
+
+  def test_wait_for_devices_ready_logs(self):
+    with self.assertLogs(_initialize._logger, level="INFO") as logs:
+      pathwaysutils.wait_for_devices_ready(jax.devices()[:1], timeout=10)
+    self.assertLen(logs.output, 2)
+    self.assertIn(
+        "Waiting for 1 devices to be ready (timeout=10).", logs.output[0]
+    )
+    self.assertIn("All 1 devices are ready.", logs.output[1])
+
+  def test_wait_for_devices_ready_with_timeout_success(self):
+    pathwaysutils.wait_for_devices_ready(timeout=60)
+
+  def test_wait_for_devices_ready_with_timeout_exceeded(self):
+    def slow_block_until_ready(results):
+      time.sleep(1)
+      return results
+
+    self.enter_context(
+        mock.patch.object(
+            jax, "block_until_ready", side_effect=slow_block_until_ready
+        )
+    )
+    with self.assertRaises(TimeoutError):
+      pathwaysutils.wait_for_devices_ready(timeout=0.01)
 
 
 if __name__ == "__main__":

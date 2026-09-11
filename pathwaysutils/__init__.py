@@ -17,6 +17,7 @@ from pathwaysutils import _initialize
 
 initialize: Callable[[], None] = _initialize.initialize
 is_pathways_backend_used: Callable[[], bool] = _initialize.is_pathways_backend_used
+wait_for_devices_ready = _initialize.wait_for_devices_ready
 
 del _initialize
 
