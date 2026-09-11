@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Sequence
 import dataclasses
+import datetime
 import logging
 import math
 from typing import Any
@@ -10,6 +11,7 @@ from absl import flags
 from kubernetes import client
 from kubernetes import config
 from pathwaysutils.experimental.gke import jobset
+from pathwaysutils.experimental.shared_pathways_service import gke_utils
 import yaml
 
 _logger = logging.getLogger(__name__)
@@ -195,18 +197,24 @@ def run_deployment(
       if container.name == "pathways-rm":
         container.image = server_image
     # Mutate worker job.
-    for container in pw_jobset.worker_job_template.spec.template.spec.containers:
+    for (
+        container
+    ) in pw_jobset.worker_job_template.spec.template.spec.containers:
       if container.name == "pathways-worker":
         container.image = server_image
 
   # Add colocated python sidecar.
-  pw_jobset.add_colocated_python(image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR)
+  pw_jobset.add_colocated_python(
+      image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR
+  )
 
   # Mutate the sidecar configuration to match what HEAD expects.
   worker_spec = pw_jobset.worker_job_template.spec.template.spec
 
   # 1. Add extra logging env vars to sidecar.
-  for container in ((worker_spec.containers or []) + (worker_spec.init_containers or [])):
+  for container in (worker_spec.containers or []) + (
+      worker_spec.init_containers or []
+  ):
     if container.name == "colocated-python-sidecar":
       container.env.extend([
           client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
@@ -216,15 +224,24 @@ def run_deployment(
           client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
           client.V1EnvVar(name="TF_CPP_MIN_VLOG_LEVEL", value="5"),
           client.V1EnvVar(name="TPU_MIN_LOG_LEVEL", value="0"),
-          client.V1EnvVar(name="GLOG_vmodule", value="jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"),
+          client.V1EnvVar(
+              name="GLOG_vmodule",
+              value=(
+                  "jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"
+              ),
+          ),
       ])
 
   # 2. Add arg to pathways-worker container (in addition to env var set by builder).
   for container in worker_spec.containers:
     if container.name == "pathways-worker":
       args = container.args or []
-      if not any(a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args):
-        args.append(f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}")
+      if not any(
+          a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args
+      ):
+        args.append(
+            f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}"
+        )
       container.args = args
 
   jobset_config = pw_jobset.to_dict()
@@ -234,6 +251,31 @@ def run_deployment(
 
   if not dry_run:
     _logger.info("Deploying JobSet...")
+    cluster, project = gke_utils.get_current_cluster_and_project()
+    if not cluster or not project:
+      raise ValueError(
+          "Cluster or project could not be determined from kubeconfig. Run"
+          " 'gcloud container clusters get-credentials ... && kubectl config"
+          " set-context --current --namespace=default' OR 'kubectl config"
+          " set-context --current --user=... --cluster=...'"
+          " first."
+      )
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start_time = now.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    end_time = (now + datetime.timedelta(minutes=10)).isoformat(
+        timespec="milliseconds"
+    ).replace("+00:00", "Z")
+    cloud_logging_link = gke_utils.get_log_link(
+        cluster=cluster,
+        project=project,
+        job_name=jobset_name,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    _logger.info(
+        "View SPS deployment logs in Cloud Logging: %s", cloud_logging_link
+    )
+
     deploy_func(jobset_config)
   else:
     _logger.info("Dry run mode, not deploying.")

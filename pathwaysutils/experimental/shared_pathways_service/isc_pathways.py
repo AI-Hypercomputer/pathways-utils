@@ -534,6 +534,43 @@ def _get_username() -> str:
   return username or "user"
 
 
+def _is_current_kube_context(
+    *, cluster: str, project: str, location: str
+) -> bool:
+  """Checks whether the active kube config context points at the cluster.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    location: The GCP region or zone of the cluster.
+
+  Returns:
+    True if the current kube config context already targets the given cluster.
+  """
+  return gke_utils.get_current_kube_context() == (cluster, project, location)
+
+
+def _ensure_cluster_credentials(
+    *, cluster: str, project: str, location: str
+) -> None:
+  """Fetches the GKE cluster credentials unless kube config already has them."""
+  if _is_current_kube_context(
+      cluster=cluster, project=project, location=location
+  ):
+    _logger.info(
+        "The current kube config context already points to cluster '%s' in"
+        " project '%s' and location '%s'. Skipping credential fetch.",
+        cluster,
+        project,
+        location,
+    )
+    return
+
+  gke_utils.fetch_cluster_credentials(
+      cluster_name=cluster, project_id=project, location=location
+  )
+
+
 @contextlib.contextmanager
 def connect(
     *,
@@ -584,8 +621,8 @@ def connect(
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
   validators.validate_proxy_options(proxy_options)
-  gke_utils.fetch_cluster_credentials(
-      cluster_name=cluster, project_id=project, location=region
+  _ensure_cluster_credentials(
+      cluster=cluster, project=project, location=region
   )
 
   server_image, sidecar_image = gke_utils.get_pathways_service_images(
