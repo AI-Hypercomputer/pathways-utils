@@ -1,7 +1,9 @@
 """GKE utils for deploying and managing the Pathways proxy."""
 
+import datetime
 import functools
 import logging
+import os
 import re
 import socket
 import subprocess
@@ -239,21 +241,125 @@ def check_pod_ready(pod_name: str, timeout: int = 30) -> str:
   return pod_name
 
 
-def get_log_link(*, cluster: str, project: str, job_name: str) -> str:
-  """Returns a link to Cloud Logging for the given cluster and job name."""
+def _format_log_timestamp(timestamp: str | datetime.datetime) -> str:
+  """Formats a timestamp for use in a Cloud Logging query URL.
+
+  Args:
+    timestamp: An ISO-8601 string or a datetime. Naive datetimes are assumed to
+      be UTC.
+
+  Returns:
+    The timestamp as an ISO-8601 string, or the unmodified string input.
+  """
+  if not isinstance(timestamp, datetime.datetime):
+    return str(timestamp)
+
+  if timestamp.tzinfo is None:
+    timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+  timestamp = timestamp.astimezone(datetime.timezone.utc)
+  return timestamp.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def get_log_link(
+    *,
+    cluster: str,
+    project: str,
+    job_name: str,
+    namespace: str = "default",
+    start_time: str | datetime.datetime | None = None,
+    end_time: str | datetime.datetime | None = None,
+    duration: str | None = "PT1H",
+) -> str:
+  """Returns a link to Cloud Logging for the given cluster and job name.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    job_name: The name of the job or jobset.
+    namespace: The Kubernetes namespace. Defaults to "default".
+    start_time: The start time for the time window (ISO-8601 string or
+      datetime).
+    end_time: The end time for the time window (ISO-8601 string or datetime).
+    duration: The duration string (e.g. "PT1H") used when start_time and
+      end_time are not provided.
+
+  Returns:
+    The Cloud Logging query URL.
+  """
   log_filter = (
       'resource.type="k8s_container"\n'
       f'resource.labels.cluster_name="{cluster}"\n'
-      'resource.labels.namespace_name="default"\n'
+      f'resource.labels.namespace_name="{namespace}"\n'
       f'labels.k8s-pod/job-name:"{job_name}"'
   )
   encoded_filter = urllib.parse.quote(log_filter, safe="")
 
+  if start_time is not None and end_time is not None:
+    start_time_str = _format_log_timestamp(start_time)
+    end_time_str = _format_log_timestamp(end_time)
+    time_param = f"startTime={start_time_str};endTime={end_time_str}"
+  elif duration is not None:
+    time_param = f"duration={duration}"
+  else:
+    time_param = ""
+
+  time_part = f";{time_param}" if time_param else ""
   return (
       "https://console.cloud.google.com/logs/query;"
-      f"query={encoded_filter};duration=PT1H"
+      f"query={encoded_filter}{time_part}"
       f"?project={project}"
   )
+
+
+def get_current_kube_context() -> tuple[str | None, str | None, str | None]:
+  """Reads the cluster targeted by the active kube config context.
+
+  Only the kube config is consulted; no environment variable fallbacks are
+  applied. Contexts written by `gcloud container clusters get-credentials` are
+  named `gke_<project>_<location>_<cluster>`.
+
+  Returns:
+    A (cluster, project, location) tuple. All three are populated for a GKE
+    context. For any other context, only the context name is returned as the
+    cluster and the project and location are None. All three are None if the
+    active context cannot be read or is a malformed GKE context.
+  """
+  try:
+    _, active_context = k8s_config.list_kube_config_contexts()
+  except Exception as e:  # pylint: disable=broad-except
+    _logger.debug("Could not read the current kube config context: %s", e)
+    return None, None, None
+
+  if not active_context:
+    return None, None, None
+
+  context_data = active_context.get("context", {})
+  cluster_context = (
+      context_data.get("cluster") or active_context.get("name", "")
+  )
+
+  if cluster_context.startswith("gke_"):
+    parts = cluster_context.split("_", 3)
+    if len(parts) != 4:
+      return None, None, None
+    _, project, location, cluster = parts
+    return cluster, project, location
+
+  return cluster_context or None, None, None
+
+
+def get_current_cluster_and_project() -> tuple[str | None, str | None]:
+  """Extracts cluster name and project ID from current kubeconfig or environment."""
+  cluster, project, _ = get_current_kube_context()
+
+  if not cluster:
+    cluster = os.environ.get("GKE_CLUSTER") or os.environ.get("CLUSTER")
+  if not project:
+    project = os.environ.get("PROJECT") or os.environ.get(
+        "GOOGLE_CLOUD_PROJECT"
+    )
+
+  return cluster, project
 
 
 def wait_for_pod(job_name: str) -> str:
