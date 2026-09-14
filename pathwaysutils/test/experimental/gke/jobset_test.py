@@ -845,6 +845,161 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
 
+  def test_add_user_workload(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test_module",
+        env={"CUSTOM_ENV": "123"},
+    )
+
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    # Verify JobSet spec-level success policy targets pathways-head
+    self.assertEqual(
+        config["spec"]["successPolicy"],
+        {
+            "operator": "All",
+            "targetReplicatedJobs": ["pathways-head"],
+        },
+    )
+
+    # Verify head pod has user-workload container in containers
+    self.assertIn("user-workload", helper.containers["pathways-head"])
+    user_c = helper.containers["pathways-head"]["user-workload"]
+    self.assertEqual(user_c["image"], "us-docker.pkg.dev/my-project/test:v1")
+    self.assertEqual(user_c["command"], ["sh", "-c", "python3 -m test_module"])
+    self.assertTrue(
+        any(
+            e["name"] == "CUSTOM_ENV" and e["value"] == "123"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "MEGASCALE_NUM_SLICES" and e["value"] == "1"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "JAX_PLATFORMS" and e["value"] == "proxy"
+            for e in user_c["env"]
+        )
+    )
+
+    # Verify RM and Proxy remain in regular containers (not initContainers)
+    self.assertIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.init_containers["pathways-head"])
+
+  def test_add_user_workload_roundtrip(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command=["python3", "test.py"],
+    )
+
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "jobset_user_workload.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported.to_dict()),
+    )
+
+  def test_configurable_priority_class_and_head_node_selector(self):
+    # Default: no priority class or head pod node selector
+    default_js = self._create_jobset()
+    default_helper = JobSetManifestHelper(default_js.to_dict())
+    self.assertNotIn(
+        "priorityClassName", default_helper.pod_specs["pathways-head"]
+    )
+    self.assertNotIn("nodeSelector", default_helper.pod_specs["pathways-head"])
+    self.assertNotIn(
+        "priorityClassName", default_helper.pod_specs["pathways-worker"]
+    )
+
+    # Configured: priority class and head node selector set
+    configured_js = self._create_jobset(
+        head_nodepool="cpu-np",
+        head_node_selector={"zone": "us-central1-a"},
+        priority_class_name="high",
+    )
+    configured_helper = JobSetManifestHelper(configured_js.to_dict())
+    head_spec = configured_helper.pod_specs["pathways-head"]
+    worker_spec = configured_helper.pod_specs["pathways-worker"]
+
+    self.assertEqual(head_spec["priorityClassName"], "high")
+    self.assertEqual(worker_spec["priorityClassName"], "high")
+    self.assertEqual(
+        head_spec["nodeSelector"]["cloud.google.com/gke-nodepool"], "cpu-np"
+    )
+    self.assertEqual(head_spec["nodeSelector"]["zone"], "us-central1-a")
+
+  def test_kokoro_pretraining_workload_generation(self):
+    """Verifies that PathwaysJobSet can generate a JobSet matching Kokoro pretraining test workloads."""
+    pw_jobset = jobset.PathwaysJobSet(
+        name="maxtext-pretraining-test",
+        namespace="default",
+        pathways_dir="gs://my-bucket/scratch",
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=1,
+        labels={"kueue.x-k8s.io/queue-name": "multislice-queue"},
+        head_nodepool="cpu-np",
+        priority_class_name="high",
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/maxtext:latest",
+        command="python3 MaxText/train.py MaxText/configs/base.yml",
+    )
+
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    # Verify queue label
+    self.assertEqual(
+        config["metadata"]["labels"]["kueue.x-k8s.io/queue-name"],
+        "multislice-queue",
+    )
+
+    # Verify success policy
+    self.assertEqual(
+        config["spec"]["successPolicy"]["targetReplicatedJobs"],
+        ["pathways-head"],
+    )
+
+    # Verify head pod spec: priorityClassName, nodeSelector
+    head_pod_spec = helper.pod_specs["pathways-head"]
+    self.assertEqual(head_pod_spec["priorityClassName"], "high")
+    self.assertEqual(
+        head_pod_spec["nodeSelector"]["cloud.google.com/gke-nodepool"],
+        "cpu-np",
+    )
+
+    # Verify head containers: RM, Proxy, and user workload are all in containers
+    self.assertIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.containers["pathways-head"])
+    self.assertIn("user-workload", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.init_containers["pathways-head"])
+
+    user_container = helper.containers["pathways-head"]["user-workload"]
+    self.assertEqual(
+        user_container["command"],
+        ["sh", "-c", "python3 MaxText/train.py MaxText/configs/base.yml"],
+    )
+
+    # Verify worker pod spec: priorityClassName
+    worker_pod_spec = helper.pod_specs["pathways-worker"]
+    self.assertEqual(worker_pod_spec["priorityClassName"], "high")
+
 
 if __name__ == "__main__":
   absltest.main()
