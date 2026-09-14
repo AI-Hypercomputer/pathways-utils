@@ -432,7 +432,12 @@ def start_server(port: int, requires_backend: bool = True) -> None:
       _logger.debug("Writing profiling data to %s", log_dir)
       _validate_gcs_bucket(log_dir)
 
-      await asyncio.to_thread(start_trace, log_dir)
+      options = None
+      if jax.version.__version_info__ >= (0, 9, 2):
+        options = jax.profiler.ProfileOptions()
+        options.duration_ms = pc.duration_ms
+
+      await asyncio.to_thread(start_trace, log_dir, profiler_options=options)
       try:
         await asyncio.sleep(pc.duration_ms / 1e3)
       finally:

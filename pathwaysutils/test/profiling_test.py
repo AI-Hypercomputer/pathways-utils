@@ -992,6 +992,39 @@ class ProfilingTest(parameterized.TestCase):
       if expected_detail_substring:
         self.assertIn(expected_detail_substring, response.json()["detail"])
 
+  @unittest.skipIf(
+      os.environ.get("GITHUB_ACTIONS") == "true",
+      "Skipping FastAPI server test in GitHub CI",
+  )
+  @absltest.skipIf(
+      jax.version.__version_info__ < (0, 9, 2),
+      "ProfileOptions requires JAX 0.9.2 or newer",
+  )
+  def test_profiling_server_passes_duration_ms_to_start_trace(self):
+    from fastapi import testclient
+
+    with (
+        mock.patch.dict(profiling.os.environ, {}, clear=True),
+        mock.patch.object(profiling, "start_trace") as mock_start_trace,
+        mock.patch.object(profiling, "stop_trace"),
+        mock.patch.object(profiling.asyncio, "sleep"),
+    ):
+      app = self._get_server_app()
+      client = testclient.TestClient(app)
+      response = client.post(
+          "/profiling",
+          json={"duration_ms": 2500, "repository_path": "gs://test_bucket/dir"},
+      )
+      self.assertEqual(response.status_code, 200)
+      mock_start_trace.assert_called_once()
+      call_kwargs = mock_start_trace.call_args.kwargs
+      self.assertEqual(
+          mock_start_trace.call_args.args[0], "gs://test_bucket/dir"
+      )
+      self.assertIsNotNone(call_kwargs.get("profiler_options"))
+      self.assertEqual(call_kwargs["profiler_options"].duration_ms, 2500)
+
 
 if __name__ == "__main__":
   absltest.main()
+
