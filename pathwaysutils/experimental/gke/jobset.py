@@ -633,8 +633,18 @@ class PathwaysJobSet:
     user_env_list = [
         client.V1EnvVar(name="JAX_PLATFORMS", value="proxy"),
         client.V1EnvVar(
+            name="PATHWAYS_HEAD",
+            value_from=client.V1EnvVarSource(
+                field_ref=client.V1ObjectFieldSelector(
+                    field_path=(
+                        "metadata.labels['jobset.sigs.k8s.io/coordinator']"
+                    )
+                )
+            ),
+        ),
+        client.V1EnvVar(
             name="JAX_BACKEND_TARGET",
-            value=f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
+            value=f"grpc://$(PATHWAYS_HEAD):{PATHWAYS_PROXY_PORT}",
         ),
         client.V1EnvVar(
             name="MEGASCALE_NUM_SLICES",

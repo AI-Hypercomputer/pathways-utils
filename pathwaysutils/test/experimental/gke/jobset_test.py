@@ -888,6 +888,23 @@ class PathwaysJobSetTest(parameterized.TestCase):
             for e in user_c["env"]
         )
     )
+    self.assertTrue(
+        any(
+            e["name"] == "PATHWAYS_HEAD"
+            and e.get("valueFrom", {})
+            .get("fieldRef", {})
+            .get("fieldPath")
+            == "metadata.labels['jobset.sigs.k8s.io/coordinator']"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "JAX_BACKEND_TARGET"
+            and e["value"] == "grpc://$(PATHWAYS_HEAD):29000"
+            for e in user_c["env"]
+        )
+    )
 
     # Verify RM and Proxy remain in regular containers (not initContainers)
     self.assertIn("pathways-rm", helper.containers["pathways-head"])
