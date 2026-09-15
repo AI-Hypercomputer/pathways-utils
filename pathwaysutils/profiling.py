@@ -124,11 +124,13 @@ def _create_profile_request(
     log_dir: os.PathLike[str] | str,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     max_num_hosts: int = 1,
+    include_resource_managers: bool = True,
 ) -> Mapping[str, Any]:
   """Creates a profile request mapping from the given options."""
   profile_request: dict[str, Any] = {
       "traceLocation": str(log_dir),
       "maxNumHosts": max_num_hosts,
+      "includeResourceManagers": include_resource_managers,
   }
 
   if profiler_options is None or _is_default_profile_options(profiler_options):
@@ -267,6 +269,7 @@ def start_trace(
     create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     max_num_hosts: int = 1,
+    include_resource_managers: bool = True,
 ) -> None:
   """Starts a profiler trace.
 
@@ -297,6 +300,8 @@ def start_trace(
     profiler_options: Profiler options to configure the profiler for collection.
     max_num_hosts: An optional integer to limit the number of hosts profiled
       (defaults to 1).
+    include_resource_managers: An optional boolean to include resource manager
+      profiling (defaults to True).
   """
   _validate_gcs_bucket(str(log_dir))
 
@@ -325,6 +330,7 @@ def start_trace(
       log_dir,
       profiler_options,
       max_num_hosts=max_num_hosts,
+      include_resource_managers=include_resource_managers,
   )
 
   _logger.debug("Profile request: %s", profile_request)
@@ -406,6 +412,7 @@ def start_server(port: int, requires_backend: bool = True) -> None:
     class ProfilingConfig:
       duration_ms: int
       repository_path: str
+      include_resource_managers: bool = True
 
     security = fastapi.security.HTTPBearer(auto_error=False)
 
@@ -437,7 +444,12 @@ def start_server(port: int, requires_backend: bool = True) -> None:
         options = jax.profiler.ProfileOptions()
         options.duration_ms = pc.duration_ms
 
-      await asyncio.to_thread(start_trace, log_dir, profiler_options=options)
+      await asyncio.to_thread(
+          start_trace,
+          log_dir,
+          profiler_options=options,
+          include_resource_managers=pc.include_resource_managers,
+      )
       try:
         await asyncio.sleep(pc.duration_ms / 1e3)
       finally:
@@ -473,6 +485,7 @@ def collect_profile(
     duration_ms: int,
     host: str,
     log_dir: os.PathLike[str] | str,
+    include_resource_managers: bool = True,
 ) -> bool:
   """Collects a JAX profile and saves it to the specified directory.
 
@@ -488,6 +501,7 @@ def collect_profile(
     duration_ms: The duration in milliseconds for which to collect the profile.
     host: The host on which the JAX profiler server is running.
     log_dir: The GCS path to save the profile data.
+    include_resource_managers: Whether to include resource manager profiling.
 
   Returns:
     True if the profile was collected successfully, False otherwise.
@@ -500,6 +514,7 @@ def collect_profile(
   request_json = {
       "duration_ms": duration_ms,
       "repository_path": log_dir,
+      "include_resource_managers": include_resource_managers,
   }
   headers = {}
   if effective_token := os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN"):
@@ -537,6 +552,7 @@ def monkey_patch_jax() -> None:
       create_perfetto_trace: bool = False,
       profiler_options: jax.profiler.ProfileOptions | None = None,
       max_num_hosts: int = 1,
+      include_resource_managers: bool = True,
   ) -> None:
     _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
     start_trace(
@@ -545,6 +561,7 @@ def monkey_patch_jax() -> None:
         create_perfetto_trace=create_perfetto_trace,
         profiler_options=profiler_options,
         max_num_hosts=max_num_hosts,
+        include_resource_managers=include_resource_managers,
     )
 
   jax.profiler.start_trace = start_trace_patch

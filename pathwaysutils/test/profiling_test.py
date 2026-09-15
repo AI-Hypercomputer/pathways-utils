@@ -69,12 +69,14 @@ class ProfilingTest(parameterized.TestCase):
       trace_location: str,
       max_num_hosts: int = 1,
       session_id: str = "2026_06_04_05_29_33",
+      include_resource_managers: bool = True,
   ) -> dict[str, Any]:
     if jax.version.__version_info__ >= (0, 9, 2):
       return {
           "profileRequest": {
               "traceLocation": trace_location,
               "maxNumHosts": max_num_hosts,
+              "includeResourceManagers": include_resource_managers,
               "xprofTraceOptions": {
                   "traceDirectory": trace_location,
                   "pwTraceOptions": {
@@ -89,6 +91,7 @@ class ProfilingTest(parameterized.TestCase):
           "profileRequest": {
               "traceLocation": trace_location,
               "maxNumHosts": max_num_hosts,
+              "includeResourceManagers": include_resource_managers,
           }
       }
 
@@ -107,6 +110,7 @@ class ProfilingTest(parameterized.TestCase):
         json={
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
+            "include_resource_managers": True,
         },
         headers={},
     )
@@ -126,6 +130,7 @@ class ProfilingTest(parameterized.TestCase):
         json={
             "duration_ms": duration_ms,
             "repository_path": "gs://test_bucket/test_dir",
+            "include_resource_managers": True,
         },
         headers={},
     )
@@ -145,6 +150,7 @@ class ProfilingTest(parameterized.TestCase):
         json={
             "duration_ms": 1000,
             "repository_path": "gs://test_bucket/test_dir",
+            "include_resource_managers": True,
         },
         headers={},
     )
@@ -165,6 +171,7 @@ class ProfilingTest(parameterized.TestCase):
         json={
             "duration_ms": 1000,
             "repository_path": log_dir,
+            "include_resource_managers": True,
         },
         headers={},
     )
@@ -307,6 +314,19 @@ class ProfilingTest(parameterized.TestCase):
       self.assertEqual(
           call_args["profiler_options"].session_id, "2026_06_04_05_29_33"
       )
+
+  def test_start_trace_with_include_resource_managers(self):
+    profiling.start_trace(
+        "gs://test_bucket/test_dir", include_resource_managers=False
+    )
+
+    self.mock_toy_computation.assert_called_once()
+    expected_request = self._get_expected_profile_request(
+        "gs://test_bucket/test_dir", include_resource_managers=False
+    )
+    self.mock_plugin_executable_cls.assert_called_once_with(
+        json.dumps(expected_request)
+    )
 
   @absltest.skipIf(
       jax.version.__version_info__ < (0, 9, 2),
@@ -572,6 +592,7 @@ class ProfilingTest(parameterized.TestCase):
         create_perfetto_trace=False,
         profiler_options=None,
         max_num_hosts=1,
+        include_resource_managers=True,
     )
 
   @parameterized.named_parameters(
@@ -589,6 +610,7 @@ class ProfilingTest(parameterized.TestCase):
         create_perfetto_trace=False,
         profiler_options=None,
         max_num_hosts=3,
+        include_resource_managers=True,
     )
 
   @parameterized.named_parameters(
@@ -637,6 +659,7 @@ class ProfilingTest(parameterized.TestCase):
         {
             "traceLocation": "gs://bucket/dir",
             "maxNumHosts": 1,
+            "includeResourceManagers": True,
         },
     )
 
@@ -649,6 +672,20 @@ class ProfilingTest(parameterized.TestCase):
         {
             "traceLocation": "gs://bucket/dir",
             "maxNumHosts": 5,
+            "includeResourceManagers": True,
+        },
+    )
+
+  def test_create_profile_request_with_include_resource_managers(self):
+    request = profiling._create_profile_request(
+        "gs://bucket/dir", include_resource_managers=False
+    )
+    self.assertEqual(
+        request,
+        {
+            "traceLocation": "gs://bucket/dir",
+            "maxNumHosts": 1,
+            "includeResourceManagers": False,
         },
     )
 
@@ -680,6 +717,7 @@ class ProfilingTest(parameterized.TestCase):
             "traceLocation": "gs://bucket/dir",
             "maxDurationSecs": 2.0,
             "maxNumHosts": 1,
+            "includeResourceManagers": True,
             "xprofTraceOptions": {
                 "traceDirectory": "gs://bucket/dir",
                 "traceSessionName": "test_session",
@@ -853,6 +891,7 @@ class ProfilingTest(parameterized.TestCase):
           json={
               "duration_ms": 1000,
               "repository_path": "gs://test_bucket/test_dir",
+              "include_resource_managers": True,
           },
           headers={},
       )
@@ -899,6 +938,7 @@ class ProfilingTest(parameterized.TestCase):
           json={
               "duration_ms": 1000,
               "repository_path": "gs://test_bucket/test_dir",
+              "include_resource_managers": True,
           },
           headers={"Authorization": f"Bearer {env_token}"},
       )
