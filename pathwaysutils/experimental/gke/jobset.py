@@ -379,6 +379,8 @@ class PathwaysJobSet:
     head_pod_spec = client.V1PodSpec(
         containers=containers,
         restart_policy="Never",
+        dns_policy="ClusterFirstWithHostNet",
+        host_network=True,
     )
     node_sel = dict(head_node_selector) if head_node_selector else {}
     if head_nodepool:
@@ -533,6 +535,8 @@ class PathwaysJobSet:
             )
         ],
         restart_policy="OnFailure",
+        dns_policy="ClusterFirstWithHostNet",
+        host_network=True,
     )
     if priority_class_name:
       worker_pod_spec.priority_class_name = priority_class_name
@@ -632,9 +636,6 @@ class PathwaysJobSet:
 
     user_env_list = [
         client.V1EnvVar(name="JAX_PLATFORMS", value="proxy"),
-        client.V1EnvVar(
-            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS", value="true"
-        ),
         client.V1EnvVar(
             name="PATHWAYS_HEAD",
             value_from=client.V1EnvVarSource(
