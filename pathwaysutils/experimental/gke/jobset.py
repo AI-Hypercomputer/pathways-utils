@@ -280,7 +280,7 @@ class PathwaysJobSet:
         f"--server_port={PATHWAYS_RM_PORT}",
         f"--gcs_scratch_location={pathways_dir}",
         "--node_type=resource_manager",
-        f"--instance_count={num_slices}",
+        "--instance_count=1",
         f"--instance_type={instance_type}",
     ]
     rm_env = [
@@ -367,8 +367,8 @@ class PathwaysJobSet:
         ),
     )
 
-    rm_container.restart_policy = "Always"
-    proxy_container.restart_policy = "Always"
+    rm_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
+    proxy_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
     init_containers = [rm_container]
     if not shared_pathways_service:
