@@ -223,11 +223,6 @@ class PathwaysJobSet:
     )
 
     self._success_policy = None
-    if shared_pathways_service:
-      self._success_policy = {
-          "operator": "All",
-          "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
-      }
 
   @property
   def head_job_template(self) -> client.V1JobTemplateSpec:
@@ -372,12 +367,21 @@ class PathwaysJobSet:
         ),
     )
 
-    containers = [rm_container]
+    rm_container.restart_policy = "Always"
+    proxy_container.restart_policy = "Always"
+
+    init_containers = [rm_container]
     if not shared_pathways_service:
-      containers.append(proxy_container)
+      init_containers.append(proxy_container)
+
+    dummy_container = client.V1Container(
+        name="dummy-job",
+        image="gcr.io/google-containers/pause:3.2",
+    )
 
     head_pod_spec = client.V1PodSpec(
-        containers=containers,
+        init_containers=init_containers,
+        containers=[dummy_container],
         restart_policy="Never",
         dns_policy="ClusterFirstWithHostNet",
         host_network=True,
@@ -385,8 +389,9 @@ class PathwaysJobSet:
     node_sel = dict(head_node_selector) if head_node_selector else {}
     if head_nodepool:
       node_sel["cloud.google.com/gke-nodepool"] = head_nodepool
-    if node_sel:
-      head_pod_spec.node_selector = node_sel
+    elif "cloud.google.com/gke-nodepool" not in node_sel:
+      node_sel["cloud.google.com/gke-nodepool"] = "cpu-np"
+    head_pod_spec.node_selector = node_sel
 
     if priority_class_name:
       head_pod_spec.priority_class_name = priority_class_name
@@ -684,14 +689,15 @@ class PathwaysJobSet:
     )
 
     containers = pod_spec.containers or []
-    containers = [c for c in containers if c.name != name]
+    containers = [c for c in containers if c.name != name and c.name != "dummy-job"]
     containers.append(user_container)
     pod_spec.containers = containers
 
-    self._success_policy = {
-        "operator": "All",
-        "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
-    }
+    if not self._shared_pathways_service:
+      self._success_policy = {
+          "operator": "All",
+          "targetReplicatedJobs": [PATHWAYS_HEAD_JOB_NAME],
+      }
 
     return self
 
