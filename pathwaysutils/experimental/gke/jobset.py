@@ -644,7 +644,7 @@ class PathwaysJobSet:
         ),
         client.V1EnvVar(
             name="JAX_BACKEND_TARGET",
-            value=f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
+            value=f"grpc://127.0.0.1:{PATHWAYS_PROXY_PORT}",
         ),
         client.V1EnvVar(
             name="MEGASCALE_NUM_SLICES",
