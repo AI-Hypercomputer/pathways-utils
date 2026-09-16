@@ -129,6 +129,7 @@ def _create_profile_request(
   profile_request: dict[str, Any] = {
       "traceLocation": str(log_dir),
       "maxNumHosts": max_num_hosts,
+      "includeResourceManagers": True,
   }
 
   if profiler_options is None or _is_default_profile_options(profiler_options):

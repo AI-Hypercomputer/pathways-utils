@@ -69,12 +69,14 @@ class ProfilingTest(parameterized.TestCase):
       trace_location: str,
       max_num_hosts: int = 1,
       session_id: str = "2026_06_04_05_29_33",
+      include_resource_managers: bool = True,
   ) -> dict[str, Any]:
     if jax.version.__version_info__ >= (0, 9, 2):
       return {
           "profileRequest": {
               "traceLocation": trace_location,
               "maxNumHosts": max_num_hosts,
+              "includeResourceManagers": include_resource_managers,
               "xprofTraceOptions": {
                   "traceDirectory": trace_location,
                   "pwTraceOptions": {
@@ -89,6 +91,7 @@ class ProfilingTest(parameterized.TestCase):
           "profileRequest": {
               "traceLocation": trace_location,
               "maxNumHosts": max_num_hosts,
+              "includeResourceManagers": include_resource_managers,
           }
       }
 
@@ -637,6 +640,7 @@ class ProfilingTest(parameterized.TestCase):
         {
             "traceLocation": "gs://bucket/dir",
             "maxNumHosts": 1,
+            "includeResourceManagers": True,
         },
     )
 
@@ -649,6 +653,7 @@ class ProfilingTest(parameterized.TestCase):
         {
             "traceLocation": "gs://bucket/dir",
             "maxNumHosts": 5,
+            "includeResourceManagers": True,
         },
     )
 
@@ -680,6 +685,7 @@ class ProfilingTest(parameterized.TestCase):
             "traceLocation": "gs://bucket/dir",
             "maxDurationSecs": 2.0,
             "maxNumHosts": 1,
+            "includeResourceManagers": True,
             "xprofTraceOptions": {
                 "traceDirectory": "gs://bucket/dir",
                 "traceSessionName": "test_session",
