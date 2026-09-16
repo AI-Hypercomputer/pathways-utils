@@ -633,6 +633,9 @@ class PathwaysJobSet:
     user_env_list = [
         client.V1EnvVar(name="JAX_PLATFORMS", value="proxy"),
         client.V1EnvVar(
+            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS", value="true"
+        ),
+        client.V1EnvVar(
             name="PATHWAYS_HEAD",
             value_from=client.V1EnvVarSource(
                 field_ref=client.V1ObjectFieldSelector(
