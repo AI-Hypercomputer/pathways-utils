@@ -17,6 +17,8 @@ import os
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+from orbax.checkpoint import type_handlers
+from orbax.checkpoint._src.serialization import cloud_pathways_array_handler
 from pathwaysutils import _initialize
 
 
@@ -98,6 +100,19 @@ class InitializeTest(parameterized.TestCase):
 
     del os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
     self.assertFalse(_initialize._is_persistence_enabled())
+
+  def test_initialize_registers_orbax_pathways_handler_when_persistence_enabled(
+      self,
+  ):
+    jax.config.update("jax_platforms", "proxy")
+    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
+    _initialize._initialization_count = 0
+
+    _initialize.initialize()
+    handler = type_handlers.get_type_handler(jax.Array)
+    self.assertIsInstance(
+        handler, cloud_pathways_array_handler.CloudPathwaysArrayHandler
+    )
 
 
 if __name__ == "__main__":

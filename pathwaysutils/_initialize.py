@@ -18,10 +18,11 @@ import logging
 import os
 
 import jax
+from orbax.checkpoint import type_handlers
 from orbax.checkpoint._src.metadata import array_metadata_store as array_metadata_store_lib
+from orbax.checkpoint._src.serialization import cloud_pathways_array_handler
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
-from pathwaysutils.persistence import orbax_handler
 
 
 _logger = logging.getLogger(__name__)
@@ -91,11 +92,14 @@ def initialize() -> None:
     _logger.debug("Detected Pathways-on-Cloud backend. Applying changes.")
     proxy_backend.register_backend_factory()
     profiling.monkey_patch_jax()
-    # TODO: b/365549911 - Remove when OCDBT-compatible
     if _is_persistence_enabled():
-      orbax_handler.register_pathways_handlers(
-          timeout=datetime.timedelta(hours=1),
-          array_metadata_store=array_metadata_store_lib.Store(),
+      type_handlers.register_type_handler(
+          jax.Array,
+          cloud_pathways_array_handler.CloudPathwaysArrayHandler(
+              timeout=datetime.timedelta(hours=1),
+              array_metadata_store=array_metadata_store_lib.Store(),
+          ),
+          override=True,
       )
 
     # Turn off JAX compilation cache because Pathways handles its own
