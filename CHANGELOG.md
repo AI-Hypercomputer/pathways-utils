@@ -23,6 +23,39 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-09-24
+## What's Changed
+* Increase JAX IFRT proxy client connection timeout to 10 minutes. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/278
+* Add [gke] and [test] optional dependencies with kubernetes by @lukebaumann in https://github.com/AI-Hypercomputer/pathways-utils/pull/288
+* Set max_slice_restarts to 1000000 in Shared Pathways Service deployment by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/291
+* Avoid recreating existing metric descriptors in MetricsCollector by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/294
+* pathwaysutils: Remove head job sidecar mode and V1Container monkeypatch from PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/285
+* Fix active slice pruning and dynamic inactive slice tracking in the elastic manager. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/295
+* pathwaysutils: Remove hostNetwork configuration from PathwaysJobSet pod specifications. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/292
+* Make pathways proxy image and rm/worker image configurable by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/296
+* Move Shared Pathways Service tests to GitHub by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/297
+* pathwaysutils: Add elastic_slices validation to JobSet generator. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/298
+* Add DeviceLossSimulator fault injection utility for elastic JAX testing. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/301
+* Validate proxy server image name by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/300
+* Add dependency httpx by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/305
+* Add JAX 0.11.0 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/306
+* Fix PRNG key deserialization in CloudPathwaysArrayHandler. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/302
+* Add SPS dependencies to test installations by @guptaaka in https://github.com/AI-Hypercomputer/pathways-utils/pull/309
+* Install test dependencies for unit testing by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/308
+* Fix unauthenticated profiling server vulnerability in pathwaysutils. by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/290
+* Update run_connect_example.py to demonstrate a TPU workload using JAX sharding by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/313
+* Sanitize username used in proxy job names by splitting on underscores by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/315
+* Add JAX 0.11.1 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/318
+* Deprecate `proxy_server_image` and auto-detect compatible proxy server image from Pathways service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/319
+* Update the SPS installation command in README by @guptaaka in https://github.com/AI-Hypercomputer/pathways-utils/pull/320
+* Improve cleanup and interrupt handling by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/312
+* Make Pathways profiling server thread a daemon thread by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/321
+* Pass profile options with duration to start_trace in profiling server. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/322
+* Include resource managers in pathwaysutils profile request by default. by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/325
+* Batch array persistence writes in CloudPathwaysArrayHandler.serialize. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/327
+* Remove redundant CloudPathwaysArrayHandler from pathwaysutils in favor of orbax. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/328
+* Add JAX 0.11.2 to test matrix and bump orbax-checkpoint to 0.12.3 by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/329
+
 ## [0.1.11] - 2026-07-17
 ## What's Changed
 * Update start_server signature in pathwaysutils.profiling to accept requires_backend by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/267
