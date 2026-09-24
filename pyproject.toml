@@ -15,7 +15,7 @@ dependencies = [
     "absl-py",
     "fastapi",
     "jax>=0.8.3",
-    "orbax-checkpoint",
+    "orbax-checkpoint>=0.12.3",
     "uvicorn",
     "requests",
     "packaging",
