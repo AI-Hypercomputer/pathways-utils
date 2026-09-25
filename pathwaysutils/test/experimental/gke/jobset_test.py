@@ -149,8 +149,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("pathways-head", helper.jobs)
     self.assertEqual(helper.jobs["pathways-head"]["replicas"], 1)
     pod_spec = helper.pod_specs["pathways-head"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "Never")
 
   def test_headless_head_job_containers(self):
@@ -178,6 +178,29 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
     )
     self.assertIn("--num_elastic_slices=2", proxy_container["args"])
+    self.assertTrue(
+        any(
+            e.get("name") == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+            and e.get("value") == "true"
+            for e in proxy_container.get("env", [])
+        )
+    )
+
+  def test_configurable_host_network_and_dns_policy(self):
+    js = self._create_jobset(
+        host_network=True,
+        dns_policy="ClusterFirstWithHostNet",
+    )
+    config = js.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    head_pod_spec = helper.pod_specs["pathways-head"]
+    self.assertTrue(head_pod_spec["hostNetwork"])
+    self.assertEqual(head_pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+
+    worker_pod_spec = helper.pod_specs["pathways-worker"]
+    self.assertTrue(worker_pod_spec["hostNetwork"])
+    self.assertEqual(worker_pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
 
   def test_worker_job_replicas(self):
     js = self._create_jobset(num_slices=2)
@@ -209,8 +232,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(config)
 
     pod_spec = helper.pod_specs["pathways-worker"]
-    self.assertTrue(pod_spec["hostNetwork"])
-    self.assertEqual(pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+    self.assertNotIn("hostNetwork", pod_spec)
+    self.assertNotIn("dnsPolicy", pod_spec)
     self.assertEqual(pod_spec["restartPolicy"], "OnFailure")
     self.assertEqual(pod_spec["terminationGracePeriodSeconds"], 60)
 

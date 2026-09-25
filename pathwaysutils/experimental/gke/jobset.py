@@ -127,6 +127,8 @@ class PathwaysJobSet:
       head_nodepool: str | None = None,
       head_node_selector: Mapping[str, str] | None = None,
       priority_class_name: str | None = None,
+      host_network: bool = False,
+      dns_policy: str | None = None,
   ):
     """Initializes the instance.
 
@@ -155,6 +157,9 @@ class PathwaysJobSet:
       head_node_selector: Optional node selector dict for the head pod.
       priority_class_name: Optional priority class name for head and worker
         pods.
+      host_network: Whether to use host networking for head and worker pods
+        (default: False).
+      dns_policy: Optional DNS policy for head and worker pods (default: None).
     """
     self._shared_pathways_service = shared_pathways_service
     self._pathways_rm_and_worker_image = pathways_rm_and_worker_image
@@ -206,6 +211,8 @@ class PathwaysJobSet:
         head_nodepool=head_nodepool,
         head_node_selector=head_node_selector,
         priority_class_name=priority_class_name,
+        host_network=host_network,
+        dns_policy=dns_policy,
     )
 
     # Build worker template.
@@ -220,6 +227,8 @@ class PathwaysJobSet:
         termination_grace_period_seconds=termination_grace_period_seconds,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         priority_class_name=priority_class_name,
+        host_network=host_network,
+        dns_policy=dns_policy,
     )
 
     self._success_policy = None
@@ -253,6 +262,8 @@ class PathwaysJobSet:
       head_nodepool: str | None = None,
       head_node_selector: Mapping[str, str] | None = None,
       priority_class_name: str | None = None,
+      host_network: bool = False,
+      dns_policy: str | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -269,6 +280,8 @@ class PathwaysJobSet:
       head_nodepool: Optional GKE nodepool for the head pod.
       head_node_selector: Optional node selector dict for the head pod.
       priority_class_name: Optional priority class name.
+      host_network: Whether to use host networking for head pod.
+      dns_policy: Optional DNS policy for head pod.
 
     Returns:
       The head job template.
@@ -349,7 +362,11 @@ class PathwaysJobSet:
                     )
                 )
             ),
-        )
+        ),
+        client.V1EnvVar(
+            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
+            value="true",
+        ),
     ]
     proxy_container = client.V1Container(
         name="pathways-proxy",
@@ -383,9 +400,11 @@ class PathwaysJobSet:
         init_containers=init_containers,
         containers=[dummy_container],
         restart_policy="Never",
-        dns_policy="ClusterFirstWithHostNet",
-        host_network=True,
     )
+    if host_network:
+      head_pod_spec.host_network = True
+    if dns_policy:
+      head_pod_spec.dns_policy = dns_policy
     node_sel = dict(head_node_selector) if head_node_selector else {}
     if head_nodepool:
       node_sel["cloud.google.com/gke-nodepool"] = head_nodepool
@@ -429,6 +448,8 @@ class PathwaysJobSet:
       termination_grace_period_seconds: int | None,
       pathways_rm_and_worker_image: str,
       priority_class_name: str | None = None,
+      host_network: bool = False,
+      dns_policy: str | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the worker job template for the JobSet."""
     worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
@@ -540,9 +561,11 @@ class PathwaysJobSet:
             )
         ],
         restart_policy="OnFailure",
-        dns_policy="ClusterFirstWithHostNet",
-        host_network=True,
     )
+    if host_network:
+      worker_pod_spec.host_network = True
+    if dns_policy:
+      worker_pod_spec.dns_policy = dns_policy
     if priority_class_name:
       worker_pod_spec.priority_class_name = priority_class_name
     if termination_grace_period_seconds is not None:
