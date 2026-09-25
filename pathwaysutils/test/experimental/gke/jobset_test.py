@@ -925,6 +925,13 @@ class PathwaysJobSetTest(parameterized.TestCase):
             for e in user_c["env"]
         )
     )
+    self.assertTrue(
+        any(
+            e["name"] == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+            and e["value"] == "true"
+            for e in user_c["env"]
+        )
+    )
 
     # Verify RM and Proxy are in initContainers (native sidecars)
     self.assertIn("pathways-rm", helper.init_containers["pathways-head"])

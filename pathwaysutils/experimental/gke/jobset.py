@@ -679,6 +679,10 @@ class PathwaysJobSet:
             value=f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
         ),
         client.V1EnvVar(
+            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
+            value="true",
+        ),
+        client.V1EnvVar(
             name="MEGASCALE_NUM_SLICES",
             value=str(self._worker_replicas),
         ),
