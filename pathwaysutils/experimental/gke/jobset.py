@@ -18,7 +18,8 @@ import json
 import logging
 import math
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TYPE_CHECKING
+
 import yaml
 
 try:
@@ -49,6 +50,33 @@ DEFAULT_PATHWAYS_PROXY_IMAGE = (
 PATHWAYS_PROXY_PORT = 29000
 PATHWAYS_RM_PORT = 29001
 PATHWAYS_WORKER_PORT = 29005
+
+CUSTOM_LIBTPU_VOLUME_NAME = "custom-libtpu"
+CUSTOM_LIBTPU_INIT_CONTAINER_NAME = "fetch-custom-libtpu"
+CUSTOM_LIBTPU_INIT_IMAGE = "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+CUSTOM_LIBTPU_SO_PATH = "/lib/libtpu.so"
+_CUSTOM_LIBTPU_CONTAINERS = ("pathways-rm", "pathways-proxy", "pathways-worker")
+_CUSTOM_LIBTPU_STAGING_DIR = "/tmp/libtpu"
+# Runs in the init container: downloads argv[1] and leaves `libtpu.so` at
+# argv[2], extracting it first if argv[1] is a wheel/zip.
+_FETCH_CUSTOM_LIBTPU_SCRIPT = """
+import os, shutil, subprocess, sys, urllib.request, zipfile
+uri, so_path = sys.argv[1], sys.argv[2]
+artifact = so_path + ".download"
+if uri.startswith("gs://"):
+  subprocess.run(["gcloud", "storage", "cp", uri, artifact], check=True)
+else:
+  urllib.request.urlretrieve(uri, artifact)
+if uri.endswith((".whl", ".zip")):
+  with zipfile.ZipFile(artifact) as archive:
+    member = next(n for n in archive.namelist() if n.endswith("libtpu.so"))
+    with archive.open(member) as src, open(so_path, "wb") as dst:
+      shutil.copyfileobj(src, dst)
+  os.remove(artifact)
+else:
+  os.replace(artifact, so_path)
+os.chmod(so_path, 0o755)
+"""
 
 MACHINE_TYPE_TO_TPU_VERSION_MAP = {
     "tpu7x-standard-4t": "tpu7x",
@@ -86,7 +114,7 @@ def _format_image(image: str, default_tag: str) -> str:
   if "@" in image:
     return image
   last_slash = image.rfind("/")
-  if ":" in image[last_slash + 1:]:
+  if ":" in image[last_slash + 1 :]:
     return image
   return f"{image}:{default_tag}"
 
@@ -135,14 +163,16 @@ class PathwaysJobSet:
       topology: TPU topology (e.g., "2x2").
       num_slices: Number of slices.
       max_restarts: Maximum number of restarts for the JobSet.
-      max_slice_restarts: Maximum number of slice restarts (defaults to 1_000_000 in headless and SPS mode).
+      max_slice_restarts: Maximum number of slice restarts (defaults to
+        1_000_000 in headless and SPS mode).
       termination_grace_period_seconds: Optional termination grace period.
       pathways_version: Version tag for Pathways images.
       jobset_api_version: API version of JobSet.
       elastic_slices: Number of elastic slices.
       labels: Optional labels for the JobSet.
       annotations: Optional annotations for the JobSet.
-      shared_pathways_service: Whether to run only RM for Shared Pathways Service.
+      shared_pathways_service: Whether to run only RM for Shared Pathways
+        Service.
       pathways_rm_and_worker_image: Base Docker image for Resource Manager and
         Worker containers.
       pathways_proxy_image: Base Docker image for Proxy container.
@@ -251,7 +281,8 @@ class PathwaysJobSet:
       instance_type: TPU instance type (e.g., "tpuv5:2x2").
       image_tag: Version tag for Pathways images.
       elastic_slices: Number of elastic slices.
-      shared_pathways_service: Whether to run only RM for Shared Pathways Service.
+      shared_pathways_service: Whether to run only RM for Shared Pathways
+        Service.
       pathways_rm_and_worker_image: Base Docker image for Resource Manager.
       pathways_proxy_image: Base Docker image for Proxy container.
 
@@ -686,6 +717,90 @@ class PathwaysJobSet:
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(volume_mount)
         container.volume_mounts = volume_mounts
+
+    return self
+
+  def with_custom_libtpu(
+      self, uri: str, init_image: str = CUSTOM_LIBTPU_INIT_IMAGE
+  ) -> "PathwaysJobSet":
+    """Overrides `/lib/libtpu.so` in the Pathways containers at runtime.
+
+    An init container downloads `uri` into an `emptyDir` volume that is then
+    mounted over `/lib/libtpu.so` (and pointed to by `TPU_LIBRARY_PATH`) in the
+    RM, proxy and worker containers, so a custom libtpu can be used without
+    rebuilding the Pathways images. Calling this again replaces the override.
+
+    Only effective with images that load libtpu dynamically from
+    `TPU_LIBRARY_PATH` (the OSS-built Pathways images); images that link the
+    TPU runtime statically ignore it.
+
+    Args:
+      uri: `gs://` or `http(s)://` URI of a `libtpu.so`, or of a `.whl`/`.zip`
+        containing one.
+      init_image: Image used to download the artifact; must provide `python3`
+        and, for `gs://` URIs, `gcloud`.
+
+    Returns:
+      This `PathwaysJobSet`, for chaining.
+    """
+    if not uri.startswith(("gs://", "http://", "https://")):
+      raise ValueError(f"Unsupported custom libtpu URI: {uri!r}")
+
+    for job_template in (self._head_job_template, self._worker_job_template):
+      pod_spec = job_template.spec.template.spec
+      self._add_volume_to_pod_spec(
+          pod_spec,
+          client.V1Volume(
+              name=CUSTOM_LIBTPU_VOLUME_NAME,
+              empty_dir=client.V1EmptyDirVolumeSource(),
+          ),
+      )
+      others = [
+          c
+          for c in pod_spec.init_containers or []
+          if c.name != CUSTOM_LIBTPU_INIT_CONTAINER_NAME
+      ]
+      fetch_container = client.V1Container(
+          name=CUSTOM_LIBTPU_INIT_CONTAINER_NAME,
+          image=init_image,
+          command=[
+              "python3",
+              "-c",
+              _FETCH_CUSTOM_LIBTPU_SCRIPT,
+              uri,
+              f"{_CUSTOM_LIBTPU_STAGING_DIR}/libtpu.so",
+          ],
+          volume_mounts=[
+              client.V1VolumeMount(
+                  name=CUSTOM_LIBTPU_VOLUME_NAME,
+                  mount_path=_CUSTOM_LIBTPU_STAGING_DIR,
+              )
+          ],
+      )
+      pod_spec.init_containers = [fetch_container] + others
+
+      # The RM and proxy may run as sidecar init containers (e.g. imported YAML).
+      for container in (pod_spec.containers or []) + others:
+        if container.name not in _CUSTOM_LIBTPU_CONTAINERS:
+          continue
+        container.volume_mounts = [
+            m
+            for m in container.volume_mounts or []
+            if m.mount_path != CUSTOM_LIBTPU_SO_PATH
+        ] + [
+            client.V1VolumeMount(
+                name=CUSTOM_LIBTPU_VOLUME_NAME,
+                mount_path=CUSTOM_LIBTPU_SO_PATH,
+                sub_path="libtpu.so",
+            )
+        ]
+        container.env = [
+            e for e in container.env or [] if e.name != "TPU_LIBRARY_PATH"
+        ] + [
+            client.V1EnvVar(
+                name="TPU_LIBRARY_PATH", value=CUSTOM_LIBTPU_SO_PATH
+            )
+        ]
 
     return self
 
