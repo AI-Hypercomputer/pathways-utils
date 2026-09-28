@@ -50,6 +50,8 @@ PATHWAYS_PROXY_PORT = 29000
 PATHWAYS_RM_PORT = 29001
 PATHWAYS_WORKER_PORT = 29005
 
+GKE_NODEPOOL_KEY = "cloud.google.com/gke-nodepool"
+
 MACHINE_TYPE_TO_TPU_VERSION_MAP = {
     "tpu7x-standard-4t": "tpu7x",
     "tpu7x": "tpu7x",
@@ -407,9 +409,9 @@ class PathwaysJobSet:
       head_pod_spec.dns_policy = dns_policy
     node_sel = dict(head_node_selector) if head_node_selector else {}
     if head_nodepool:
-      node_sel["cloud.google.com/gke-nodepool"] = head_nodepool
-    elif "cloud.google.com/gke-nodepool" not in node_sel:
-      node_sel["cloud.google.com/gke-nodepool"] = "cpu-np"
+      node_sel[GKE_NODEPOOL_KEY] = head_nodepool
+    elif GKE_NODEPOOL_KEY not in node_sel:
+      node_sel[GKE_NODEPOOL_KEY] = "cpu-np"
     head_pod_spec.node_selector = node_sel
 
     if priority_class_name:
@@ -584,7 +586,7 @@ class PathwaysJobSet:
                 metadata=client.V1ObjectMeta(
                     annotations={
                         "alpha.jobset.sigs.k8s.io/exclusive-topology": (
-                            "cloud.google.com/gke-nodepool"
+                            GKE_NODEPOOL_KEY
                         )
                     }
                 ),
@@ -715,8 +717,10 @@ class PathwaysJobSet:
         resources=resources,
     )
 
-    containers = pod_spec.containers or []
-    containers = [c for c in containers if c.name != name and c.name != "dummy-job"]
+    containers = [
+        c for c in pod_spec.containers
+        if c.name != name and c.name != "dummy-job"
+    ]
     containers.append(user_container)
     pod_spec.containers = containers
 

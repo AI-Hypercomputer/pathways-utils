@@ -957,6 +957,47 @@ class PathwaysJobSetTest(parameterized.TestCase):
         normalize_k8s_spec(imported.to_dict()),
     )
 
+  def test_add_user_workload_preserves_existing_containers(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    custom_container = client.V1Container(
+        name="custom-sidecar", image="custom:v1"
+    )
+    pw_jobset._head_job_template.spec.template.spec.containers.append(
+        custom_container
+    )
+    pw_jobset.add_user_workload(
+        name="user-workload-1",
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test1",
+    )
+    pw_jobset.add_user_workload(
+        name="user-workload-2",
+        image="us-docker.pkg.dev/my-project/test:v2",
+        command="python3 -m test2",
+    )
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    self.assertIn("custom-sidecar", helper.containers["pathways-head"])
+    self.assertIn("user-workload-1", helper.containers["pathways-head"])
+    self.assertIn("user-workload-2", helper.containers["pathways-head"])
+    self.assertNotIn("dummy-job", helper.containers["pathways-head"])
+    self.assertLen(helper.pod_specs["pathways-head"]["containers"], 3)
+
+    # Calling add_user_workload with existing name replaces it rather than appending duplicate
+    pw_jobset.add_user_workload(
+        name="user-workload-1",
+        image="us-docker.pkg.dev/my-project/test:v3",
+        command="python3 -m test1_updated",
+    )
+    config2 = pw_jobset.to_dict()
+    helper2 = JobSetManifestHelper(config2)
+    self.assertLen(helper2.pod_specs["pathways-head"]["containers"], 3)
+    self.assertEqual(
+        helper2.containers["pathways-head"]["user-workload-1"]["image"],
+        "us-docker.pkg.dev/my-project/test:v3",
+    )
+
   def test_configurable_priority_class_and_head_node_selector(self):
     # Default: no priority class or head pod node selector
     default_js = self._create_jobset()
@@ -965,7 +1006,9 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "priorityClassName", default_helper.pod_specs["pathways-head"]
     )
     self.assertEqual(
-        default_helper.pod_specs["pathways-head"]["nodeSelector"]["cloud.google.com/gke-nodepool"],
+        default_helper.pod_specs["pathways-head"]["nodeSelector"][
+            jobset.GKE_NODEPOOL_KEY
+        ],
         "cpu-np",
     )
     self.assertNotIn(
@@ -985,7 +1028,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertEqual(head_spec["priorityClassName"], "high")
     self.assertEqual(worker_spec["priorityClassName"], "high")
     self.assertEqual(
-        head_spec["nodeSelector"]["cloud.google.com/gke-nodepool"], "cpu-np"
+        head_spec["nodeSelector"][jobset.GKE_NODEPOOL_KEY], "cpu-np"
     )
     self.assertEqual(head_spec["nodeSelector"]["zone"], "us-central1-a")
 
@@ -1026,7 +1069,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     head_pod_spec = helper.pod_specs["pathways-head"]
     self.assertEqual(head_pod_spec["priorityClassName"], "high")
     self.assertEqual(
-        head_pod_spec["nodeSelector"]["cloud.google.com/gke-nodepool"],
+        head_pod_spec["nodeSelector"][jobset.GKE_NODEPOOL_KEY],
         "cpu-np",
     )
 
