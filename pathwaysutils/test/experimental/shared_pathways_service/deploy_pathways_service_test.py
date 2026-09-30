@@ -120,6 +120,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         topology="4x8",
         num_slices=2,
         shared_pathways_service=True,
+        max_restarts=30,
         max_slice_restarts=1000000,
     )
 
@@ -176,6 +177,35 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
 
     # Verify worker backoff limit is set to a large value
     self.assertGreaterEqual(worker_backoff, 1000000)
+
+  def test_run_deployment_max_restarts(self):
+    captured_config = {}
+
+    def capture_deploy(config):
+      nonlocal captured_config
+      captured_config = config
+
+    deploy_pathways_service.run_deployment(
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=2,
+        jobset_name="test-jobset",
+        gcs_bucket="gs://test-bucket",
+        server_image=(
+            "us-docker.pkg.dev/test-project/test-repo/server:test-tag"
+        ),
+        sidecar_image=(
+            "us-docker.pkg.dev/test-project/test-repo/sidecar:test-tag"
+        ),
+        dry_run=False,
+        deploy_func=capture_deploy,
+        max_restarts=3,
+    )
+
+    self.assertEqual(
+        captured_config["spec"]["failurePolicy"],
+        {"restartStrategy": "Recreate", "maxRestarts": 3},
+    )
 
 
 if __name__ == "__main__":

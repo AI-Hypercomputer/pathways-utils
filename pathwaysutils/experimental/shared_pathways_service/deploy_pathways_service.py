@@ -49,6 +49,16 @@ _DRY_RUN = flags.DEFINE_boolean(
     False,
     "If true, only print the generated YAML without deploying.",
 )
+_MAX_RESTARTS = flags.DEFINE_integer(
+    "max_restarts",
+    30,
+    "Maximum number of times the JobSet is recreated after any of its Jobs"
+    " fails before the JobSet is marked failed. This is a lifetime limit"
+    " across all failure causes. In practice restarts come from the Pathways"
+    " head (a crash, or an eviction such as a GKE node upgrade), since worker"
+    " Jobs have an effectively unlimited backoff limit.",
+    lower_bound=0,
+)
 _SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
 
 
@@ -172,6 +182,7 @@ def run_deployment(
     sidecar_image,
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
+    max_restarts: int = 30,
 ) -> None:
   """Executes the deployment logic."""
   # Use PathwaysJobSet builder instead of YAML template.
@@ -183,6 +194,7 @@ def run_deployment(
       topology=topology,
       num_slices=num_slices,
       shared_pathways_service=True,
+      max_restarts=max_restarts,
       # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
       # implemented
       max_slice_restarts=1000000,
@@ -264,6 +276,7 @@ def main(argv: Sequence[str]) -> None:
         server_image=server_image,
         sidecar_image=_SIDECAR_IMAGE.value,
         dry_run=_DRY_RUN.value,
+        max_restarts=_MAX_RESTARTS.value,
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
