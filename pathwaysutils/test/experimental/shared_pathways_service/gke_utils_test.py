@@ -1,11 +1,13 @@
 """Tests for gke_utils.py.
 """
 
+import datetime
 import io
 import socket
 import subprocess
 from typing import Any
 from unittest import mock
+import urllib.parse
 
 from absl.testing import absltest
 from kubernetes import client
@@ -337,21 +339,382 @@ class GKEUtilsTest(absltest.TestCase):
     ):
       gke_utils.check_pod_ready("test-pod-123")
 
-  def test_get_log_link(self):
-    cluster = "test-cluster"
-    project = "test-project"
-    job_name = "test-job"
-    log_link = gke_utils.get_log_link(
-        cluster=cluster, project=project, job_name=job_name
-    )
+  def _assert_log_link(
+      self,
+      log_link: str,
+      *,
+      cluster: str = "test-cluster",
+      project: str = "test-project",
+      job_name: str = "test-job",
+      namespace: str = "default",
+      time_params: dict[str, str],
+  ) -> None:
+    """Asserts each component of a Cloud Logging link, independent of order.
+
+    Args:
+      log_link: The Cloud Logging URL to check.
+      cluster: The expected GKE cluster name.
+      project: The expected GCP project ID.
+      job_name: The expected job name.
+      namespace: The expected Kubernetes namespace.
+      time_params: The expected time-range parameters (e.g. `startTime`,
+        `endTime`, `duration`). Empty if no time range is expected.
+    """
+    parsed = urllib.parse.urlparse(log_link)
+    self.assertEqual(parsed.scheme, "https")
+    self.assertEqual(parsed.netloc, "console.cloud.google.com")
+    self.assertEqual(parsed.path, "/logs/query")
     self.assertEqual(
-        log_link,
-        r"https://console.cloud.google.com/logs/query;query=resource.type%3D"
-        r"%22k8s_container%22%0Aresource.labels.cluster_name%3D"
-        "%22test-cluster%22%0Aresource.labels.namespace_name%3D"
-        "%22default%22%0Alabels.k8s-pod%2Fjob-name%3A%22test-job%22;"
-        "duration=PT1H?project=test-project",
+        dict(urllib.parse.parse_qsl(parsed.query)), {"project": project}
     )
+
+    link_params = dict(
+        param.split("=", 1) for param in parsed.params.split(";")
+    )
+    log_filter = urllib.parse.unquote(link_params.pop("query"))
+    self.assertCountEqual(
+        log_filter.splitlines(),
+        [
+            'resource.type="k8s_container"',
+            f'resource.labels.cluster_name="{cluster}"',
+            f'resource.labels.namespace_name="{namespace}"',
+            f'labels.k8s-pod/job-name:"{job_name}"',
+        ],
+    )
+    self.assertEqual(link_params, time_params)
+
+  def test_get_log_link(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster", project="test-project", job_name="test-job"
+    )
+    self._assert_log_link(log_link, time_params={"duration": "PT1H"})
+
+  def test_get_log_link_with_time_window_str(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time="2026-09-10T10:00:00.000Z",
+        end_time="2026-09-10T10:10:00.000Z",
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_time_window_datetime(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time=datetime.datetime(
+            2026, 9, 10, 10, 0, 0, tzinfo=datetime.timezone.utc
+        ),
+        end_time=datetime.datetime(
+            2026, 9, 10, 10, 10, 0, tzinfo=datetime.timezone.utc
+        ),
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_naive_datetime_assumes_utc(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time=datetime.datetime(2026, 9, 10, 10, 0, 0),
+        end_time=datetime.datetime(2026, 9, 10, 10, 10, 0),
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_aware_non_utc_datetime_converts_to_utc(self):
+    tz = datetime.timezone(datetime.timedelta(hours=2))
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time=datetime.datetime(2026, 9, 10, 12, 0, 0, tzinfo=tz),
+        end_time=datetime.datetime(2026, 9, 10, 12, 10, 0, tzinfo=tz),
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_without_time_window_omits_time_param(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        duration=None,
+    )
+    self._assert_log_link(log_link, time_params={})
+
+  def test_get_log_link_with_only_start_time_uses_window_after_start(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time=datetime.datetime(
+            2026, 9, 10, 10, 0, 0, tzinfo=datetime.timezone.utc
+        ),
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_only_start_time_str_uses_window_after_start(
+      self,
+  ):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        start_time="2026-09-10T10:00:00.000Z",
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_only_end_time_uses_window_before_end(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        end_time="2026-09-10T10:10:00.000Z",
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_only_end_time_naive_datetime_assumes_utc(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        end_time=datetime.datetime(2026, 9, 10, 10, 10, 0),
+    )
+    self._assert_log_link(
+        log_link,
+        time_params={
+            "startTime": "2026-09-10T10:00:00.000Z",
+            "endTime": "2026-09-10T10:10:00.000Z",
+        },
+    )
+
+  def test_get_log_link_with_only_invalid_start_time_raises(self):
+    with self.assertRaises(ValueError):
+      gke_utils.get_log_link(
+          cluster="test-cluster",
+          project="test-project",
+          job_name="test-job",
+          start_time="not-a-timestamp",
+      )
+
+  def test_get_log_link_with_custom_namespace(self):
+    log_link = gke_utils.get_log_link(
+        cluster="test-cluster",
+        project="test-project",
+        job_name="test-job",
+        namespace="custom-ns",
+    )
+    self._assert_log_link(
+        log_link, namespace="custom-ns", time_params={"duration": "PT1H"}
+    )
+
+  def test_get_current_kube_context_from_gke_context(self):
+    mock_active_context = {
+        "name": "gke_test-proj_us-central1_test-cl",
+        "context": {"cluster": "gke_test-proj_us-central1_test-cl"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      self.assertEqual(
+          gke_utils.get_current_kube_context(),
+          ("test-cl", "test-proj", "us-central1"),
+      )
+
+  def test_get_current_kube_context_non_gke_context(self):
+    mock_active_context = {
+        "name": "minikube",
+        "context": {"cluster": "minikube"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      self.assertEqual(
+          gke_utils.get_current_kube_context(), ("minikube", None, None)
+      )
+
+  def test_get_current_kube_context_malformed_gke_context(self):
+    mock_active_context = {
+        "name": "gke_test-proj_us-central1",
+        "context": {"cluster": "gke_test-proj_us-central1"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      self.assertEqual(
+          gke_utils.get_current_kube_context(), (None, None, None)
+      )
+
+  def test_get_current_kube_context_no_active_context(self):
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([], None),
+    ):
+      self.assertEqual(
+          gke_utils.get_current_kube_context(), (None, None, None)
+      )
+
+  def test_get_current_kube_context_error(self):
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        side_effect=k8s_config.ConfigException("no kubeconfig"),
+    ):
+      self.assertEqual(
+          gke_utils.get_current_kube_context(), (None, None, None)
+      )
+
+  def test_get_current_kube_context_ignores_environment(self):
+    """Tests that the strict reader does not fall back to the environment."""
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([], None),
+    ):
+      with mock.patch.dict(
+          "os.environ",
+          {"GKE_CLUSTER": "env-cl", "PROJECT": "env-proj"},
+          clear=False,
+      ):
+        self.assertEqual(
+            gke_utils.get_current_kube_context(), (None, None, None)
+        )
+
+  def test_get_current_cluster_and_project_from_kubeconfig(self):
+    mock_active_context = {
+        "name": "gke_test-proj_us-central1_test-cl",
+        "context": {"cluster": "gke_test-proj_us-central1_test-cl"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      cluster, project = gke_utils.get_current_cluster_and_project()
+      self.assertEqual(cluster, "test-cl")
+      self.assertEqual(project, "test-proj")
+
+  def test_get_current_cluster_and_project_fallback_env(self):
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([], None),
+    ):
+      with mock.patch.dict(
+          "os.environ",
+          {"GKE_CLUSTER": "env-cl", "PROJECT": "env-proj"},
+          clear=False,
+      ):
+        cluster, project = gke_utils.get_current_cluster_and_project()
+        self.assertEqual(cluster, "env-cl")
+        self.assertEqual(project, "env-proj")
+
+  def test_get_current_cluster_and_project_non_gke_context(self):
+    mock_active_context = {
+        "name": "minikube",
+        "context": {"cluster": "minikube"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      with mock.patch.dict("os.environ", {}, clear=True):
+        cluster, project = gke_utils.get_current_cluster_and_project()
+        self.assertEqual(cluster, "minikube")
+        self.assertIsNone(project)
+
+  def test_get_current_cluster_and_project_empty_context_name(self):
+    mock_active_context = {"name": "", "context": {}}
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      with mock.patch.dict("os.environ", {}, clear=True):
+        cluster, project = gke_utils.get_current_cluster_and_project()
+        self.assertIsNone(cluster)
+        self.assertIsNone(project)
+
+  def test_get_current_cluster_and_project_malformed_gke_context(self):
+    mock_active_context = {
+        "name": "gke_test-proj_us-central1",
+        "context": {"cluster": "gke_test-proj_us-central1"},
+    }
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        return_value=([mock_active_context], mock_active_context),
+    ):
+      with mock.patch.dict("os.environ", {}, clear=True):
+        cluster, project = gke_utils.get_current_cluster_and_project()
+        self.assertIsNone(cluster)
+        self.assertIsNone(project)
+
+  def test_get_current_cluster_and_project_kubeconfig_error_falls_back(self):
+    with mock.patch.object(
+        k8s_config,
+        "list_kube_config_contexts",
+        side_effect=k8s_config.ConfigException("no kubeconfig"),
+    ):
+      with mock.patch.dict(
+          "os.environ",
+          {"CLUSTER": "env-cl", "GOOGLE_CLOUD_PROJECT": "env-proj"},
+          clear=True,
+      ):
+        cluster, project = gke_utils.get_current_cluster_and_project()
+        self.assertEqual(cluster, "env-cl")
+        self.assertEqual(project, "env-proj")
 
   def test_wait_for_pod_success(self):
     """Tests that wait_for_pod returns the pod name on success."""
@@ -575,7 +938,9 @@ class GKEUtilsTest(absltest.TestCase):
         returncode=0,
         stdout="\n",
     )
-    with self.assertRaisesRegex(RuntimeError, "Failed to get pod name. Expected format:"):
+    with self.assertRaisesRegex(
+        RuntimeError, "Failed to get pod name. Expected format:"
+    ):
       gke_utils.get_pod_from_job("test-job")
 
   def test_get_pod_from_job_invalid_format_no_prefix(self):
@@ -587,7 +952,9 @@ class GKEUtilsTest(absltest.TestCase):
         returncode=0,
         stdout="test-pod-123\n",
     )
-    with self.assertRaisesRegex(RuntimeError, "Failed to get pod name. Expected format:"):
+    with self.assertRaisesRegex(
+        RuntimeError, "Failed to get pod name. Expected format:"
+    ):
       gke_utils.get_pod_from_job("test-job")
 
   def test_get_pod_from_job_invalid_format_too_many_slashes(self):
@@ -599,7 +966,9 @@ class GKEUtilsTest(absltest.TestCase):
         returncode=0,
         stdout="pod/test-pod/extra\n",
     )
-    with self.assertRaisesRegex(RuntimeError, "Failed to get pod name. Expected format:"):
+    with self.assertRaisesRegex(
+        RuntimeError, "Failed to get pod name. Expected format:"
+    ):
       gke_utils.get_pod_from_job("test-job")
 
   def test_test_remote_connection_success(self):
@@ -627,7 +996,11 @@ class GKEUtilsTest(absltest.TestCase):
 
   def test_enable_port_forwarding_pick_port_fails(self):
     self.enter_context(
-        mock.patch.object(portpicker, "pick_unused_port", side_effect=ValueError("pick failed"))
+        mock.patch.object(
+            portpicker,
+            "pick_unused_port",
+            side_effect=ValueError("pick failed"),
+        )
     )
     with self.assertRaisesRegex(ValueError, "pick failed"):
       gke_utils.enable_port_forwarding("test-pod", 8080)
@@ -637,7 +1010,9 @@ class GKEUtilsTest(absltest.TestCase):
         mock.patch.object(portpicker, "pick_unused_port", return_value=12345)
     )
     self.enter_context(
-        mock.patch.object(subprocess, "Popen", side_effect=OSError("Popen failed"))
+        mock.patch.object(
+            subprocess, "Popen", side_effect=OSError("Popen failed")
+        )
     )
     with self.assertRaisesRegex(OSError, "Popen failed"):
       gke_utils.enable_port_forwarding("test-pod", 8080)
@@ -652,8 +1027,12 @@ class GKEUtilsTest(absltest.TestCase):
     mock_process = mock_popen.return_value
     mock_process.stdout = None
     mock_process.communicate.return_value = ("stdout", "stderr_out")
-    
-    with self.assertRaisesRegex(RuntimeError, "Failed to start port forwarding: stdout not available.\nSTDERR: stderr_out"):
+
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "Failed to start port forwarding: stdout not available.\nSTDERR: "
+        "stderr_out",
+    ):
       gke_utils.enable_port_forwarding("test-pod", 8080)
     mock_process.terminate.assert_called_once()
     mock_process.communicate.assert_called_once()
@@ -685,7 +1064,9 @@ class GKEUtilsTest(absltest.TestCase):
     mock_run.side_effect = subprocess.CalledProcessError(
         returncode=1, cmd="kubectl rollout", stderr="rollout failed"
     )
-    with self.assertRaisesRegex(RuntimeError, "Deployment did not become ready: rollout failed"):
+    with self.assertRaisesRegex(
+        RuntimeError, "Deployment did not become ready: rollout failed"
+    ):
       gke_utils.wait_for_deployment("my-deploy", "my-ns")
 
   def test_wait_for_service_ip_success_first_try(self):
