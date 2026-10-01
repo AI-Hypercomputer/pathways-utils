@@ -106,7 +106,6 @@ class JobSetManifestHelper:
     return matches
 
 
-
 class PathwaysJobSetTest(parameterized.TestCase):
 
   def _create_jobset(
@@ -328,7 +327,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_handles_none_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force metadata to be None to simulate imported templates or raw specs without metadata
     pw_jobset._head_job_template.metadata = None
     pw_jobset._head_job_template.spec.template.metadata = None
@@ -342,7 +341,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         bucket="my-bucket",
     )
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertEqual(helper.job_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.pod_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.job_metadatas["pathways-worker"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
@@ -350,7 +349,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_preserves_existing_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate metadata, annotations, and labels
     pw_jobset._head_job_template.metadata = client.V1ObjectMeta(
         labels={"existing-job-label": "value"},
@@ -403,14 +402,14 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_colocated_python_handles_none_volumes(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force volumes to be None
     pw_jobset._worker_job_template.spec.template.spec.volumes = None
 
     # Should not crash and should correctly add volume
     pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertIn("shared-memory", helper.volumes["pathways-worker"])
 
   def test_add_colocated_python_sidecar(self):
@@ -436,9 +435,28 @@ class PathwaysJobSetTest(parameterized.TestCase):
         )
     )
 
+  def test_add_colocated_python_without_image_provisions_shm_only(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(image="")
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertNotIn(
+        "colocated-python-sidecar", helper.containers["pathways-worker"]
+    )
+    self.assertIn("shared-memory", helper.volumes["pathways-worker"])
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    self.assertTrue(
+        any(
+            m["name"] == "shared-memory"
+            and m["mountPath"] == "/tmp/shared-memory"
+            for m in worker["volumeMounts"]
+        )
+    )
+
   def test_add_colocated_python_preserves_init_containers(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate init container on worker pod
     worker_spec = pw_jobset._worker_job_template.spec.template.spec
     existing_init = client.V1Container(name="existing-init-container", image="ubuntu:latest")

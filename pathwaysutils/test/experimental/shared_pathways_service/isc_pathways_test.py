@@ -143,7 +143,6 @@ class ISCPathwaysTest(parameterized.TestCase):
         substituted_yaml,
     )
 
-
   def test_deploy_pathways_proxy_server_with_insecure_credentials_success(self):
     mock_deploy_gke_yaml = self.enter_context(
         mock.patch.object(
@@ -1417,6 +1416,178 @@ class ISCPathwaysTest(parameterized.TestCase):
           proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
       ):
         pass
+
+  def test_proxy_options_from_list_with_sidecar_image(self):
+    options = isc_pathways.ProxyOptions.from_list(
+        ["sidecar_image:us-docker.pkg.dev/my-proj/sidecar:custom"]
+    )
+    self.assertTrue(options.sidecar)
+    self.assertEqual(
+        options.sidecar_image, "us-docker.pkg.dev/my-proj/sidecar:custom"
+    )
+    self.assertEqual(options.sidecar_port, 50052)
+
+  def test_deploy_pathways_proxy_server_with_custom_sidecar_image(self):
+    mock_deploy_gke_yaml = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "deploy_gke_yaml", autospec=True
+        )
+    )
+    isc_pathways._deploy_pathways_proxy_server(
+        pathways_service="test-service:8080",
+        proxy_job_name="test-proxy",
+        expected_instances={"tpuv6e:2x2": 1},
+        gcs_scratch_location="test-bucket",
+        proxy_server_image="test-image:latest",
+        proxy_options=isc_pathways.ProxyOptions(
+            sidecar=True,
+            sidecar_image="custom-sidecar:latest",
+            sidecar_port=50052,
+            sidecar_connect_timeout="300s",
+        ),
+    )
+    mock_deploy_gke_yaml.assert_called_once()
+    substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
+    self.assertIn("- --sidecar_name=external", substituted_yaml)
+    self.assertIn(
+        "- --cloud_pathways_external_sidecar_port=50052", substituted_yaml
+    )
+    self.assertIn(
+        "- --cloud_pathways_external_sidecar_connect_timeout=300s",
+        substituted_yaml,
+    )
+    self.assertIn("- --vmodule=location_map=2", substituted_yaml)
+
+  def test_wait_for_placement_injects_ephemeral_sidecar_into_placed_pods(self):
+    mock_inject = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "inject_ephemeral_sidecar", autospec=True
+        )
+    )
+    mock_wait_ephemeral = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "wait_for_ephemeral_container",
+            autospec=True,
+        )
+    )
+    mock_process = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_process.stdout = io.StringIO(
+        "I1001 12:00:00.000000 1 location_map.cc:1042] Transition slice"
+        " ClientSliceId(1) unplaced -> placed on worker pods:"
+        " [worker-pod-1-0, worker-pod-1-1]\n"
+    )
+    placed_pods: set[str] = set()
+
+    isc_pathways._wait_for_placement(
+        mock_process,
+        num_slices=1,
+        metrics_collector_inst=mock.Mock(),
+        sidecar_image="custom-sidecar:latest",
+        sidecar_port=50052,
+        placed_pods_out=placed_pods,
+    )
+
+    self.assertEqual(placed_pods, {"worker-pod-1-0", "worker-pod-1-1"})
+    mock_inject.assert_has_calls([
+        mock.call(
+            pod_name="worker-pod-1-0",
+            container_name="ephemeral-python-sidecar",
+            image="custom-sidecar:latest",
+            port=50052,
+        ),
+        mock.call(
+            pod_name="worker-pod-1-1",
+            container_name="ephemeral-python-sidecar",
+            image="custom-sidecar:latest",
+            port=50052,
+        ),
+    ])
+    mock_wait_ephemeral.assert_has_calls([
+        mock.call(
+            pod_name="worker-pod-1-0",
+            container_name="ephemeral-python-sidecar",
+        ),
+        mock.call(
+            pod_name="worker-pod-1-1",
+            container_name="ephemeral-python-sidecar",
+        ),
+    ])
+
+  def test_wait_for_placement_extracts_pods_from_vlog_sidecar_init(self):
+    mock_inject = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "inject_ephemeral_sidecar", autospec=True
+        )
+    )
+    mock_wait_ephemeral = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "wait_for_ephemeral_container",
+            autospec=True,
+        )
+    )
+    mock_process = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_process.stdout = io.StringIO(
+        "I1001 12:00:00.000000 1 location_map.cc:1042] Transition slice"
+        " ClientSliceId(1) unplaced -> placed\n"
+        "I1001 12:00:00.000100 1 location_map.cc:1178] Sidecar init request:"
+        ' resolved_addresses: "worker-pod-0-0.my-jobset:29005"\n'
+        "I1001 12:00:00.000200 1 location_map.cc:933] Component"
+        " reconfiguration after placement changes took 1ms\n"
+    )
+    placed_pods: set[str] = set()
+
+    isc_pathways._wait_for_placement(
+        mock_process,
+        num_slices=1,
+        metrics_collector_inst=mock.Mock(),
+        sidecar_image="custom-sidecar:latest",
+        sidecar_port=50052,
+        placed_pods_out=placed_pods,
+    )
+
+    self.assertEqual(placed_pods, {"worker-pod-0-0"})
+    mock_inject.assert_called_once_with(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+        image="custom-sidecar:latest",
+        port=50052,
+    )
+    mock_wait_ephemeral.assert_called_once_with(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+    )
+
+  def test_cleanup_deletes_placed_worker_pods(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    manager._placed_worker_pods = {"worker-pod-1-1", "worker-pod-1-0"}
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+    mock_delete_workers = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_worker_pods", autospec=True
+        )
+    )
+
+    manager._cleanup()
+
+    mock_delete_workers.assert_called_once_with(
+        ["worker-pod-1-0", "worker-pod-1-1"]
+    )
+    self.assertEmpty(manager._placed_worker_pods)
 
 
 class KubeConfigCredentialsTest(parameterized.TestCase):

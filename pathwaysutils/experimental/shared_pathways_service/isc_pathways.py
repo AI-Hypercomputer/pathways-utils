@@ -8,6 +8,7 @@ import gc
 import logging
 import os
 import random
+import re
 import signal
 import string
 import subprocess
@@ -44,6 +45,10 @@ _JAX_BACKEND_TARGET_HOSTNAME = "grpc://127.0.0.1"
 DEFAULT_PROXY_IMAGE = (
     "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
 )
+EPHEMERAL_SIDECAR_CONTAINER_NAME = "ephemeral-python-sidecar"
+DEFAULT_SIDECAR_PORT = 50051
+EPHEMERAL_SIDECAR_PORT = 50052
+DEFAULT_SIDECAR_CONNECT_TIMEOUT = "300s"
 
 _logger = logging.getLogger(__name__)
 
@@ -57,16 +62,26 @@ class ProxyOptions:
       proxy server.
     xla_flags: A list of XLA flags to pass to the proxy server.
     sidecar: Whether to use the worker sidecar or not.
+    sidecar_image: Optional custom sidecar image to inject as an ephemeral
+      container into placed worker pods.
+    sidecar_port: Port used by the external sidecar gRPC server.
+    sidecar_connect_timeout: Timeout for connecting to the external sidecar.
   """
   use_insecure_credentials: bool = False
   xla_flags: list[str] = dataclasses.field(default_factory=list)
   sidecar: bool = False
+  sidecar_image: str | None = None
+  sidecar_port: int = DEFAULT_SIDECAR_PORT
+  sidecar_connect_timeout: str = DEFAULT_SIDECAR_CONNECT_TIMEOUT
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
     use_sidecar = False
+    sidecar_image = None
+    sidecar_port = DEFAULT_SIDECAR_PORT
+    sidecar_connect_timeout = DEFAULT_SIDECAR_CONNECT_TIMEOUT
     xla_flags = []
     for option in options or []:
       if ":" in option:
@@ -76,6 +91,12 @@ class ProxyOptions:
           use_insecure = value.strip().lower() == "true"
         elif key_strip == "sidecar":
           use_sidecar = value.strip().lower() == "true"
+        elif key_strip == "sidecar_image":
+          val_strip = value.strip()
+          if val_strip:
+            sidecar_image = val_strip
+            use_sidecar = True
+            sidecar_port = EPHEMERAL_SIDECAR_PORT
         elif key_strip == "xla_flags":
           val_strip = value.strip()
           if (
@@ -95,6 +116,9 @@ class ProxyOptions:
         use_insecure_credentials=use_insecure,
         xla_flags=xla_flags,
         sidecar=use_sidecar,
+        sidecar_image=sidecar_image,
+        sidecar_port=sidecar_port,
+        sidecar_connect_timeout=sidecar_connect_timeout,
     )
 
 
@@ -151,8 +175,17 @@ def _deploy_pathways_proxy_server(
     )
     proxy_args_str = "\n" + proxy_args_str
 
-  if proxy_options.sidecar:
+  if proxy_options.sidecar or proxy_options.sidecar_image:
     proxy_args_str += "\n        - --sidecar_name=external"
+  if proxy_options.sidecar_image:
+    proxy_args_str += (
+        "\n        -"
+        f" --cloud_pathways_external_sidecar_port={proxy_options.sidecar_port}"
+        "\n        -"
+        " --cloud_pathways_external_sidecar_connect_timeout="
+        f"{proxy_options.sidecar_connect_timeout}"
+        "\n        - --vmodule=location_map=2"
+    )
 
   escaped_proxy_server_image = (
       proxy_server_image.replace("\\", "\\\\")
@@ -179,12 +212,66 @@ def _deploy_pathways_proxy_server(
   _logger.info("Successfully deployed Pathways proxy.")
 
 
+def _extract_pod_names_from_log_line(line: str) -> list[str]:
+  """Extracts worker Pod names from a pw-proxy log line."""
+  pods = []
+  # Format 1: Transition slice ... unplaced -> placed on worker pods: [p1, p2]
+  match = re.search(r"on worker pods:\s*\[([^\]]+)\]", line, re.IGNORECASE)
+  if match:
+    for item in match.group(1).split(","):
+      pod = item.strip().split(".")[0].split(":")[0]
+      if pod:
+        pods.append(pod)
+  # Format 2: VLOG(2) Sidecar init request resolved_addresses: "pod.jobset:port"
+  for addr in re.findall(r'resolved_addresses:\s*"([^"]+)"', line):
+    pod = addr.strip().split(".")[0].split(":")[0]
+    if pod:
+      pods.append(pod)
+  return pods
+
+
+def _inject_ephemeral_sidecars(
+    pod_names: Iterable[str],
+    sidecar_image: str,
+    sidecar_port: int,
+) -> None:
+  """Injects and waits for the ephemeral sidecar container on placed pods."""
+  pods = sorted(set(pod_names))
+  if not pods:
+    _logger.warning(
+        "No placed worker pods found in proxy logs; skipping ephemeral sidecar"
+        " injection."
+    )
+    return
+  _logger.info(
+      "Injecting ephemeral sidecar image '%s' into %d placed worker pod(s): %s",
+      sidecar_image,
+      len(pods),
+      pods,
+  )
+  for pod_name in pods:
+    gke_utils.inject_ephemeral_sidecar(
+        pod_name=pod_name,
+        container_name=EPHEMERAL_SIDECAR_CONTAINER_NAME,
+        image=sidecar_image,
+        port=sidecar_port,
+    )
+  for pod_name in pods:
+    gke_utils.wait_for_ephemeral_container(
+        pod_name=pod_name,
+        container_name=EPHEMERAL_SIDECAR_CONTAINER_NAME,
+    )
+
+
 def _wait_for_placement(
     log_process: subprocess.Popen[str],
     num_slices: int,
     metrics_collector_inst: Any = None,
     start_time: float | None = None,
     total_chips: int = 0,
+    sidecar_image: str | None = None,
+    sidecar_port: int = EPHEMERAL_SIDECAR_PORT,
+    placed_pods_out: set[str] | None = None,
 ) -> None:
   """Waits for the placement to be complete by checking proxy logs."""
   _logger.info("Streaming proxy logs until the placement is complete...")
@@ -195,7 +282,9 @@ def _wait_for_placement(
       "FAILED_PRECONDITION",
   ]
   end_phrase = "unplaced -> placed"
+  reconfig_phrase = "component reconfiguration after placement changes"
   placement_count = 0
+  placed_pods: set[str] = set()
 
   if not log_process.stdout:
     _logger.error("Log streaming process stdout is empty. Terminating.")
@@ -206,10 +295,27 @@ def _wait_for_placement(
         f"STDERR: {stderr}"
     )
 
+  def _complete_placement() -> None:
+    if placed_pods_out is not None:
+      placed_pods_out.update(placed_pods)
+    if sidecar_image:
+      _inject_ephemeral_sidecars(placed_pods, sidecar_image, sidecar_port)
+    if metrics_collector_inst is not None:
+      metrics_collector_inst.record_active_user(True)
+      metrics_collector_inst.record_capacity_in_use(total_chips)
+      if start_time:
+        duration = time.time() - start_time
+        metrics_collector_inst.record_assignment_time(duration)
+        metrics_collector_inst.record_successful_request()
+
+  waiting_for_vlog_pods = False
   for line in log_process.stdout:
     line_lower = line.lower()
     if any(keyword.lower() in line_lower for keyword in keywords):
       _logger.info("Proxy log: %s", line.strip())
+
+    for pod in _extract_pod_names_from_log_line(line):
+      placed_pods.add(pod)
 
     if end_phrase.lower() in line_lower:
       placement_count += 1
@@ -221,13 +327,18 @@ def _wait_for_placement(
         )
       else:
         _logger.info("TPU placement for %d slice(s) complete!", num_slices)
-        metrics_collector_inst.record_active_user(True)
-        metrics_collector_inst.record_capacity_in_use(total_chips)
-        if start_time:
-          duration = time.time() - start_time
-          metrics_collector_inst.record_assignment_time(duration)
-          metrics_collector_inst.record_successful_request()
-        break
+        if sidecar_image and not placed_pods:
+          waiting_for_vlog_pods = True
+        else:
+          _complete_placement()
+          return
+
+    if waiting_for_vlog_pods and reconfig_phrase in line_lower:
+      _complete_placement()
+      return
+
+  if waiting_for_vlog_pods:
+    _complete_placement()
 
 
 def _restore_env_var(key: str, original_value: str | None) -> None:
@@ -306,6 +417,7 @@ class _ISCPathways:
     self._old_jax_platforms_config = None
     self._old_jax_backend_target_config = None
     self.total_chips = self._get_total_chips()
+    self._placed_worker_pods: set[str] = set()
     self._cleaned_up = False
     self._cleanup_lock = threading.Lock()
     self._original_signal_handlers: dict[signal.Signals, Any] = {}
@@ -433,6 +545,25 @@ class _ISCPathways:
       os.environ[_JAX_PLATFORMS_KEY.upper()] = _JAX_PLATFORM_PROXY
       os.environ[_JAX_BACKEND_TARGET_KEY.upper()] = jax_backend_target
 
+      if self.proxy_options.sidecar_image and self.proxy_pod_name:
+        num_slices = sum(self.expected_tpu_instances.values())
+        self._log_process = gke_utils.stream_pod_logs(self.proxy_pod_name)
+        placement_thread = threading.Thread(
+            target=_wait_for_placement,
+            args=(
+                self._log_process,
+                num_slices,
+                self.metrics_collector,
+                self.start_time,
+                self.total_chips,
+                self.proxy_options.sidecar_image,
+                self.proxy_options.sidecar_port,
+                self._placed_worker_pods,
+            ),
+            daemon=True,
+        )
+        placement_thread.start()
+
       pathwaysutils.initialize()
       _logger.info(
           "Interactive supercomputing proxy client ready for cluster '%s'.",
@@ -505,6 +636,17 @@ class _ISCPathways:
           _logger.exception(
               "Failed to delete Pathways proxy GKE job: %r", e
           )
+
+      # Delete placed worker pods that had ephemeral sidecars injected so the
+      # JobSet controller recreates clean worker pods.
+      if self._placed_worker_pods:
+        _logger.info(
+            "Deleting %d worker pod(s) with ephemeral sidecar containers: %s",
+            len(self._placed_worker_pods),
+            sorted(self._placed_worker_pods),
+        )
+        gke_utils.delete_worker_pods(sorted(self._placed_worker_pods))
+        self._placed_worker_pods.clear()
 
       # Restore JAX variables.
       _logger.info("Restoring JAX env and config variables...")
@@ -583,6 +725,7 @@ def connect(
     proxy_job_name: str | None = None,
     proxy_server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
+    sidecar_image: str | None = None,
     collect_service_metrics: bool = False,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
@@ -599,10 +742,12 @@ def connect(
       random name will be generated.
     proxy_server_image: (Deprecated) The proxy server image to use. If not
       provided, it will be auto-detected from the Pathways service. If the given
-      proxy image is incompatible with the Pathways service, it will be
-      replaced with the compatible proxy image.
+      proxy image is incompatible with the Pathways service, it will be replaced
+      with the compatible proxy image.
     proxy_options: Configuration options for the Pathways proxy. If not
       provided, no extra options will be used.
+    sidecar_image: Optional custom colocated Python sidecar image to inject as
+      an ephemeral container into assigned worker pods.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service.
 
@@ -625,7 +770,7 @@ def connect(
       cluster=cluster, project=project, location=region
   )
 
-  server_image, sidecar_image = gke_utils.get_pathways_service_images(
+  server_image, service_sidecar_image = gke_utils.get_pathways_service_images(
       pathways_service
   )
   compatible_proxy_image = gke_utils.get_compatible_proxy_server_image(
@@ -645,8 +790,16 @@ def connect(
   proxy_server_image = compatible_proxy_image
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar and sidecar_image:
-    validators.validate_sidecar_image_versions(sidecar_image)
+  if sidecar_image:
+    proxy_options_obj.sidecar = True
+    proxy_options_obj.sidecar_image = sidecar_image
+    proxy_options_obj.sidecar_port = EPHEMERAL_SIDECAR_PORT
+
+  effective_sidecar_image = (
+      proxy_options_obj.sidecar_image or service_sidecar_image
+  )
+  if proxy_options_obj.sidecar and effective_sidecar_image:
+    validators.validate_sidecar_image_versions(effective_sidecar_image)
   _logger.info("Validation complete.")
 
   if not proxy_job_name:
@@ -670,20 +823,21 @@ def connect(
       collect_service_metrics=collect_service_metrics,
   ) as t:
     if t.proxy_pod_name:
-      num_slices = sum(t.expected_tpu_instances.values())
-      t._log_process = gke_utils.stream_pod_logs(t.proxy_pod_name)
-      placement_thread = threading.Thread(
-          target=_wait_for_placement,
-          args=(
-              t._log_process,
-              num_slices,
-              t.metrics_collector,
-              t.start_time,
-              t.total_chips,
-          ),
-          daemon=True,
-      )
-      placement_thread.start()
+      if not proxy_options_obj.sidecar_image:
+        num_slices = sum(t.expected_tpu_instances.values())
+        t._log_process = gke_utils.stream_pod_logs(t.proxy_pod_name)
+        placement_thread = threading.Thread(
+            target=_wait_for_placement,
+            args=(
+                t._log_process,
+                num_slices,
+                t.metrics_collector,
+                t.start_time,
+                t.total_chips,
+            ),
+            daemon=True,
+        )
+        placement_thread.start()
     else:
       _logger.warning(
           "proxy_pod_name not set on _ISCPathways instance, skipping background"
