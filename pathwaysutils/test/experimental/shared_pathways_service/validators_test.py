@@ -1,5 +1,6 @@
 """Tests for validation functions for the Shared Pathways service."""
 
+import sys
 from unittest import mock
 
 from absl import flags
@@ -308,6 +309,126 @@ class ValidatorsTest(parameterized.TestCase):
         validators.validate_sidecar_image_versions(
             "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
         )
+
+  def test_extract_sidecar_image_versions(self):
+    versions = validators.extract_sidecar_image_versions(
+        "us-docker.pkg.dev/proj/repo/sidecar:20260423-python_3.12-jax_0.10.0"
+    )
+    self.assertEqual(versions.python_version, "3.12")
+    self.assertEqual(versions.jax_version, "0.10.0")
+    self.assertEqual(versions.jaxlib_version, "0.10.0")
+
+    versions2 = validators.extract_sidecar_image_versions(
+        "us-docker.pkg.dev/proj/repo/sidecar:"
+        "20260831-maxtext-v0.2.4-jax0.11.1-pwutils"
+    )
+    self.assertIsNone(versions2.python_version)
+    self.assertEqual(versions2.jax_version, "0.11.1")
+    self.assertEqual(versions2.jaxlib_version, "0.11.1")
+
+    versions3 = validators.extract_sidecar_image_versions(
+        "us-docker.pkg.dev/proj/repo/sidecar:python_3.11-jax_0.10.0-jaxlib_0.9.0"
+    )
+    self.assertEqual(versions3.python_version, "3.11")
+    self.assertEqual(versions3.jax_version, "0.10.0")
+    self.assertEqual(versions3.jaxlib_version, "0.9.0")
+
+    versions_digest = validators.extract_sidecar_image_versions(
+        "us-docker.pkg.dev/proj/repo/sidecar@sha256:80b671827c0e6995d9aa615635981c21"
+    )
+    self.assertIsNone(versions_digest.python_version)
+    self.assertIsNone(versions_digest.jax_version)
+    self.assertIsNone(versions_digest.jaxlib_version)
+
+    versions_latest = validators.extract_sidecar_image_versions(
+        "us-docker.pkg.dev/proj/repo/sidecar:latest"
+    )
+    self.assertIsNone(versions_latest.python_version)
+    self.assertIsNone(versions_latest.jax_version)
+    self.assertIsNone(versions_latest.jaxlib_version)
+
+    versions_no_tag = validators.extract_sidecar_image_versions("sidecar")
+    self.assertIsNone(versions_no_tag.python_version)
+    self.assertIsNone(versions_no_tag.jax_version)
+    self.assertIsNone(versions_no_tag.jaxlib_version)
+
+  def test_validate_sidecar_image_versions_jaxlib_mismatch(self):
+    mock_sys_info = mock.Mock()
+    mock_sys_info.major = 3
+    mock_sys_info.minor = 12
+    mock_sys_info.micro = 8
+    mock_jaxlib = mock.Mock(__version__="0.9.0")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
+        "jax.__version__", "0.10.0"
+    ), mock.patch.dict(sys.modules, {"jaxlib": mock_jaxlib}):
+      with self.assertRaisesRegex(ValueError, "JAXLib version mismatch"):
+        validators.validate_sidecar_image_versions(
+            "us-docker.pkg.dev/.../sidecar:python_3.12-jax_0.10.0-jaxlib_0.10.0"
+        )
+
+  def test_validate_sidecar_image_versions_with_explicit_sidecar_versions(self):
+    mock_sys_info = mock.Mock()
+    mock_sys_info.major = 3
+    mock_sys_info.minor = 12
+    mock_sys_info.micro = 8
+    mock_jaxlib = mock.Mock(__version__="0.11.1")
+    digest_img = (
+        "us-docker.pkg.dev/proj/repo/sidecar@sha256:80b671827c0e6995d9aa615635981c21"
+    )
+    queried_versions = validators.SidecarVersions(
+        python_version="3.12",
+        jax_version="0.11.1",
+        jaxlib_version="0.11.1",
+    )
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
+        "jax.__version__", "0.11.1"
+    ), mock.patch.dict(sys.modules, {"jaxlib": mock_jaxlib}):
+      validators.validate_sidecar_image_versions(
+          digest_img, sidecar_versions=queried_versions
+      )
+
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
+        "jax.__version__", "0.10.0"
+    ), mock.patch.dict(sys.modules, {"jaxlib": mock_jaxlib}):
+      with self.assertRaisesRegex(
+          ValueError,
+          r"JAX version mismatch.*pip install jax==0\.11\.1 jaxlib==0\.11\.1",
+      ):
+        validators.validate_sidecar_image_versions(
+            digest_img, sidecar_versions=queried_versions
+        )
+
+  def test_format_sidecar_versions(self):
+    versions = validators.SidecarVersions(
+        python_version="3.12",
+        jax_version="0.11.1",
+        jaxlib_version="0.11.1",
+    )
+    text_out = validators.format_sidecar_versions(
+        pathways_service="test-service:29001",
+        sidecar_image="repo/sidecar:tag",
+        sidecar_versions=versions,
+    )
+    self.assertEqual(
+        text_out,
+        "Colocated Python sidecar found for Pathways service"
+        " 'test-service:29001':\n"
+        "  Sidecar Image: repo/sidecar:tag\n"
+        "  Python: 3.12\n"
+        "  JAX: 0.11.1\n"
+        "  JAXLib: 0.11.1\n"
+        "To install the matching JAX and JAXLib versions locally, run:\n"
+        "  pip install jax==0.11.1 jaxlib==0.11.1",
+    )
+
+  def test_format_sidecar_versions_no_jax_version(self):
+    versions = validators.SidecarVersions()
+    text_out = validators.format_sidecar_versions(
+        pathways_service="test-service:29001",
+        sidecar_image="repo/sidecar:latest",
+        sidecar_versions=versions,
+    )
+    self.assertIn("Could not determine JAX version", text_out)
 
 
 if __name__ == "__main__":

@@ -645,8 +645,20 @@ def connect(
   proxy_server_image = compatible_proxy_image
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar and sidecar_image:
-    validators.validate_sidecar_image_versions(sidecar_image)
+  if sidecar_image:
+    _, sidecar_versions = gke_utils.get_sidecar_versions(
+        pathways_service, sidecar_image=sidecar_image
+    )
+    _logger.info(
+        "\n%s",
+        validators.format_sidecar_versions(
+            pathways_service, sidecar_image, sidecar_versions
+        ),
+    )
+    if proxy_options_obj.sidecar:
+      validators.validate_sidecar_image_versions(
+          sidecar_image, sidecar_versions=sidecar_versions
+      )
   _logger.info("Validation complete.")
 
   if not proxy_job_name:
@@ -690,3 +702,30 @@ def connect(
           " _wait_for_placement."
       )
     yield t
+
+
+def get_sidecar_versions(
+    pathways_service: str,
+    cluster: str | None = None,
+    project: str | None = None,
+    region: str | None = None,
+    namespace: str = "default",
+) -> tuple[str | None, validators.SidecarVersions]:
+  """Gets the sidecar image and versions for the given Pathways service.
+
+  Args:
+    pathways_service: The service name and port of the Pathways head pod.
+    cluster: The name of the GKE cluster (optional).
+    project: The GCP project ID (optional).
+    region: The GCP region (optional).
+    namespace: The Kubernetes namespace (defaults to 'default').
+
+  Returns:
+    A tuple of (sidecar_image, SidecarVersions).
+  """
+  if cluster and project and region:
+    _ensure_cluster_credentials(
+        cluster=cluster, project=project, location=region
+    )
+  return gke_utils.get_sidecar_versions(pathways_service, namespace=namespace)
+
