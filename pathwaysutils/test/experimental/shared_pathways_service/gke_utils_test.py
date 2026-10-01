@@ -1593,6 +1593,825 @@ class GKEUtilsTest(absltest.TestCase):
     mock_proc.terminate.assert_called_once()
     mock_proc.wait.assert_called_once_with(timeout=10)
 
+  def _make_service_jobset(
+      self,
+      name: str = "my-jobset",
+      namespace: str = "default",
+      num_slices: int = 2,
+      vms_per_slice: int = 2,
+      suspend: bool = False,
+      terminal_state: str | None = None,
+      conditions: list[dict[str, Any]] | None = None,
+  ) -> dict[str, Any]:
+    jobset: dict[str, Any] = {
+        "apiVersion": "jobset.x-k8s.io/v1alpha2",
+        "kind": "JobSet",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "suspend": suspend,
+            "replicatedJobs": [
+                {
+                    "name": "pathways-head",
+                    "replicas": 1,
+                    "template": {
+                        "spec": {
+                            "parallelism": 1,
+                            "completions": 1,
+                        }
+                    },
+                },
+                {
+                    "name": "pathways-worker",
+                    "replicas": num_slices,
+                    "template": {
+                        "spec": {
+                            "parallelism": vms_per_slice,
+                            "completions": vms_per_slice,
+                        }
+                    },
+                },
+            ],
+        },
+        "status": {
+            "conditions": conditions or [],
+        },
+    }
+    if terminal_state:
+      jobset["status"]["terminalState"] = terminal_state
+    return jobset
+
+  def _make_pod_dict(
+      self,
+      name: str,
+      jobset_name: str,
+      replicated_job_name: str,
+      phase: str = "Running",
+      ready: bool = True,
+      waiting_reason: str | None = None,
+      waiting_message: str | None = None,
+      terminated_reason: str | None = None,
+      exit_code: int = 0,
+  ) -> dict[str, Any]:
+    container_status: dict[str, Any] = {"name": replicated_job_name}
+    if waiting_reason:
+      container_status["state"] = {
+          "waiting": {
+              "reason": waiting_reason,
+              "message": waiting_message or "",
+          }
+      }
+    elif terminated_reason:
+      container_status["state"] = {
+          "terminated": {
+              "reason": terminated_reason,
+              "exitCode": exit_code,
+          }
+      }
+    else:
+      container_status["state"] = {"running": {}}
+
+    return {
+        "metadata": {
+            "name": name,
+            "labels": {
+                "jobset.sigs.k8s.io/jobset-name": jobset_name,
+                "jobset.sigs.k8s.io/replicatedjob-name": replicated_job_name,
+            },
+        },
+        "status": {
+            "phase": phase,
+            "conditions": [
+                {
+                    "type": "Ready",
+                    "status": "True" if ready else "False",
+                }
+            ],
+            "containerStatuses": [container_status],
+        },
+    }
+
+  def test_extract_jobset_name_valid(self):
+    self.assertEqual(
+        gke_utils.extract_jobset_name(
+            "my-jobset-pathways-head-0-0.my-jobset:29001"
+        ),
+        "my-jobset",
+    )
+    self.assertEqual(
+        gke_utils.extract_jobset_name("my-jobset-pathways-head:29001"),
+        "my-jobset",
+    )
+    self.assertEqual(
+        gke_utils.extract_jobset_name("sps-cluster-pathways-head-0-0:8000"),
+        "sps-cluster",
+    )
+
+  def test_extract_jobset_name_invalid_raises(self):
+    with self.assertRaises(ValueError):
+      gke_utils.extract_jobset_name("my-jobset:29001")
+
+  def test_verify_pathways_service_is_up_success(self):
+    mock_creds = self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(num_slices=2, vms_per_slice=2)
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        ready=True,
+    )
+    worker_pods = []
+    for slice_idx in range(2):
+      for vm_idx in range(2):
+        worker_pods.append(
+            self._make_pod_dict(
+                name=f"my-jobset-pathways-worker-{slice_idx}-{vm_idx}",
+                jobset_name="my-jobset",
+                replicated_job_name="pathways-worker",
+                ready=True,
+            )
+        )
+    mock_core_api.list_namespaced_pod.return_value = {
+        "items": [head_pod] + worker_pods
+    }
+
+    gke_utils.verify_pathways_service_is_up(
+        cluster="my-cluster",
+        project="my-project",
+        region="us-central1",
+        pathways_service="my-jobset-pathways-head-0-0:29001",
+        tpu_count=2,
+    )
+
+    mock_creds.assert_called_once_with(
+        cluster_name="my-cluster",
+        project_id="my-project",
+        location="us-central1",
+    )
+    mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
+        group="jobset.x-k8s.io",
+        version="v1alpha2",
+        namespace="default",
+        plural="jobsets",
+        name="my-jobset",
+    )
+    mock_core_api.list_namespaced_pod.assert_called_once_with(
+        namespace="default",
+        label_selector="jobset.sigs.k8s.io/jobset-name=my-jobset",
+    )
+
+  def test_verify_pathways_service_is_up_jobset_not_found_404(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.side_effect = (
+        client.rest.ApiException(status=404, reason="Not Found")
+    )
+    with self.assertRaisesRegex(
+        RuntimeError, "JobSet 'my-jobset' was not found in namespace 'default'"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_jobset_api_error(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.side_effect = (
+        client.rest.ApiException(status=500, reason="Internal Server Error")
+    )
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "Failed to get Shared Pathways Service JobSet 'my-jobset'",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_jobset_suspended(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(suspend=True)
+    )
+    with self.assertRaisesRegex(
+        RuntimeError, "JobSet 'my-jobset' is suspended"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_jobset_terminal_state(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(terminal_state="Failed")
+    )
+    with self.assertRaisesRegex(
+        RuntimeError, "has terminated with state 'Failed'"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_jobset_failed_condition(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(
+            conditions=[
+                {
+                    "type": "Failed",
+                    "status": "True",
+                    "reason": "DeadlineExceeded",
+                    "message": "Job timed out",
+                }
+            ]
+        )
+    )
+    with self.assertRaisesRegex(
+        RuntimeError, "is in condition 'Failed'"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_list_pods_error(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    mock_core_api.list_namespaced_pod.side_effect = client.rest.ApiException(
+        status=500, reason="Error"
+    )
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "Failed to list pods for Shared Pathways Service JobSet 'my-jobset'",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_no_pods_found(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    mock_core_api.list_namespaced_pod.return_value = {"items": []}
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "No pods found for Shared Pathways Service JobSet 'my-jobset'",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_no_head_pod(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    worker_pod = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        ready=True,
+    )
+    mock_core_api.list_namespaced_pod.return_value = {"items": [worker_pod]}
+    with self.assertRaisesRegex(
+        RuntimeError, "head pod not found for JobSet 'my-jobset'"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_head_pod_not_ready(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        phase="Running",
+        ready=False,
+        waiting_reason="CrashLoopBackOff",
+        waiting_message="back-off 5m0s restarting failed container=pathways-rm",
+    )
+    worker_pod = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        ready=True,
+    )
+    mock_core_api.list_namespaced_pod.return_value = {
+        "items": [head_pod, worker_pod]
+    }
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "head pod 'my-jobset-pathways-head-0-0' is not ready.*CrashLoopBackOff",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_no_worker_pods(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        ready=True,
+    )
+    mock_core_api.list_namespaced_pod.return_value = {"items": [head_pod]}
+    with self.assertRaisesRegex(
+        RuntimeError, "worker pods not found for JobSet 'my-jobset'"
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_zero_ready_worker_pods(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset()
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        ready=True,
+    )
+    worker_pod = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        phase="Pending",
+        ready=False,
+        waiting_reason="ImagePullBackOff",
+    )
+    mock_core_api.list_namespaced_pod.return_value = {
+        "items": [head_pod, worker_pod]
+    }
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "No ready worker pods found for Shared Pathways Service JobSet"
+        " 'my-jobset'",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+      )
+
+  def test_verify_pathways_service_is_up_insufficient_ready_worker_pods(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(num_slices=2, vms_per_slice=2)
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        ready=True,
+    )
+    worker_pod_0 = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        ready=True,
+    )
+    worker_pod_1 = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-1",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        ready=True,
+    )
+    worker_pod_2 = self._make_pod_dict(
+        name="my-jobset-pathways-worker-1-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        phase="Failed",
+        ready=False,
+        terminated_reason="Error",
+        exit_code=1,
+    )
+    worker_pod_3 = self._make_pod_dict(
+        name="my-jobset-pathways-worker-1-1",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        phase="Failed",
+        ready=False,
+        terminated_reason="Error",
+        exit_code=1,
+    )
+    mock_core_api.list_namespaced_pod.return_value = {
+        "items": [
+            head_pod,
+            worker_pod_0,
+            worker_pod_1,
+            worker_pod_2,
+            worker_pod_3,
+        ]
+    }
+    with self.assertRaisesRegex(
+        RuntimeError,
+        "requires at least 4 ready pods.*but only 2 of 4 worker pods are"
+        " ready",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+          tpu_count=2,
+      )
+
+  def test_verify_pathways_service_is_up_tpu_count_exceeds_configured_slices(
+      self,
+  ):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(num_slices=2, vms_per_slice=2)
+    )
+    head_pod = self._make_pod_dict(
+        name="my-jobset-pathways-head-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-head",
+        ready=True,
+    )
+    worker_pod = self._make_pod_dict(
+        name="my-jobset-pathways-worker-0-0",
+        jobset_name="my-jobset",
+        replicated_job_name="pathways-worker",
+        ready=True,
+    )
+    mock_core_api.list_namespaced_pod.return_value = {
+        "items": [head_pod, worker_pod]
+    }
+    with self.assertRaisesRegex(
+        RuntimeError,
+        r"Requested 4 TPU slice\(s\), but Shared Pathways Service JobSet"
+        r" 'my-jobset' only has 2 slice\(s\) configured",
+    ):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+          tpu_count=4,
+      )
+
+  def test_verify_pathways_service_is_up_with_v1_pod_objects(self):
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_custom_api = mock.MagicMock(spec=client.CustomObjectsApi)
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "_get_k8s_custom_objects_api",
+            return_value=mock_custom_api,
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_custom_api.get_namespaced_custom_object.return_value = (
+        self._make_service_jobset(num_slices=1, vms_per_slice=1)
+    )
+    head_pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(
+            name="my-jobset-pathways-head-0-0",
+            labels={
+                "jobset.sigs.k8s.io/jobset-name": "my-jobset",
+                "jobset.sigs.k8s.io/replicatedjob-name": "pathways-head",
+            },
+        ),
+        status=client.V1PodStatus(
+            phase="Running",
+            conditions=[client.V1PodCondition(type="Ready", status="True")],
+            container_statuses=[
+                client.V1ContainerStatus(
+                    name="pathways-rm",
+                    ready=True,
+                    image="img",
+                    image_id="img_id",
+                    restart_count=0,
+                    state=client.V1ContainerState(
+                        running=client.V1ContainerStateRunning()
+                    ),
+                )
+            ],
+        ),
+    )
+    worker_pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(
+            name="my-jobset-pathways-worker-0-0",
+            labels={
+                "jobset.sigs.k8s.io/jobset-name": "my-jobset",
+                "jobset.sigs.k8s.io/replicatedjob-name": "pathways-worker",
+            },
+        ),
+        status=client.V1PodStatus(
+            phase="Running",
+            conditions=[client.V1PodCondition(type="Ready", status="True")],
+            container_statuses=[
+                client.V1ContainerStatus(
+                    name="pathways-worker",
+                    ready=True,
+                    image="img",
+                    image_id="img_id",
+                    restart_count=0,
+                    state=client.V1ContainerState(
+                        running=client.V1ContainerStateRunning()
+                    ),
+                )
+            ],
+        ),
+    )
+    mock_core_api.list_namespaced_pod.return_value = client.V1PodList(
+        items=[head_pod, worker_pod]
+    )
+
+    gke_utils.verify_pathways_service_is_up(
+        cluster="my-cluster",
+        project="my-project",
+        region="us-central1",
+        pathways_service="my-jobset-pathways-head-0-0:29001",
+        tpu_count=1,
+    )
+
+  def test_verify_pathways_service_is_up_invalid_namespace(self):
+    with self.assertRaises(ValueError):
+      gke_utils.verify_pathways_service_is_up(
+          cluster="my-cluster",
+          project="my-project",
+          region="us-central1",
+          pathways_service="my-jobset-pathways-head-0-0:29001",
+          namespace="invalid namespace!",
+      )
+
 
 if __name__ == "__main__":
   absltest.main()

@@ -80,6 +80,38 @@ _COLLECT_SERVICE_METRICS = flags.DEFINE_bool(
 )
 
 
+def verify_service_is_up(
+    *,
+    cluster: str,
+    project: str,
+    region: str,
+    pathways_service: str,
+    tpu_count: int | None = None,
+    namespace: str = "default",
+) -> None:
+  """Verifies that the Shared Pathways Service is running and ready.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    region: The GCP region.
+    pathways_service: The address and port of the Pathways Resource Manager.
+    tpu_count: Optional expected number of TPU slices.
+    namespace: The Kubernetes namespace.
+
+  Raises:
+    RuntimeError: If the Shared Pathways Service is not up or not ready.
+  """
+  gke_utils.verify_pathways_service_is_up(
+      cluster=cluster,
+      project=project,
+      region=region,
+      pathways_service=pathways_service,
+      tpu_count=tpu_count,
+      namespace=namespace,
+  )
+
+
 def run_command(
     *,
     cluster: str,
@@ -94,6 +126,7 @@ def run_command(
     proxy_options: Sequence[str] | None = None,
     collect_service_metrics: bool = False,
     connect_fn: Callable[..., ContextManager[Any]] = isc_pathways.connect,
+    verify_service_fn: Callable[..., None] | None = None,
 ) -> None:
   """Run the TPU workload within a Shared Pathways connection.
 
@@ -113,8 +146,11 @@ def run_command(
       Pathways Service. Defaults to False.
     connect_fn: The function to use for establishing the connection context,
       expected to be a callable that returns a context manager.
+    verify_service_fn: The function to use for verifying that the Shared
+      Pathways Service is up and ready before connecting.
 
   Raises:
+    RuntimeError: If the Shared Pathways Service is not up or ready.
     subprocess.CalledProcessError: If the workload command fails.
   """
   if proxy_server_image:
@@ -125,6 +161,16 @@ def run_command(
         DeprecationWarning,
         stacklevel=2,
     )
+  if verify_service_fn is None:
+    verify_service_fn = verify_service_is_up
+  logging.info("Verifying Shared Pathways Service is up and ready...")
+  verify_service_fn(
+      cluster=cluster,
+      project=project,
+      region=region,
+      pathways_service=pathways_service,
+      tpu_count=tpu_count,
+  )
   logging.info("Connecting to Shared Pathways Service...")
   with connect_fn(
       cluster=cluster,
