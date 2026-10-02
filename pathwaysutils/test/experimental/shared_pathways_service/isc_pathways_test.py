@@ -10,6 +10,7 @@ from absl import flags
 from absl.testing import absltest
 from absl.testing import parameterized
 from pathwaysutils.experimental.shared_pathways_service import isc_pathways
+from pathwaysutils.experimental.shared_pathways_service import validators
 
 
 class ISCPathwaysTest(parameterized.TestCase):
@@ -825,6 +826,7 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
     )
+    sidecar_img = "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
     mock_get_images = self.enter_context(
         mock.patch.object(
             isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
@@ -832,7 +834,18 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     mock_get_images.return_value = (
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
+        sidecar_img,
+    )
+    expected_versions = validators.SidecarVersions(
+        python_version="3.12", jax_version="0.10.0", jaxlib_version="0.10.0"
+    )
+    mock_get_sidecar_versions = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "get_sidecar_versions",
+            autospec=True,
+            return_value=(sidecar_img, expected_versions),
+        )
     )
     mock_validate_versions = self.enter_context(
         mock.patch.object(
@@ -852,23 +865,108 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_manager_instance.proxy_pod_name = "test-pod-123"
     mock_manager_instance.expected_tpu_instances = {"tpuv6e:2x2": 1}
 
-    with isc_pathways.connect(
-        cluster="test-cluster",
-        project="test-project",
-        region="test-region",
-        gcs_bucket="test-bucket",
-        pathways_service="test-service-pathways-head:1234",
-        expected_tpu_instances={"tpuv6e:2x2": 1},
-        proxy_options=["sidecar:true"],
-    ):
-      pass
+    with self.assertLogs(isc_pathways._logger, level="INFO") as log_cm:
+      with isc_pathways.connect(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service-pathways-head:1234",
+          expected_tpu_instances={"tpuv6e:2x2": 1},
+          proxy_options=["sidecar:true"],
+      ):
+        pass
 
+    self.assertTrue(
+        any(
+            "Colocated Python sidecar found for Pathways service" in msg
+            and "pip install jax==0.10.0 jaxlib==0.10.0" in msg
+            for msg in log_cm.output
+        )
+    )
     mock_get_images.assert_called_once_with(
         "test-service-pathways-head:1234"
     )
-    mock_validate_versions.assert_called_once_with(
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+    mock_get_sidecar_versions.assert_called_once_with(
+        "test-service-pathways-head:1234", sidecar_image=sidecar_img
     )
+    mock_validate_versions.assert_called_once_with(
+        sidecar_img, sidecar_versions=expected_versions
+    )
+
+  def test_connect_logs_sidecar_versions_by_default_when_sidecar_image_present(
+      self,
+  ):
+    self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    sidecar_img = "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        sidecar_img,
+    )
+    expected_versions = validators.SidecarVersions(
+        python_version="3.12", jax_version="0.10.0", jaxlib_version="0.10.0"
+    )
+    mock_get_sidecar_versions = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "get_sidecar_versions",
+            autospec=True,
+            return_value=(sidecar_img, expected_versions),
+        )
+    )
+    mock_validate_versions = self.enter_context(
+        mock.patch.object(
+            isc_pathways.validators,
+            "validate_sidecar_image_versions",
+            autospec=True,
+        )
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+
+    mock_manager_instance = (
+        mock_isc_pathways.return_value.__enter__.return_value
+    )
+    mock_manager_instance.proxy_pod_name = "test-pod-123"
+    mock_manager_instance.expected_tpu_instances = {"tpuv6e:2x2": 1}
+
+    with self.assertLogs(isc_pathways._logger, level="INFO") as log_cm:
+      with isc_pathways.connect(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service-pathways-head:1234",
+          expected_tpu_instances={"tpuv6e:2x2": 1},
+      ):
+        pass
+
+    self.assertTrue(
+        any(
+            "Colocated Python sidecar found for Pathways service" in msg
+            and "pip install jax==0.10.0 jaxlib==0.10.0" in msg
+            for msg in log_cm.output
+        )
+    )
+    mock_get_images.assert_called_once_with(
+        "test-service-pathways-head:1234"
+    )
+    mock_get_sidecar_versions.assert_called_once_with(
+        "test-service-pathways-head:1234", sidecar_image=sidecar_img
+    )
+    mock_validate_versions.assert_not_called()
 
   def test_connect_with_sidecar_validation_mismatch_raises_error(self):
     self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
@@ -877,6 +975,7 @@ class ISCPathwaysTest(parameterized.TestCase):
             isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
         )
     )
+    sidecar_img = "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
     mock_get_images = self.enter_context(
         mock.patch.object(
             isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
@@ -884,7 +983,18 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     mock_get_images.return_value = (
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
+        sidecar_img,
+    )
+    expected_versions = validators.SidecarVersions(
+        python_version="3.12", jax_version="0.10.0", jaxlib_version="0.10.0"
+    )
+    mock_get_sidecar_versions = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "get_sidecar_versions",
+            autospec=True,
+            return_value=(sidecar_img, expected_versions),
+        )
     )
     mock_validate_versions = self.enter_context(
         mock.patch.object(
@@ -910,8 +1020,11 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_get_images.assert_called_once_with(
         "test-service-pathways-head:1234"
     )
+    mock_get_sidecar_versions.assert_called_once_with(
+        "test-service-pathways-head:1234", sidecar_image=sidecar_img
+    )
     mock_validate_versions.assert_called_once_with(
-        "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+        sidecar_img, sidecar_versions=expected_versions
     )
 
   @parameterized.named_parameters(
@@ -1417,6 +1530,61 @@ class ISCPathwaysTest(parameterized.TestCase):
           proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
       ):
         pass
+
+  def test_get_sidecar_versions_fetches_credentials_when_cluster_provided(self):
+    mock_fetch = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_sidecar_versions", autospec=True
+        )
+    )
+    mock_versions = mock.Mock()
+    mock_get.return_value = ("sidecar_img", mock_versions)
+
+    img, versions = isc_pathways.get_sidecar_versions(
+        pathways_service="test-service-pathways-head:1234",
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+    )
+    mock_fetch.assert_called_once_with(
+        cluster_name="test-cluster",
+        project_id="test-project",
+        location="test-region",
+    )
+    mock_get.assert_called_once_with(
+        "test-service-pathways-head:1234", namespace="default"
+    )
+    self.assertEqual(img, "sidecar_img")
+    self.assertIs(versions, mock_versions)
+
+  def test_get_sidecar_versions_without_cluster_skips_fetch_credentials(self):
+    mock_fetch = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_sidecar_versions", autospec=True
+        )
+    )
+    mock_versions = mock.Mock()
+    mock_get.return_value = ("sidecar_img", mock_versions)
+
+    img, versions = isc_pathways.get_sidecar_versions(
+        pathways_service="test-service-pathways-head:1234"
+    )
+    mock_fetch.assert_not_called()
+    mock_get.assert_called_once_with(
+        "test-service-pathways-head:1234", namespace="default"
+    )
+    self.assertEqual(img, "sidecar_img")
+    self.assertIs(versions, mock_versions)
 
 
 class KubeConfigCredentialsTest(parameterized.TestCase):

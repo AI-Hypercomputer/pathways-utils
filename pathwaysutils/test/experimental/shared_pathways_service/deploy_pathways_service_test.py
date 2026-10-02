@@ -7,9 +7,28 @@ from absl.testing import absltest
 from absl.testing import parameterized
 from pathwaysutils.experimental.shared_pathways_service import deploy_pathways_service
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
+from pathwaysutils.experimental.shared_pathways_service import validators
 
 
 class DeployPathwaysServiceTest(parameterized.TestCase):
+
+  def setUp(self):
+    super().setUp()
+    self.mock_get_sidecar_versions = self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "get_sidecar_versions",
+            autospec=True,
+            return_value=(
+                "custom-sidecar-image",
+                validators.SidecarVersions(
+                    python_version="3.12",
+                    jax_version="0.11.1",
+                    jaxlib_version="0.11.1",
+                ),
+            ),
+        )
+    )
 
   @parameterized.named_parameters(
       dict(

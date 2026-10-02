@@ -12,6 +12,7 @@ from kubernetes import client
 from kubernetes import config
 from pathwaysutils.experimental.gke import jobset
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
+from pathwaysutils.experimental.shared_pathways_service import validators
 import yaml
 
 _logger = logging.getLogger(__name__)
@@ -303,6 +304,19 @@ def run_deployment(
     )
 
     deploy_func(jobset_config)
+    if sidecar_image:
+      pathways_service = (
+          f"{jobset_name}-pathways-head-0-0.{jobset_name}:29001"
+      )
+      _, sidecar_versions = gke_utils.get_sidecar_versions(
+          pathways_service, sidecar_image=sidecar_image
+      )
+      _logger.info(
+          "\n%s",
+          validators.format_sidecar_versions(
+              pathways_service, sidecar_image, sidecar_versions
+          ),
+      )
   else:
     _logger.info("Dry run mode, not deploying.")
 
@@ -310,6 +324,8 @@ def run_deployment(
 def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
     raise app.UsageError("Too many command-line arguments.")
+
+  logging.getLogger().setLevel(logging.INFO)
 
   try:
     if (

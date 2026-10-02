@@ -13,6 +13,7 @@ from absl.testing import absltest
 from kubernetes import client
 from kubernetes import config as k8s_config
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
+from pathwaysutils.experimental.shared_pathways_service import validators
 import portpicker
 
 
@@ -1593,7 +1594,145 @@ class GKEUtilsTest(absltest.TestCase):
     mock_proc.terminate.assert_called_once()
     mock_proc.wait.assert_called_once_with(timeout=10)
 
+  def test_query_sidecar_image_versions_success(self):
+    with mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.return_value = mock.Mock(
+          stdout=(
+              "SPS_VERSIONS:3.12,0.11.1,0.11.1\n"
+              'pod "sps-version-check-12345678" deleted\n'
+          ),
+          returncode=0,
+      )
+      versions = gke_utils.query_sidecar_image_versions(
+          "us-docker.pkg.dev/repo/sidecar@sha256:80b6718"
+      )
+      self.assertEqual(
+          versions,
+          validators.SidecarVersions(
+              python_version="3.12",
+              jax_version="0.11.1",
+              jaxlib_version="0.11.1",
+          ),
+      )
+      mock_run.assert_called_once()
+      cmd = mock_run.call_args[0][0]
+      self.assertEqual(cmd[:2], ["kubectl", "run"])
+      self.assertIn(
+          "--image=us-docker.pkg.dev/repo/sidecar@sha256:80b6718", cmd
+      )
+
+  def test_query_sidecar_image_versions_failure(self):
+    with mock.patch.object(
+        subprocess, "run", side_effect=Exception("kubectl run failed")
+    ):
+      versions = gke_utils.query_sidecar_image_versions(
+          "us-docker.pkg.dev/repo/sidecar@sha256:80b6718"
+      )
+      self.assertIsNone(versions)
+
+  def test_query_sidecar_image_versions_timeout_cleans_up_pod(self):
+    with mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          subprocess.TimeoutExpired(cmd=["kubectl", "run"], timeout=120),
+          mock.Mock(returncode=0),
+      ]
+      versions = gke_utils.query_sidecar_image_versions(
+          "us-docker.pkg.dev/repo/sidecar@sha256:80b6718",
+          namespace="custom-ns",
+      )
+      self.assertIsNone(versions)
+      self.assertEqual(mock_run.call_count, 2)
+      delete_cmd = mock_run.call_args_list[1][0][0]
+      self.assertEqual(delete_cmd[:3], ["kubectl", "delete", "pod"])
+      self.assertIn("-n", delete_cmd)
+      self.assertIn("custom-ns", delete_cmd)
+
+  def test_get_sidecar_versions_no_sidecar(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", None),
+    ):
+      sidecar_img, versions = gke_utils.get_sidecar_versions(
+          "my-jobset-pathways-head-0-0.my-jobset:8000"
+      )
+      self.assertIsNone(sidecar_img)
+      self.assertIsNone(versions.python_version)
+      self.assertIsNone(versions.jax_version)
+      self.assertIsNone(versions.jaxlib_version)
+
+  def test_get_sidecar_versions_live_query_success(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=(
+            "server_img",
+            "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+        ),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          mock.Mock(stdout="pod-0\n", returncode=0),
+          mock.Mock(stdout="SPS_VERSIONS:3.12,0.10.0,0.10.0\n", returncode=0),
+      ]
+      sidecar_img, versions = gke_utils.get_sidecar_versions(
+          "my-jobset-pathways-head-0-0.my-jobset:8000"
+      )
+      self.assertEqual(
+          sidecar_img,
+          "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+      )
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.10.0")
+      self.assertEqual(versions.jaxlib_version, "0.10.0")
+
+  def test_get_sidecar_versions_fallback_to_image_query(self):
+    digest_img = "us-docker.pkg.dev/repo/sidecar@sha256:80b671827c0e6995d9aa615635981c21"
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", digest_img),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      # 1st call: kubectl get pods returns no running pods
+      # 2nd call: kubectl run inspects the sidecar image directly
+      mock_run.side_effect = [
+          mock.Mock(stdout="", returncode=0),
+          mock.Mock(
+              stdout="SPS_VERSIONS:3.12,0.10.0,0.10.0\npod deleted\n",
+              returncode=0,
+          ),
+      ]
+      sidecar_img, versions = gke_utils.get_sidecar_versions(
+          "my-jobset-pathways-head-0-0.my-jobset:8000"
+      )
+      self.assertEqual(sidecar_img, digest_img)
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.10.0")
+      self.assertEqual(versions.jaxlib_version, "0.10.0")
+
+  def test_get_sidecar_versions_fallback_to_tag(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=(
+            "server_img",
+            "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+        ),
+    ), mock.patch.object(
+        subprocess, "run", side_effect=Exception("kubectl failed")
+    ):
+      sidecar_img, versions = gke_utils.get_sidecar_versions(
+          "my-jobset-pathways-head-0-0.my-jobset:8000"
+      )
+      self.assertEqual(
+          sidecar_img,
+          "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+      )
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.10.0")
+      self.assertEqual(versions.jaxlib_version, "0.10.0")
+
 
 if __name__ == "__main__":
   absltest.main()
+
 
