@@ -1,5 +1,6 @@
 """GKE utils for deploying and managing the Pathways proxy."""
 
+from collections.abc import Iterable
 import datetime
 import functools
 import logging
@@ -109,15 +110,20 @@ def deploy_gke_yaml(yaml: str, action: str = "apply") -> None:
 
 
 def delete_gke_resource(
-    resource_type: str, name: str, namespace: str = "default"
+    resource_type: str,
+    name: str,
+    namespace: str = "default",
+    *,
+    wait: bool = True,
 ) -> None:
   """Deletes the given resource from the GKE cluster.
 
   Args:
-    resource_type: The type of resource to delete (e.g. "deployment",
-      "service", "job").
+    resource_type: The type of resource to delete (e.g. "deployment", "service",
+      "job").
     name: The name of the resource.
     namespace: The namespace of the resource.
+    wait: Whether to wait for the resource deletion to complete.
   """
   _validate_k8s_name(resource_type)
   _validate_k8s_name(name)
@@ -132,9 +138,13 @@ def delete_gke_resource(
       "-n",
       namespace,
       "--ignore-not-found",
+  ]
+  if not wait:
+    command.append("--wait=false")
+  command.extend([
       "--",
       name,
-  ]
+  ])
   try:
     result = subprocess.run(
         command,
@@ -148,7 +158,6 @@ def delete_gke_resource(
         "Failed to delete %s. kubectl output:\n%r", resource_type, e.stderr
     )
     raise
-
 
 
 def get_pod_from_job(job_name: str) -> str:
@@ -672,7 +681,6 @@ def stream_pod_logs(pod_name: str) -> subprocess.Popen[str]:
     raise
 
 
-
 def wait_for_deployment(
     name: str, namespace: str = "default", timeout: int = 300
 ) -> None:
@@ -850,4 +858,204 @@ def get_compatible_proxy_server_image(server_image: str) -> str:
   return new_repo
 
 
+def _read_worker_pod(
+    core_api: client.CoreV1Api,
+    pod_name: str,
+    namespace: str = "default",
+) -> client.V1Pod:
+  """Reads a worker Pod by exact Pod name or by Indexed Job hostname."""
+  try:
+    return core_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+  except client.exceptions.ApiException as e:
+    if e.status != 404 or "-" not in pod_name:
+      raise
+    job_name, completion_index = pod_name.rsplit("-", 1)
+    if not completion_index.isdigit():
+      raise
+    label_selector = (
+        f"job-name={job_name},"
+        f"batch.kubernetes.io/job-completion-index={completion_index}"
+    )
+    pod_list = core_api.list_namespaced_pod(
+        namespace=namespace, label_selector=label_selector
+    )
+    items = getattr(pod_list, "items", None) or []
+    active_pods = [
+        p
+        for p in items
+        if getattr(getattr(p, "metadata", None), "deletion_timestamp", None)
+        is None
+        and getattr(getattr(p, "status", None), "phase", None)
+        in ("Pending", "Running")
+    ]
+    candidates = active_pods or items
+    if not candidates:
+      raise
+    return candidates[0]
 
+
+def inject_ephemeral_sidecar(
+    *,
+    pod_name: str,
+    container_name: str = "ephemeral-python-sidecar",
+    image: str,
+    port: int = 50052,
+    shm_mount_path: str = "/tmp/sidecar_dir",
+    namespace: str = "default",
+) -> None:
+  """Injects an ephemeral sidecar container into the given worker Pod."""
+  _validate_k8s_name(pod_name)
+  _validate_k8s_name(container_name)
+  _validate_k8s_name(namespace)
+
+  core_api = _get_k8s_core_api()
+  pod = _read_worker_pod(core_api, pod_name, namespace=namespace)
+  actual_pod_name = (
+      pod.metadata.name
+      if getattr(pod, "metadata", None)
+      and isinstance(getattr(pod.metadata, "name", None), str)
+      else pod_name
+  )
+  existing_ephemeral = pod.spec.ephemeral_containers or []
+  if any(c.name == container_name for c in existing_ephemeral):
+    _logger.info(
+        "Ephemeral container '%s' already exists on pod '%s'. Skipping"
+        " injection.",
+        container_name,
+        actual_pod_name,
+    )
+    return
+
+  ephemeral_container = client.V1EphemeralContainer(
+      name=container_name,
+      image=image,
+      image_pull_policy="Always",
+      target_container_name="pathways-worker",
+      args=[
+          f"--port={port}",
+          "--logtostderr",
+          "--stderrthreshold=0",
+          "--v=1",
+      ],
+      env=[
+          client.V1EnvVar(name="GRPC_SERVER_ADDRESS", value=f"0.0.0.0:{port}"),
+          client.V1EnvVar(
+              name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
+              value=shm_mount_path,
+          ),
+          client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
+          client.V1EnvVar(name="LOGLEVEL", value="DEBUG"),
+          client.V1EnvVar(name="GLOG_minloglevel", value="0"),
+          client.V1EnvVar(name="GLOG_v", value="5"),
+          client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
+          client.V1EnvVar(name="TF_CPP_MIN_VLOG_LEVEL", value="5"),
+          client.V1EnvVar(name="TPU_MIN_LOG_LEVEL", value="0"),
+          client.V1EnvVar(
+              name="GLOG_vmodule",
+              value="jax_array_handlers=5,type_handlers=5,tensorstore_utils=5",
+          ),
+      ],
+      volume_mounts=[
+          client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
+          client.V1VolumeMount(name="shared-memory", mount_path=shm_mount_path),
+      ],
+  )
+  patch_body = {
+      "spec": {
+          "ephemeralContainers": existing_ephemeral + [ephemeral_container]
+      }
+  }
+  _logger.info(
+      "Injecting ephemeral sidecar '%s' (image=%s, port=%d) into pod '%s'...",
+      container_name,
+      image,
+      port,
+      actual_pod_name,
+  )
+  core_api.patch_namespaced_pod_ephemeralcontainers(
+      name=actual_pod_name,
+      namespace=namespace,
+      body=patch_body,
+  )
+
+
+def wait_for_ephemeral_container(
+    pod_name: str,
+    container_name: str = "ephemeral-python-sidecar",
+    namespace: str = "default",
+    timeout: int = 300,
+) -> None:
+  """Waits for an ephemeral container in a Pod to enter the Running state."""
+  _validate_k8s_name(pod_name)
+  _validate_k8s_name(container_name)
+  _validate_k8s_name(namespace)
+
+  core_api = _get_k8s_core_api()
+  start_time = time.time()
+  while time.time() - start_time < timeout:
+    pod = _read_worker_pod(core_api, pod_name, namespace=namespace)
+    actual_pod_name = (
+        pod.metadata.name
+        if getattr(pod, "metadata", None)
+        and isinstance(getattr(pod.metadata, "name", None), str)
+        else pod_name
+    )
+    statuses = pod.status.ephemeral_container_statuses or []
+    for status in statuses:
+      if status.name == container_name:
+        if status.state and status.state.running is not None:
+          _logger.info(
+              "Ephemeral container '%s' is running in pod '%s'.",
+              container_name,
+              actual_pod_name,
+          )
+          return
+        if status.state and status.state.terminated is not None:
+          reason = status.state.terminated.reason
+          exit_code = status.state.terminated.exit_code
+          raise RuntimeError(
+              f"Ephemeral container '{container_name}' in pod"
+              f" '{actual_pod_name}' terminated unexpectedly (reason={reason},"
+              f" exit_code={exit_code})."
+          )
+    time.sleep(2)
+  raise RuntimeError(
+      f"Timeout waiting for ephemeral container '{container_name}' in pod"
+      f" '{pod_name}' to become running."
+  )
+
+
+def delete_worker_pods(
+    pod_names: Iterable[str],
+    namespace: str = "default",
+) -> None:
+  """Deletes the specified worker Pods so the JobSet controller recreates them."""
+  _validate_k8s_name(namespace)
+  worker_jobs: set[str] = set()
+  for pod_name in pod_names:
+    try:
+      resolved_name = pod_name
+      try:
+        core_api = _get_k8s_core_api()
+        pod = _read_worker_pod(core_api, pod_name, namespace=namespace)
+        if getattr(pod, "metadata", None):
+          if isinstance(getattr(pod.metadata, "name", None), str):
+            resolved_name = pod.metadata.name
+          labels = getattr(pod.metadata, "labels", None)
+          if isinstance(labels, dict):
+            job_name = labels.get("job-name") or labels.get(
+                "batch.kubernetes.io/job-name"
+            )
+            if isinstance(job_name, str) and job_name:
+              worker_jobs.add(job_name)
+      except Exception:  # pylint: disable=broad-exception-caught
+        resolved_name = pod_name
+      delete_gke_resource("pod", resolved_name, namespace=namespace, wait=False)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      _logger.exception("Failed to delete worker pod '%s': %r", pod_name, e)
+
+  for job_name in sorted(worker_jobs):
+    try:
+      delete_gke_resource("job", job_name, namespace=namespace, wait=False)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      _logger.exception("Failed to delete worker job '%s': %r", job_name, e)

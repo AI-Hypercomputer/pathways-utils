@@ -1593,7 +1593,160 @@ class GKEUtilsTest(absltest.TestCase):
     mock_proc.terminate.assert_called_once()
     mock_proc.wait.assert_called_once_with(timeout=10)
 
+  def test_inject_ephemeral_sidecar_success(self):
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_pod = mock.MagicMock()
+    mock_pod.spec.ephemeral_containers = None
+    mock_core_api.read_namespaced_pod.return_value = mock_pod
+
+    gke_utils.inject_ephemeral_sidecar(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+        image="custom-sidecar:latest",
+        port=50052,
+        shm_mount_path="/tmp/sidecar_dir",
+        namespace="default",
+    )
+
+    mock_core_api.read_namespaced_pod.assert_called_once_with(
+        name="worker-pod-0-0", namespace="default"
+    )
+    mock_core_api.patch_namespaced_pod_ephemeralcontainers.assert_called_once()
+    _, kwargs = mock_core_api.patch_namespaced_pod_ephemeralcontainers.call_args
+    self.assertEqual(kwargs["name"], "worker-pod-0-0")
+    self.assertEqual(kwargs["namespace"], "default")
+    ephemeral_list = kwargs["body"]["spec"]["ephemeralContainers"]
+    self.assertLen(ephemeral_list, 1)
+    self.assertEqual(ephemeral_list[0].name, "ephemeral-python-sidecar")
+    self.assertEqual(ephemeral_list[0].image, "custom-sidecar:latest")
+    self.assertEqual(ephemeral_list[0].target_container_name, "pathways-worker")
+    self.assertEqual(
+        ephemeral_list[0].args,
+        ["--port=50052", "--logtostderr", "--stderrthreshold=0", "--v=1"],
+    )
+
+  def test_inject_ephemeral_sidecar_resolves_indexed_job_pod(self):
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    mock_core_api.read_namespaced_pod.side_effect = (
+        client.exceptions.ApiException(status=404, reason="Not Found")
+    )
+    mock_pod = mock.MagicMock()
+    mock_pod.metadata.name = "worker-pod-0-0-abcde"
+    mock_pod.metadata.deletion_timestamp = None
+    mock_pod.status.phase = "Running"
+    mock_pod.spec.ephemeral_containers = None
+    mock_pod_list = mock.MagicMock()
+    mock_pod_list.items = [mock_pod]
+    mock_core_api.list_namespaced_pod.return_value = mock_pod_list
+
+    gke_utils.inject_ephemeral_sidecar(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+        image="custom-sidecar:latest",
+        port=50052,
+        namespace="default",
+    )
+
+    mock_core_api.list_namespaced_pod.assert_called_once_with(
+        namespace="default",
+        label_selector=(
+            "job-name=worker-pod-0,batch.kubernetes.io/job-completion-index=0"
+        ),
+    )
+    _, kwargs = mock_core_api.patch_namespaced_pod_ephemeralcontainers.call_args
+    self.assertEqual(kwargs["name"], "worker-pod-0-0-abcde")
+
+  def test_inject_ephemeral_sidecar_already_exists_skips(self):
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    existing = client.V1EphemeralContainer(
+        name="ephemeral-python-sidecar", image="custom-sidecar:latest"
+    )
+    mock_pod = mock.MagicMock()
+    mock_pod.spec.ephemeral_containers = [existing]
+    mock_core_api.read_namespaced_pod.return_value = mock_pod
+
+    gke_utils.inject_ephemeral_sidecar(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+        image="custom-sidecar:latest",
+    )
+
+    mock_core_api.patch_namespaced_pod_ephemeralcontainers.assert_not_called()
+
+  def test_wait_for_ephemeral_container_running_success(self):
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    status = mock.MagicMock()
+    status.name = "ephemeral-python-sidecar"
+    status.state.running = mock.MagicMock()
+    status.state.terminated = None
+    mock_pod = mock.MagicMock()
+    mock_pod.status.ephemeral_container_statuses = [status]
+    mock_core_api.read_namespaced_pod.return_value = mock_pod
+
+    gke_utils.wait_for_ephemeral_container(
+        pod_name="worker-pod-0-0",
+        container_name="ephemeral-python-sidecar",
+        timeout=10,
+    )
+    mock_core_api.read_namespaced_pod.assert_called_once_with(
+        name="worker-pod-0-0", namespace="default"
+    )
+
+  def test_wait_for_ephemeral_container_terminated_raises(self):
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
+        mock.patch.object(
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
+        )
+    )
+    status = mock.MagicMock()
+    status.name = "ephemeral-python-sidecar"
+    status.state.running = None
+    status.state.terminated.reason = "Error"
+    status.state.terminated.exit_code = 1
+    mock_pod = mock.MagicMock()
+    mock_pod.status.ephemeral_container_statuses = [status]
+    mock_core_api.read_namespaced_pod.return_value = mock_pod
+
+    with self.assertRaisesRegex(RuntimeError, "terminated unexpectedly"):
+      gke_utils.wait_for_ephemeral_container(
+          pod_name="worker-pod-0-0",
+          container_name="ephemeral-python-sidecar",
+          timeout=10,
+      )
+
+  def test_delete_worker_pods_calls_delete_gke_resource(self):
+    mock_delete = self.enter_context(
+        mock.patch.object(gke_utils, "delete_gke_resource", autospec=True)
+    )
+    gke_utils.delete_worker_pods(
+        ["worker-pod-0-0", "worker-pod-0-1"], namespace="default"
+    )
+    mock_delete.assert_has_calls([
+        mock.call("pod", "worker-pod-0-0", namespace="default", wait=False),
+        mock.call("pod", "worker-pod-0-1", namespace="default", wait=False),
+    ])
+
 
 if __name__ == "__main__":
   absltest.main()
-

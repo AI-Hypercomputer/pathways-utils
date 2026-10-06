@@ -192,6 +192,7 @@ class RunTpuWorkloadTest(absltest.TestCase):
           command="echo hello",
           proxy_server_image="",
           proxy_options=[],
+          sidecar_image=None,
           collect_service_metrics=False,
       )
 
@@ -222,7 +223,39 @@ class RunTpuWorkloadTest(absltest.TestCase):
           command="echo hello",
           proxy_server_image="",
           proxy_options=[],
+          sidecar_image=None,
           collect_service_metrics=True,
+      )
+
+  @flagsaver.flagsaver(
+      cluster="test-cluster",
+      project="test-project",
+      region="test-region",
+      gcs_bucket="test-bucket",
+      pathways_service="test-service:1234",
+      tpu_type="tpuv6e:4x8",
+      tpu_count=1,
+      command="echo hello",
+      sidecar_image="custom-sidecar:latest",
+  )
+  def test_main_calls_run_command_with_sidecar_image(self):
+    with mock.patch.object(
+        run_workload, "run_command", autospec=True
+    ) as mock_run_command:
+      run_workload.main(["unused_argv"])
+      mock_run_command.assert_called_once_with(
+          cluster="test-cluster",
+          project="test-project",
+          region="test-region",
+          gcs_bucket="test-bucket",
+          pathways_service="test-service:1234",
+          tpu_type="tpuv6e:4x8",
+          tpu_count=1,
+          command="echo hello",
+          proxy_server_image="",
+          proxy_options=[],
+          sidecar_image="custom-sidecar:latest",
+          collect_service_metrics=False,
       )
 
 

@@ -576,11 +576,11 @@ class PathwaysJobSet:
 
   def add_colocated_python(
       self,
-      image: str,
+      image: str | None = None,
       shm_mount_path: str = "/tmp/shared-memory",
       shm_size_limit: str | None = None,
   ) -> "PathwaysJobSet":
-    """Adds colocated python sidecar to the worker pods."""
+    """Adds colocated python sidecar and/or shared-memory volume to worker pods."""
     pod_spec = self._worker_job_template.spec.template.spec
 
     # Add shared memory volume if not exists.
@@ -598,30 +598,33 @@ class PathwaysJobSet:
       )
       pod_spec.volumes = volumes
 
-    # Add colocated python container.
-    colocated_container = client.V1Container(
-        name="colocated-python-sidecar",
-        image=image,
-        image_pull_policy="Always",
-        env=[
-            client.V1EnvVar(name="GRPC_SERVER_ADDRESS", value="0.0.0.0:50051"),
-            client.V1EnvVar(
-                name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
-                value=shm_mount_path,
-            ),
-        ],
-        ports=[client.V1ContainerPort(container_port=50051)],
-        volume_mounts=[
-            client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
-            client.V1VolumeMount(
-                name=shm_volume_name, mount_path=shm_mount_path
-            ),
-        ],
-    )
+    if image:
+      # Add colocated python container.
+      colocated_container = client.V1Container(
+          name="colocated-python-sidecar",
+          image=image,
+          image_pull_policy="Always",
+          env=[
+              client.V1EnvVar(
+                  name="GRPC_SERVER_ADDRESS", value="0.0.0.0:50051"
+              ),
+              client.V1EnvVar(
+                  name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
+                  value=shm_mount_path,
+              ),
+          ],
+          ports=[client.V1ContainerPort(container_port=50051)],
+          volume_mounts=[
+              client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
+              client.V1VolumeMount(
+                  name=shm_volume_name, mount_path=shm_mount_path
+              ),
+          ],
+      )
 
-    containers = pod_spec.containers or []
-    containers.append(colocated_container)
-    pod_spec.containers = containers
+      containers = pod_spec.containers or []
+      containers.append(colocated_container)
+      pod_spec.containers = containers
 
     # Add volume mount to pathways-worker.
     for container in pod_spec.containers:

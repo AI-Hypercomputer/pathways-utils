@@ -46,6 +46,12 @@ flags.DEFINE_list(
     ' "key:value". For example: --proxy_options=use_insecure_credentials:true'
     ' or --proxy_options=xla_flags:"--xla_flag1 --xla_flag2"',
 )
+flags.DEFINE_string(
+    "sidecar_image",
+    None,
+    "Optional custom colocated Python sidecar container image to inject as an"
+    " ephemeral container into assigned worker pods.",
+)
 
 flags.DEFINE_bool(
     "collect_service_metrics",
@@ -76,6 +82,7 @@ def main(argv: Sequence[str]) -> None:
       proxy_job_name=FLAGS.proxy_job_name,
       proxy_server_image=FLAGS.proxy_server_image,
       proxy_options=FLAGS.proxy_options,
+      sidecar_image=FLAGS.sidecar_image,
       collect_service_metrics=FLAGS.collect_service_metrics,
   ):
     # your-workload
