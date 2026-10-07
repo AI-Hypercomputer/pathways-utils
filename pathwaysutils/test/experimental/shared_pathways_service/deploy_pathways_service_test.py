@@ -147,6 +147,12 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         mock_worker_job.spec.template.spec.containers[0].args,
     )
 
+    # Verify quick restart is enabled on pathways-worker by default
+    self.assertContainsSubset(
+        ["--enable_quick_restart=true", "--undefok=enable_quick_restart"],
+        mock_worker_job.spec.template.spec.containers[0].args,
+    )
+
     # Verify deploy_func was called with the dict
     mock_deploy.assert_called_once_with({"metadata": {"name": "test-jobset"}})
 
@@ -213,6 +219,50 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
     self.assertEqual(
         captured_config["spec"]["failurePolicy"],
         {"restartStrategy": "Recreate", "maxRestarts": 3},
+    )
+
+  @parameterized.named_parameters(
+      dict(testcase_name="enabled", enable=True),
+      dict(testcase_name="disabled", enable=False),
+  )
+  @mock.patch.object(gke_utils, "get_current_cluster_and_project")
+  def test_run_deployment_worker_quick_restart(self, mock_detect, enable):
+    mock_detect.return_value = ("test-cluster", "test-project")
+    captured_config = {}
+
+    def capture_deploy(config):
+      nonlocal captured_config
+      captured_config = config
+
+    deploy_pathways_service.run_deployment(
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=2,
+        jobset_name="test-jobset",
+        gcs_bucket="gs://test-bucket",
+        server_image=(
+            "us-docker.pkg.dev/test-project/test-repo/server:test-tag"
+        ),
+        sidecar_image=(
+            "us-docker.pkg.dev/test-project/test-repo/sidecar:test-tag"
+        ),
+        dry_run=False,
+        deploy_func=capture_deploy,
+        enable_worker_quick_restart=enable,
+    )
+
+    containers_with_quick_restart = []
+    for job in captured_config["spec"]["replicatedJobs"]:
+      pod_spec = job["template"]["spec"]["template"]["spec"]
+      for container in pod_spec["containers"] + pod_spec.get(
+          "initContainers", []
+      ):
+        if "--enable_quick_restart=true" in container.get("args", []):
+          containers_with_quick_restart.append(container["name"])
+
+    # Verify quick restart is only enabled on pathways-worker, if requested
+    self.assertEqual(
+        containers_with_quick_restart, ["pathways-worker"] if enable else []
     )
 
   @mock.patch.object(gke_utils, "get_log_link")
