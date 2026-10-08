@@ -61,6 +61,15 @@ _MAX_RESTARTS = flags.DEFINE_integer(
     " Jobs have an effectively unlimited backoff limit.",
     lower_bound=0,
 )
+_ENABLE_WORKER_QUICK_RESTART = flags.DEFINE_boolean(
+    "enable_worker_quick_restart",
+    True,
+    "If true, Pathways workers restart in place, without a Kubernetes"
+    " container restart, when they request a quick restart (e.g. when a proxy"
+    " using the worker exits). This avoids the Kubernetes back-off on worker"
+    " container restarts. Server images that do not support quick restart"
+    " ignore this and restart the worker container instead.",
+)
 _SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
 
 
@@ -185,6 +194,7 @@ def run_deployment(
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
     max_restarts: int = 30,
+    enable_worker_quick_restart: bool = True,
 ) -> None:
   """Executes the deployment logic."""
   # Use PathwaysJobSet builder instead of YAML template.
@@ -197,8 +207,9 @@ def run_deployment(
       num_slices=num_slices,
       shared_pathways_service=True,
       max_restarts=max_restarts,
-      # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
-      # implemented
+      # TODO(b/496958026): Remove this once all supported server images
+      # support quick restart on Cloud. Until then, older images still restart
+      # the worker container on proxy exit.
       max_slice_restarts=1000000,
   )
 
@@ -258,7 +269,7 @@ def run_deployment(
           ),
       ])
 
-  # 2. Add arg to pathways-worker container.
+  # 2. Add args to pathways-worker container
   for container in worker_spec.containers:
     if container.name == "pathways-worker":
       args = container.args or []
@@ -267,6 +278,13 @@ def run_deployment(
       ):
         args.append(
             f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}"
+        )
+      if enable_worker_quick_restart:
+        # Server images that don't support quick restart don't define
+        # --enable_quick_restart, so --undefok makes them ignore it instead of
+        # failing to start.
+        args.extend(
+            ["--enable_quick_restart=true", "--undefok=enable_quick_restart"]
         )
       container.args = args
 
@@ -333,6 +351,7 @@ def main(argv: Sequence[str]) -> None:
         sidecar_image=_SIDECAR_IMAGE.value,
         dry_run=_DRY_RUN.value,
         max_restarts=_MAX_RESTARTS.value,
+        enable_worker_quick_restart=_ENABLE_WORKER_QUICK_RESTART.value,
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
