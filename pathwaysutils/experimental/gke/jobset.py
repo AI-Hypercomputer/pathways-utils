@@ -407,6 +407,7 @@ class PathwaysJobSet:
         client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
         client.V1EnvVar(name="XCLOUD_ENVIRONMENT", value="GCP"),
         client.V1EnvVar(name="MEGASCALE_GRPC_ENABLE_XOR_TRACER", value="false"),
+        client.V1EnvVar(name="MEGASCALE_PORT", value="8080"),
         client.V1EnvVar(
             name="MEGASCALE_NUM_SLICES",
             value_from=client.V1EnvVarSource(
