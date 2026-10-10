@@ -21,7 +21,10 @@ spec:
         - --resource_manager_address=${PATHWAYS_HEAD_HOSTNAME}:${PATHWAYS_HEAD_PORT}
         - --gcs_scratch_location=${GCS_SCRATCH_LOCATION}
         - --virtual_slices=${EXPECTED_INSTANCES}${PROXY_ARGS}
+        - --pathways_pipe_unreachable_timeout=60s
         env:
+        - name: TPU_SKIP_MDS_QUERY
+          value: "true"
 ${PROXY_ENV}
         ports:
         - containerPort: ${PROXY_SERVER_PORT}
