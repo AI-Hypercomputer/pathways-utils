@@ -126,11 +126,8 @@ class PathwaysJobSet:
       shared_pathways_service: bool = False,
       pathways_rm_and_worker_image: str = DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE,
       pathways_proxy_image: str = DEFAULT_PATHWAYS_PROXY_IMAGE,
-      head_nodepool: str | None = None,
-      head_node_selector: Mapping[str, str] | None = None,
-      priority_class_name: str | None = None,
-      host_network: bool = False,
-      dns_policy: str | None = None,
+      head_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
   ):
     """Initializes the instance.
 
@@ -155,13 +152,12 @@ class PathwaysJobSet:
       pathways_rm_and_worker_image: Base Docker image for Resource Manager and
         Worker containers.
       pathways_proxy_image: Base Docker image for Proxy container.
-      head_nodepool: Optional GKE nodepool for the head pod.
-      head_node_selector: Optional node selector dict for the head pod.
-      priority_class_name: Optional priority class name for head and worker
-        pods.
-      host_network: Whether to use host networking for head and worker pods
-        (default: False).
-      dns_policy: Optional DNS policy for head and worker pods (default: None).
+      head_pod_spec_kwargs: Optional keyword arguments passed to
+        `client.V1PodSpec` for the head pod (e.g., `node_selector`,
+        `priority_class_name`, `host_network`, `dns_policy`).
+      worker_pod_spec_kwargs: Optional keyword arguments passed to
+        `client.V1PodSpec` for the worker pods (e.g., `priority_class_name`,
+        `host_network`, `dns_policy`).
     """
     self._shared_pathways_service = shared_pathways_service
     self._pathways_rm_and_worker_image = pathways_rm_and_worker_image
@@ -210,11 +206,7 @@ class PathwaysJobSet:
         shared_pathways_service=shared_pathways_service,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         pathways_proxy_image=pathways_proxy_image,
-        head_nodepool=head_nodepool,
-        head_node_selector=head_node_selector,
-        priority_class_name=priority_class_name,
-        host_network=host_network,
-        dns_policy=dns_policy,
+        head_pod_spec_kwargs=head_pod_spec_kwargs,
     )
 
     # Build worker template.
@@ -228,9 +220,7 @@ class PathwaysJobSet:
         max_slice_restarts=max_slice_restarts,
         termination_grace_period_seconds=termination_grace_period_seconds,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
-        priority_class_name=priority_class_name,
-        host_network=host_network,
-        dns_policy=dns_policy,
+        worker_pod_spec_kwargs=worker_pod_spec_kwargs,
     )
 
     self._success_policy = None
@@ -261,11 +251,7 @@ class PathwaysJobSet:
       shared_pathways_service: bool,
       pathways_rm_and_worker_image: str,
       pathways_proxy_image: str,
-      head_nodepool: str | None = None,
-      head_node_selector: Mapping[str, str] | None = None,
-      priority_class_name: str | None = None,
-      host_network: bool = False,
-      dns_policy: str | None = None,
+      head_pod_spec_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -279,11 +265,8 @@ class PathwaysJobSet:
         Service.
       pathways_rm_and_worker_image: Base Docker image for Resource Manager.
       pathways_proxy_image: Base Docker image for Proxy container.
-      head_nodepool: Optional GKE nodepool for the head pod.
-      head_node_selector: Optional node selector dict for the head pod.
-      priority_class_name: Optional priority class name.
-      host_network: Whether to use host networking for head pod.
-      dns_policy: Optional DNS policy for head pod.
+      head_pod_spec_kwargs: Optional keyword arguments passed to
+        `client.V1PodSpec` for the head pod.
 
     Returns:
       The head job template.
@@ -398,24 +381,19 @@ class PathwaysJobSet:
         image="gcr.io/google-containers/pause:3.2",
     )
 
-    head_pod_spec = client.V1PodSpec(
-        init_containers=init_containers,
-        containers=[dummy_container],
-        restart_policy="Never",
-    )
-    if host_network:
-      head_pod_spec.host_network = True
-    if dns_policy:
-      head_pod_spec.dns_policy = dns_policy
-    node_sel = dict(head_node_selector) if head_node_selector else {}
-    if head_nodepool:
-      node_sel[GKE_NODEPOOL_KEY] = head_nodepool
-    elif GKE_NODEPOOL_KEY not in node_sel:
+    pod_spec_kwargs: dict[str, Any] = {
+        "init_containers": init_containers,
+        "containers": [dummy_container],
+        "restart_policy": "Never",
+    }
+    if head_pod_spec_kwargs:
+      pod_spec_kwargs.update(head_pod_spec_kwargs)
+    node_sel = dict(pod_spec_kwargs.get("node_selector") or {})
+    if GKE_NODEPOOL_KEY not in node_sel:
       node_sel[GKE_NODEPOOL_KEY] = "cpu-np"
-    head_pod_spec.node_selector = node_sel
+    pod_spec_kwargs["node_selector"] = node_sel
 
-    if priority_class_name:
-      head_pod_spec.priority_class_name = priority_class_name
+    head_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
     job_annotations = {
         "alpha.jobset.sigs.k8s.io/exclusive-topology": "kubernetes.io/hostname"
@@ -449,9 +427,7 @@ class PathwaysJobSet:
       max_slice_restarts: int,
       termination_grace_period_seconds: int | None,
       pathways_rm_and_worker_image: str,
-      priority_class_name: str | None = None,
-      host_network: bool = False,
-      dns_policy: str | None = None,
+      worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the worker job template for the JobSet."""
     worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
@@ -551,10 +527,9 @@ class PathwaysJobSet:
 
     backoff_limit = num_vms * max_slice_restarts
 
-    worker_pod_spec = client.V1PodSpec(
-        containers=[worker_container],
-        node_selector=node_selector,
-        volumes=[
+    pod_spec_kwargs: dict[str, Any] = {
+        "containers": [worker_container],
+        "volumes": [
             client.V1Volume(
                 name="shared-tmp",
                 host_path=client.V1HostPathVolumeSource(
@@ -562,18 +537,19 @@ class PathwaysJobSet:
                 ),
             )
         ],
-        restart_policy="OnFailure",
-    )
-    if host_network:
-      worker_pod_spec.host_network = True
-    if dns_policy:
-      worker_pod_spec.dns_policy = dns_policy
-    if priority_class_name:
-      worker_pod_spec.priority_class_name = priority_class_name
+        "restart_policy": "OnFailure",
+    }
     if termination_grace_period_seconds is not None:
-      worker_pod_spec.termination_grace_period_seconds = (
+      pod_spec_kwargs["termination_grace_period_seconds"] = (
           termination_grace_period_seconds
       )
+    if worker_pod_spec_kwargs:
+      pod_spec_kwargs.update(worker_pod_spec_kwargs)
+    worker_node_sel = dict(pod_spec_kwargs.get("node_selector") or {})
+    worker_node_sel.update(node_selector)
+    pod_spec_kwargs["node_selector"] = worker_node_sel
+
+    worker_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
     worker_job_template = client.V1JobTemplateSpec(
         metadata=client.V1ObjectMeta(),
@@ -700,6 +676,7 @@ class PathwaysJobSet:
         ),
     ]
     if env:
+      user_env_list = [e for e in user_env_list if e.name not in env]
       for k, v in env.items():
         user_env_list.append(client.V1EnvVar(name=k, value=str(v)))
 

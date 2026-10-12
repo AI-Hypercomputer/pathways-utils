@@ -188,8 +188,14 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_configurable_host_network_and_dns_policy(self):
     js = self._create_jobset(
-        host_network=True,
-        dns_policy="ClusterFirstWithHostNet",
+        head_pod_spec_kwargs={
+            "host_network": True,
+            "dns_policy": "ClusterFirstWithHostNet",
+        },
+        worker_pod_spec_kwargs={
+            "host_network": True,
+            "dns_policy": "ClusterFirstWithHostNet",
+        },
     )
     config = js.to_dict()
     helper = JobSetManifestHelper(config)
@@ -890,6 +896,9 @@ class PathwaysJobSetTest(parameterized.TestCase):
     user_c = helper.containers["pathways-head"]["user-workload"]
     self.assertEqual(user_c["image"], "us-docker.pkg.dev/my-project/test:v1")
     self.assertEqual(user_c["command"], ["sh", "-c", "python3 -m test_module"])
+    self.assertEqual(
+        user_c["resources"], {"limits": {"cpu": "24", "memory": "100G"}}
+    )
     self.assertTrue(
         any(
             e["name"] == "CUSTOM_ENV" and e["value"] == "123"
@@ -965,10 +974,15 @@ class PathwaysJobSetTest(parameterized.TestCase):
     pw_jobset._head_job_template.spec.template.spec.containers.append(
         custom_container
     )
+    custom_resources = client.V1ResourceRequirements(
+        limits={"cpu": "8", "memory": "32G"}
+    )
     pw_jobset.add_user_workload(
         name="user-workload-1",
         image="us-docker.pkg.dev/my-project/test:v1",
         command="python3 -m test1",
+        env={"IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS": "false"},
+        resources=custom_resources,
     )
     pw_jobset.add_user_workload(
         name="user-workload-2",
@@ -983,6 +997,15 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("user-workload-2", helper.containers["pathways-head"])
     self.assertNotIn("dummy-job", helper.containers["pathways-head"])
     self.assertLen(helper.pod_specs["pathways-head"]["containers"], 3)
+
+    c1 = helper.containers["pathways-head"]["user-workload-1"]
+    self.assertEqual(c1["resources"], {"limits": {"cpu": "8", "memory": "32G"}})
+    insecure_envs = [
+        e["value"]
+        for e in c1["env"]
+        if e["name"] == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+    ]
+    self.assertEqual(insecure_envs, ["false"])
 
     # Calling add_user_workload with existing name replaces it rather than appending duplicate
     pw_jobset.add_user_workload(
@@ -999,7 +1022,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
 
   def test_configurable_priority_class_and_head_node_selector(self):
-    # Default: no priority class or head pod node selector
+    # Default: no priority class or custom head pod node selector
     default_js = self._create_jobset()
     default_helper = JobSetManifestHelper(default_js.to_dict())
     self.assertNotIn(
@@ -1015,11 +1038,15 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "priorityClassName", default_helper.pod_specs["pathways-worker"]
     )
 
-    # Configured: priority class and head node selector set
+    # Configured: priority class and head node selector set via pod_spec_kwargs
     configured_js = self._create_jobset(
-        head_nodepool="cpu-np",
-        head_node_selector={"zone": "us-central1-a"},
-        priority_class_name="high",
+        head_pod_spec_kwargs={
+            "node_selector": {"zone": "us-central1-a"},
+            "priority_class_name": "high",
+        },
+        worker_pod_spec_kwargs={
+            "priority_class_name": "high",
+        },
     )
     configured_helper = JobSetManifestHelper(configured_js.to_dict())
     head_spec = configured_helper.pod_specs["pathways-head"]
@@ -1032,6 +1059,20 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
     self.assertEqual(head_spec["nodeSelector"]["zone"], "us-central1-a")
 
+    # Overriding GKE_NODEPOOL_KEY explicitly
+    custom_np_js = self._create_jobset(
+        head_pod_spec_kwargs={
+            "node_selector": {jobset.GKE_NODEPOOL_KEY: "custom-cpu-pool"},
+        },
+    )
+    custom_np_helper = JobSetManifestHelper(custom_np_js.to_dict())
+    self.assertEqual(
+        custom_np_helper.pod_specs["pathways-head"]["nodeSelector"][
+            jobset.GKE_NODEPOOL_KEY
+        ],
+        "custom-cpu-pool",
+    )
+
   def test_kokoro_pretraining_workload_generation(self):
     """Verifies that PathwaysJobSet can generate a JobSet matching Kokoro pretraining test workloads."""
     pw_jobset = jobset.PathwaysJobSet(
@@ -1042,8 +1083,13 @@ class PathwaysJobSetTest(parameterized.TestCase):
         topology="4x8",
         num_slices=1,
         labels={"kueue.x-k8s.io/queue-name": "multislice-queue"},
-        head_nodepool="cpu-np",
-        priority_class_name="high",
+        head_pod_spec_kwargs={
+            "node_selector": {jobset.GKE_NODEPOOL_KEY: "cpu-np"},
+            "priority_class_name": "high",
+        },
+        worker_pod_spec_kwargs={
+            "priority_class_name": "high",
+        },
     )
     pw_jobset.add_user_workload(
         image="us-docker.pkg.dev/my-project/maxtext:latest",

@@ -44,6 +44,8 @@ _JAX_BACKEND_TARGET_HOSTNAME = "grpc://127.0.0.1"
 DEFAULT_PROXY_IMAGE = (
     "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
 )
+EPHEMERAL_SIDECAR_PORT = 50_051
+EPHEMERAL_SIDECAR_CONNECT_TIMEOUT = "300s"
 
 _logger = logging.getLogger(__name__)
 
@@ -57,16 +59,20 @@ class ProxyOptions:
       proxy server.
     xla_flags: A list of XLA flags to pass to the proxy server.
     sidecar: Whether to use the worker sidecar or not.
+    sidecar_image: Optional container image to dynamically inject as an
+      ephemeral sidecar container on allocated worker pods.
   """
   use_insecure_credentials: bool = False
   xla_flags: list[str] = dataclasses.field(default_factory=list)
   sidecar: bool = False
+  sidecar_image: str | None = None
 
   @classmethod
   def from_list(cls, options: Iterable[str] | None) -> "ProxyOptions":
     """Creates a ProxyOptions object from a list of 'key:value' strings."""
     use_insecure = False
     use_sidecar = False
+    sidecar_image = None
     xla_flags = []
     for option in options or []:
       if ":" in option:
@@ -76,6 +82,17 @@ class ProxyOptions:
           use_insecure = value.strip().lower() == "true"
         elif key_strip == "sidecar":
           use_sidecar = value.strip().lower() == "true"
+        elif key_strip == "sidecar_image":
+          val_strip = value.strip()
+          if (
+              val_strip
+              and val_strip.startswith(('"', "'"))
+              and val_strip.endswith(val_strip[0])
+          ):
+            val_strip = val_strip[1:-1].strip()
+          if val_strip:
+            sidecar_image = val_strip
+            use_sidecar = True
         elif key_strip == "xla_flags":
           val_strip = value.strip()
           if (
@@ -95,6 +112,7 @@ class ProxyOptions:
         use_insecure_credentials=use_insecure,
         xla_flags=xla_flags,
         sidecar=use_sidecar,
+        sidecar_image=sidecar_image,
     )
 
 
@@ -151,8 +169,19 @@ def _deploy_pathways_proxy_server(
     )
     proxy_args_str = "\n" + proxy_args_str
 
-  if proxy_options.sidecar:
+  if proxy_options.sidecar or proxy_options.sidecar_image:
     proxy_args_str += "\n        - --sidecar_name=external"
+    if proxy_options.sidecar_image:
+      proxy_args_str += (
+          "\n        -"
+          f" --cloud_pathways_external_sidecar_port={EPHEMERAL_SIDECAR_PORT}"
+          "\n        -"
+          " --cloud_pathways_external_sidecar_connect_timeout="
+          f"{EPHEMERAL_SIDECAR_CONNECT_TIMEOUT}"
+          "\n        -"
+          " --cloud_pathways_external_sidecar_image="
+          f"{proxy_options.sidecar_image}"
+      )
 
   escaped_proxy_server_image = (
       proxy_server_image.replace("\\", "\\\\")
@@ -534,6 +563,43 @@ def _get_username() -> str:
   return username or "user"
 
 
+def _is_current_kube_context(
+    *, cluster: str, project: str, location: str
+) -> bool:
+  """Checks whether the active kube config context points at the cluster.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    location: The GCP region or zone of the cluster.
+
+  Returns:
+    True if the current kube config context already targets the given cluster.
+  """
+  return gke_utils.get_current_kube_context() == (cluster, project, location)
+
+
+def _ensure_cluster_credentials(
+    *, cluster: str, project: str, location: str
+) -> None:
+  """Fetches the GKE cluster credentials unless kube config already has them."""
+  if _is_current_kube_context(
+      cluster=cluster, project=project, location=location
+  ):
+    _logger.info(
+        "The current kube config context already points to cluster '%s' in"
+        " project '%s' and location '%s'. Skipping credential fetch.",
+        cluster,
+        project,
+        location,
+    )
+    return
+
+  gke_utils.fetch_cluster_credentials(
+      cluster_name=cluster, project_id=project, location=location
+  )
+
+
 @contextlib.contextmanager
 def connect(
     *,
@@ -546,6 +612,7 @@ def connect(
     proxy_job_name: str | None = None,
     proxy_server_image: str | None = None,
     proxy_options: Sequence[str] | None = None,
+    sidecar_image: str | None = None,
     collect_service_metrics: bool = False,
 ) -> Iterator["_ISCPathways"]:
   """Connects to a Pathways server if the cluster exists. If not, creates it.
@@ -562,10 +629,12 @@ def connect(
       random name will be generated.
     proxy_server_image: (Deprecated) The proxy server image to use. If not
       provided, it will be auto-detected from the Pathways service. If the given
-      proxy image is incompatible with the Pathways service, it will be
-      replaced with the compatible proxy image.
+      proxy image is incompatible with the Pathways service, it will be replaced
+      with the compatible proxy image.
     proxy_options: Configuration options for the Pathways proxy. If not
       provided, no extra options will be used.
+    sidecar_image: Optional sidecar container image to dynamically inject as an
+      ephemeral container on allocated worker pods.
     collect_service_metrics: Whether to collect usage metrics for Shared
       Pathways Service.
 
@@ -584,11 +653,11 @@ def connect(
   validators.validate_pathways_service(pathways_service)
   validators.validate_tpu_instances(expected_tpu_instances)
   validators.validate_proxy_options(proxy_options)
-  gke_utils.fetch_cluster_credentials(
-      cluster_name=cluster, project_id=project, location=region
+  _ensure_cluster_credentials(
+      cluster=cluster, project=project, location=region
   )
 
-  server_image, sidecar_image = gke_utils.get_pathways_service_images(
+  server_image, deployed_sidecar_image = gke_utils.get_pathways_service_images(
       pathways_service
   )
   compatible_proxy_image = gke_utils.get_compatible_proxy_server_image(
@@ -608,8 +677,15 @@ def connect(
   proxy_server_image = compatible_proxy_image
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar and sidecar_image:
-    validators.validate_sidecar_image_versions(sidecar_image)
+  if sidecar_image:
+    proxy_options_obj.sidecar_image = sidecar_image
+    proxy_options_obj.sidecar = True
+
+  effective_sidecar_image = (
+      proxy_options_obj.sidecar_image or deployed_sidecar_image
+  )
+  if proxy_options_obj.sidecar and effective_sidecar_image:
+    validators.validate_sidecar_image_versions(effective_sidecar_image)
   _logger.info("Validation complete.")
 
   if not proxy_job_name:

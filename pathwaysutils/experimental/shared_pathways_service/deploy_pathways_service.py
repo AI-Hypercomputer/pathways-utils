@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Sequence
 import dataclasses
+import datetime
 import logging
 import math
 from typing import Any
@@ -10,6 +11,7 @@ from absl import flags
 from kubernetes import client
 from kubernetes import config
 from pathwaysutils.experimental.gke import jobset
+from pathwaysutils.experimental.shared_pathways_service import gke_utils
 import yaml
 
 _logger = logging.getLogger(__name__)
@@ -27,8 +29,9 @@ _SERVER_IMAGE = flags.DEFINE_string(
 )
 _SIDECAR_IMAGE = flags.DEFINE_string(
     "sidecar_image",
-    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:20260423-python_3.12-jax_0.10.0",
-    "Full path to the sidecar Docker image",
+    None,
+    "Optional full path to the static sidecar Docker image. If not provided,"
+    " sidecar containers can be dynamically injected per workload.",
 )
 _TPU_TYPE = flags.DEFINE_enum(
     "tpu_type", "v6e", ["v5e", "v5p", "v6e", "tpu7x"], "TPU type"
@@ -48,6 +51,16 @@ _DRY_RUN = flags.DEFINE_boolean(
     "dry_run",
     False,
     "If true, only print the generated YAML without deploying.",
+)
+_MAX_RESTARTS = flags.DEFINE_integer(
+    "max_restarts",
+    30,
+    "Maximum number of times the JobSet is recreated after any of its Jobs"
+    " fails before the JobSet is marked failed. This is a lifetime limit"
+    " across all failure causes. In practice restarts come from the Pathways"
+    " head (a crash, or an eviction such as a GKE node upgrade), since worker"
+    " Jobs have an effectively unlimited backoff limit.",
+    lower_bound=0,
 )
 _SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
 
@@ -141,15 +154,69 @@ def calculate_vms_per_slice(topology: str, chips_per_vm: int) -> int:
     ) from e
 
 
+def _ensure_ephemeral_sidecar_rbac(namespace: str) -> None:
+  """Ensures the default ServiceAccount can patch pods/ephemeralcontainers."""
+  rbac_api = client.RbacAuthorizationV1Api()
+  role_name = "pathways-ephemeral-sidecar-injector"
+  role = client.V1Role(
+      metadata=client.V1ObjectMeta(name=role_name, namespace=namespace),
+      rules=[
+          client.V1PolicyRule(
+              api_groups=[""],
+              resources=["pods", "pods/ephemeralcontainers"],
+              verbs=["get", "patch", "update"],
+          )
+      ],
+  )
+  try:
+    rbac_api.create_namespaced_role(namespace=namespace, body=role)
+  except client.rest.ApiException as e:
+    if e.status == 409:
+      rbac_api.replace_namespaced_role(
+          name=role_name, namespace=namespace, body=role
+      )
+    else:
+      raise
+
+  binding_name = "pathways-ephemeral-sidecar-injector-binding"
+  subject_cls = getattr(client, "RbacV1Subject", None) or getattr(
+      client, "V1Subject"
+  )
+  binding = client.V1RoleBinding(
+      metadata=client.V1ObjectMeta(name=binding_name, namespace=namespace),
+      subjects=[
+          subject_cls(
+              kind="ServiceAccount", name="default", namespace=namespace
+          )
+      ],
+      role_ref=client.V1RoleRef(
+          api_group="rbac.authorization.k8s.io",
+          kind="Role",
+          name=role_name,
+      ),
+  )
+  try:
+    rbac_api.create_namespaced_role_binding(namespace=namespace, body=binding)
+  except client.rest.ApiException as e:
+    if e.status == 409:
+      rbac_api.replace_namespaced_role_binding(
+          name=binding_name, namespace=namespace, body=binding
+      )
+    else:
+      raise
+
+
 def deploy_jobset(jobset_yaml: dict[str, Any]) -> None:
   """Deploys the JobSet to the current Kubernetes cluster."""
   try:
     config.load_kube_config()
+    namespace = jobset_yaml["metadata"]["namespace"]
+    _ensure_ephemeral_sidecar_rbac(namespace)
     api = client.CustomObjectsApi()
     api.create_namespaced_custom_object(
         group="jobset.x-k8s.io",
         version="v1alpha2",
-        namespace=jobset_yaml["metadata"]["namespace"],
+        namespace=namespace,
         body=jobset_yaml,
         plural="jobsets",
     )
@@ -172,6 +239,7 @@ def run_deployment(
     sidecar_image,
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
+    max_restarts: int = 30,
 ) -> None:
   """Executes the deployment logic."""
   # Use PathwaysJobSet builder instead of YAML template.
@@ -183,6 +251,7 @@ def run_deployment(
       topology=topology,
       num_slices=num_slices,
       shared_pathways_service=True,
+      max_restarts=max_restarts,
       # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
       # implemented
       max_slice_restarts=1000000,
@@ -195,36 +264,65 @@ def run_deployment(
       if container.name == "pathways-rm":
         container.image = server_image
     # Mutate worker job.
-    for container in pw_jobset.worker_job_template.spec.template.spec.containers:
+    for (
+        container
+    ) in pw_jobset.worker_job_template.spec.template.spec.containers:
       if container.name == "pathways-worker":
         container.image = server_image
 
   # Add colocated python sidecar.
-  pw_jobset.add_colocated_python(image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR)
+  pw_jobset.add_colocated_python(
+      image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR
+  )
 
   # Mutate the sidecar configuration to match what HEAD expects.
   worker_spec = pw_jobset.worker_job_template.spec.template.spec
 
   # 1. Add extra logging env vars to sidecar.
-  for container in ((worker_spec.containers or []) + (worker_spec.init_containers or [])):
+  # These make the colocated Python sidecar logs as verbose as possible so that
+  # issues in the sidecar (e.g. array (de)serialization during checkpointing)
+  # can be debugged from the container logs.
+  for container in (worker_spec.containers or []) + (
+      worker_spec.init_containers or []
+  ):
     if container.name == "colocated-python-sidecar":
       container.env.extend([
+          # Disable Python stdout/stderr buffering so logs are emitted
+          # immediately and are not lost if the container crashes.
           client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
+          # Python logging level for the sidecar.
           client.V1EnvVar(name="LOGLEVEL", value="DEBUG"),
+          # glog (C++) logging: emit INFO and above (0 = INFO) and enable
+          # VLOG(n) messages for n <= 5.
           client.V1EnvVar(name="GLOG_minloglevel", value="0"),
           client.V1EnvVar(name="GLOG_v", value="5"),
+          # TSL/XLA (C++) logging used by JAX: emit INFO and above and enable
+          # VLOG(n) messages for n <= 5.
           client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
           client.V1EnvVar(name="TF_CPP_MIN_VLOG_LEVEL", value="5"),
+          # TPU runtime (libtpu) logging: emit INFO and above.
           client.V1EnvVar(name="TPU_MIN_LOG_LEVEL", value="0"),
-          client.V1EnvVar(name="GLOG_vmodule", value="jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"),
+          # Per-module verbose logging (level 5) for the array serialization
+          # modules used when transferring/checkpointing arrays via the
+          # sidecar.
+          client.V1EnvVar(
+              name="GLOG_vmodule",
+              value=(
+                  "jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"
+              ),
+          ),
       ])
 
-  # 2. Add arg to pathways-worker container (in addition to env var set by builder).
+  # 2. Add arg to pathways-worker container.
   for container in worker_spec.containers:
     if container.name == "pathways-worker":
       args = container.args or []
-      if not any(a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args):
-        args.append(f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}")
+      if not any(
+          a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args
+      ):
+        args.append(
+            f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}"
+        )
       container.args = args
 
   jobset_config = pw_jobset.to_dict()
@@ -234,6 +332,31 @@ def run_deployment(
 
   if not dry_run:
     _logger.info("Deploying JobSet...")
+    cluster, project = gke_utils.get_current_cluster_and_project()
+    if not cluster or not project:
+      raise ValueError(
+          "Cluster or project could not be determined from kubeconfig. Run"
+          " 'gcloud container clusters get-credentials ... && kubectl config"
+          " set-context --current --namespace=default' OR 'kubectl config"
+          " set-context --current --user=... --cluster=...'"
+          " first."
+      )
+    now = datetime.datetime.now(datetime.timezone.utc)
+    start_time = now.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    end_time = (now + gke_utils.LOG_LINK_WINDOW).isoformat(
+        timespec="milliseconds"
+    ).replace("+00:00", "Z")
+    cloud_logging_link = gke_utils.get_log_link(
+        cluster=cluster,
+        project=project,
+        job_name=jobset_name,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    _logger.info(
+        "View SPS deployment logs in Cloud Logging: %s", cloud_logging_link
+    )
+
     deploy_func(jobset_config)
   else:
     _logger.info("Dry run mode, not deploying.")
@@ -264,6 +387,7 @@ def main(argv: Sequence[str]) -> None:
         server_image=server_image,
         sidecar_image=_SIDECAR_IMAGE.value,
         dry_run=_DRY_RUN.value,
+        max_restarts=_MAX_RESTARTS.value,
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
