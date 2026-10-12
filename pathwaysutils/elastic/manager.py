@@ -52,7 +52,7 @@ RetryPolicy: TypeAlias = Callable[[int, Exception], bool]
 
 
 def _elastic_event_cleanup() -> None:
-  """Cleans up JAX profiles, caches, and live arrays."""
+  """Stops any ongoing JAX profiler trace."""
   try:
     _logger.info("Cleaning up any ongoing traces")
     jax.profiler.stop_trace()
@@ -61,10 +61,6 @@ def _elastic_event_cleanup() -> None:
   except Exception:
     _logger.exception("Error cleaning up ongoing traces")
     raise
-
-  jax.clear_caches()
-  for array in jax.live_arrays():
-    array.delete()
 
 
 class ElasticRetryLimit:
@@ -299,8 +295,7 @@ class Manager:
 
     This decorator wraps a function to automatically retry execution in case of
     `jax.errors.JaxRuntimeError` caused by slice down events. It waits for
-    `minimum_slice_count` active slices before each attempt and cleans up JAX
-    caches on failure.
+    `minimum_slice_count` active slices before each attempt.
 
     If `minimum_slice_count` is not met, the function will wait until at least
     `minimum_slice_count` slices are active before execution. If
@@ -312,6 +307,12 @@ class Manager:
     `self.available_inactive_slices`. User code can check this set (e.g. at step
     boundaries) and raise a `ScaleUpSignalError` to gracefully interrupt the
     current execution and trigger a retry with the expanded hardware.
+
+    On an elastic event the arrays of the failed attempt are not deleted
+    explicitly; JAX frees them once the attempt has unwound and nothing
+    references them anymore. The wrapped function and the callbacks must not
+    keep references to them, or the memory stays allocated during the next
+    attempt.
 
     Often, the function will dispatch JAX operations and wait for them to
     complete while creating a log message. If using Python logging, it is
