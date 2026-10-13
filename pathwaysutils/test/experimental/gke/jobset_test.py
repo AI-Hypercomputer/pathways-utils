@@ -896,9 +896,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     user_c = helper.containers["pathways-head"]["user-workload"]
     self.assertEqual(user_c["image"], "us-docker.pkg.dev/my-project/test:v1")
     self.assertEqual(user_c["command"], ["sh", "-c", "python3 -m test_module"])
-    self.assertEqual(
-        user_c["resources"], {"limits": {"cpu": "24", "memory": "100G"}}
-    )
+    self.assertNotIn("resources", user_c)
     self.assertTrue(
         any(
             e["name"] == "CUSTOM_ENV" and e["value"] == "123"
@@ -907,23 +905,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
     self.assertTrue(
         any(
-            e["name"] == "MEGASCALE_NUM_SLICES" and e["value"] == "1"
-            for e in user_c["env"]
-        )
-    )
-    self.assertTrue(
-        any(
             e["name"] == "JAX_PLATFORMS" and e["value"] == "proxy"
-            for e in user_c["env"]
-        )
-    )
-    self.assertTrue(
-        any(
-            e["name"] == "PATHWAYS_HEAD"
-            and e.get("valueFrom", {})
-            .get("fieldRef", {})
-            .get("fieldPath")
-            == "metadata.labels['jobset.sigs.k8s.io/coordinator']"
             for e in user_c["env"]
         )
     )
@@ -1054,10 +1036,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
     self.assertEqual(head_spec["priorityClassName"], "high")
     self.assertEqual(worker_spec["priorityClassName"], "high")
-    self.assertEqual(
-        head_spec["nodeSelector"][jobset.GKE_NODEPOOL_KEY], "cpu-np"
-    )
-    self.assertEqual(head_spec["nodeSelector"]["zone"], "us-central1-a")
+    self.assertEqual(head_spec["nodeSelector"], {"zone": "us-central1-a"})
 
     # Overriding GKE_NODEPOOL_KEY explicitly
     custom_np_js = self._create_jobset(

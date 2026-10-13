@@ -209,6 +209,14 @@ class PathwaysJobSet:
         head_pod_spec_kwargs=head_pod_spec_kwargs,
     )
 
+    worker_kwargs = (
+        dict(worker_pod_spec_kwargs) if worker_pod_spec_kwargs else {}
+    )
+    if termination_grace_period_seconds is not None:
+      worker_kwargs.setdefault(
+          "termination_grace_period_seconds", termination_grace_period_seconds
+      )
+
     # Build worker template.
     self._worker_job_template = self._build_worker_job_template(
         pathways_dir=pathways_dir,
@@ -218,9 +226,8 @@ class PathwaysJobSet:
         topology=topology,
         image_tag=image_tag,
         max_slice_restarts=max_slice_restarts,
-        termination_grace_period_seconds=termination_grace_period_seconds,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
-        worker_pod_spec_kwargs=worker_pod_spec_kwargs,
+        worker_pod_spec_kwargs=worker_kwargs,
     )
 
     self._success_policy = None
@@ -385,13 +392,10 @@ class PathwaysJobSet:
         "init_containers": init_containers,
         "containers": [dummy_container],
         "restart_policy": "Never",
+        "node_selector": {GKE_NODEPOOL_KEY: "cpu-np"},
     }
     if head_pod_spec_kwargs:
       pod_spec_kwargs.update(head_pod_spec_kwargs)
-    node_sel = dict(pod_spec_kwargs.get("node_selector") or {})
-    if GKE_NODEPOOL_KEY not in node_sel:
-      node_sel[GKE_NODEPOOL_KEY] = "cpu-np"
-    pod_spec_kwargs["node_selector"] = node_sel
 
     head_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
@@ -425,7 +429,6 @@ class PathwaysJobSet:
       topology: str,
       image_tag: str,
       max_slice_restarts: int,
-      termination_grace_period_seconds: int | None,
       pathways_rm_and_worker_image: str,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
@@ -529,6 +532,7 @@ class PathwaysJobSet:
 
     pod_spec_kwargs: dict[str, Any] = {
         "containers": [worker_container],
+        "node_selector": node_selector,
         "volumes": [
             client.V1Volume(
                 name="shared-tmp",
@@ -539,15 +543,8 @@ class PathwaysJobSet:
         ],
         "restart_policy": "OnFailure",
     }
-    if termination_grace_period_seconds is not None:
-      pod_spec_kwargs["termination_grace_period_seconds"] = (
-          termination_grace_period_seconds
-      )
     if worker_pod_spec_kwargs:
       pod_spec_kwargs.update(worker_pod_spec_kwargs)
-    worker_node_sel = dict(pod_spec_kwargs.get("node_selector") or {})
-    worker_node_sel.update(node_selector)
-    pod_spec_kwargs["node_selector"] = worker_node_sel
 
     worker_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
@@ -620,8 +617,7 @@ class PathwaysJobSet:
       image: str,
       command: Sequence[str] | str,
       name: str = "user-workload",
-      env: Mapping[str, str] | None = None,
-      resources: client.V1ResourceRequirements | None = None,
+      **container_kwargs: Any,
   ) -> "PathwaysJobSet":
     """Adds a user workload container to the head pod.
 
@@ -630,8 +626,8 @@ class PathwaysJobSet:
       command: Command to execute in the container (string or sequence of
         strings).
       name: Container name for the user workload (default: 'user-workload').
-      env: Optional additional environment variables.
-      resources: Optional resource requirements (default: 24 CPUs, 100G memory).
+      **container_kwargs: Optional additional keyword arguments passed to
+        `client.V1Container` (e.g., `env`, `resources`, `volume_mounts`).
 
     Returns:
       The PathwaysJobSet instance for chaining.
@@ -640,59 +636,37 @@ class PathwaysJobSet:
 
     cmd = ["sh", "-c", command] if isinstance(command, str) else list(command)
 
+    default_env = {
+        "JAX_PLATFORMS": "proxy",
+        "JAX_BACKEND_TARGET": f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
+        "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS": "true",
+    }
+    user_env = container_kwargs.pop("env", None)
+    if user_env:
+      for k, v in user_env.items():
+        if k in default_env:
+          _logger.debug(
+              "Overriding default environment variable %s=%s with %s",
+              k,
+              default_env[k],
+              v,
+          )
+        default_env[k] = str(v)
+
     user_env_list = [
-        client.V1EnvVar(name="JAX_PLATFORMS", value="proxy"),
-        client.V1EnvVar(
-            name="PATHWAYS_HEAD",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path=(
-                        "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                    )
-                )
-            ),
-        ),
-        client.V1EnvVar(
-            name="JAX_BACKEND_TARGET",
-            value=f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
-        ),
-        client.V1EnvVar(
-            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
-            value="true",
-        ),
-        client.V1EnvVar(
-            name="MEGASCALE_NUM_SLICES",
-            value=str(self._worker_replicas),
-        ),
-        client.V1EnvVar(
-            name="JOBSET_NAME",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path=(
-                        "metadata.annotations['jobset.sigs.k8s.io/jobset-name']"
-                    )
-                )
-            ),
-        ),
+        client.V1EnvVar(name=k, value=v) for k, v in default_env.items()
     ]
-    if env:
-      user_env_list = [e for e in user_env_list if e.name not in env]
-      for k, v in env.items():
-        user_env_list.append(client.V1EnvVar(name=k, value=str(v)))
 
-    if resources is None:
-      resources = client.V1ResourceRequirements(
-          limits={"cpu": "24", "memory": "100G"}
-      )
+    container_spec_kwargs: dict[str, Any] = {
+        "name": name,
+        "image": image,
+        "image_pull_policy": "Always",
+        "command": cmd,
+        "env": user_env_list,
+    }
+    container_spec_kwargs.update(container_kwargs)
 
-    user_container = client.V1Container(
-        name=name,
-        image=image,
-        image_pull_policy="Always",
-        command=cmd,
-        env=user_env_list,
-        resources=resources,
-    )
+    user_container = client.V1Container(**container_spec_kwargs)
 
     containers = [
         c for c in pod_spec.containers
