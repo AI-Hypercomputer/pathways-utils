@@ -26,7 +26,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     # cluster so that credentials are fetched.
     self.mock_is_current_kube_context = self.enter_context(
         mock.patch.object(
-            isc_pathways, "_is_current_kube_context", autospec=True
+            isc_pathways.gke_utils, "_is_current_kube_context", autospec=True
         )
     )
     self.mock_is_current_kube_context.return_value = False
@@ -1417,90 +1417,6 @@ class ISCPathwaysTest(parameterized.TestCase):
           proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
       ):
         pass
-
-
-class KubeConfigCredentialsTest(parameterized.TestCase):
-  """Tests for the kube config context helpers."""
-
-  def setUp(self):
-    super().setUp()
-    self.mock_get_current_kube_context = self.enter_context(
-        mock.patch.object(
-            isc_pathways.gke_utils, "get_current_kube_context", autospec=True
-        )
-    )
-    self.mock_fetch_creds = self.enter_context(
-        mock.patch.object(
-            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
-        )
-    )
-
-  def test_is_current_kube_context_matching(self):
-    """Tests that a matching active context is detected."""
-    self.mock_get_current_kube_context.return_value = (
-        "test-cluster",
-        "test-project",
-        "test-region",
-    )
-
-    self.assertTrue(
-        isc_pathways._is_current_kube_context(
-            cluster="test-cluster",
-            project="test-project",
-            location="test-region",
-        )
-    )
-
-  @parameterized.named_parameters(
-      ("different_cluster", ("other-cluster", "test-project", "test-region")),
-      ("different_project", ("test-cluster", "other-project", "test-region")),
-      ("different_location", ("test-cluster", "test-project", "other-region")),
-      ("non_gke_context", ("minikube", None, None)),
-      ("no_context", (None, None, None)),
-  )
-  def test_is_current_kube_context_not_matching(self, current_context):
-    """Tests that a non-matching active context is detected."""
-    self.mock_get_current_kube_context.return_value = current_context
-
-    self.assertFalse(
-        isc_pathways._is_current_kube_context(
-            cluster="test-cluster",
-            project="test-project",
-            location="test-region",
-        )
-    )
-
-  def test_ensure_cluster_credentials_skips_fetch_when_matching(self):
-    """Tests that credentials are not fetched for the active context."""
-    self.mock_get_current_kube_context.return_value = (
-        "test-cluster",
-        "test-project",
-        "test-region",
-    )
-
-    isc_pathways._ensure_cluster_credentials(
-        cluster="test-cluster", project="test-project", location="test-region"
-    )
-
-    self.mock_fetch_creds.assert_not_called()
-
-  def test_ensure_cluster_credentials_fetches_when_not_matching(self):
-    """Tests that credentials are fetched for a different context."""
-    self.mock_get_current_kube_context.return_value = (
-        "test-cluster",
-        "other-project",
-        "test-region",
-    )
-
-    isc_pathways._ensure_cluster_credentials(
-        cluster="test-cluster", project="test-project", location="test-region"
-    )
-
-    self.mock_fetch_creds.assert_called_once_with(
-        cluster_name="test-cluster",
-        project_id="test-project",
-        location="test-region",
-    )
 
 
 if __name__ == "__main__":

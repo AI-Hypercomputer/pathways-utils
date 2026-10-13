@@ -13,6 +13,8 @@ import urllib.parse
 
 from kubernetes import client
 from kubernetes import config as k8s_config
+from pathwaysutils.experimental.gke import jobset as gke_jobset
+from pathwaysutils.experimental.shared_pathways_service import tpu_specs
 import portpicker
 
 _logger = logging.getLogger(__name__)
@@ -148,7 +150,6 @@ def delete_gke_resource(
         "Failed to delete %s. kubectl output:\n%r", resource_type, e.stderr
     )
     raise
-
 
 
 def get_pod_from_job(job_name: str) -> str:
@@ -389,6 +390,43 @@ def get_current_kube_context() -> tuple[str | None, str | None, str | None]:
     return cluster, project, location
 
   return cluster_context or None, None, None
+
+
+def _is_current_kube_context(
+    *, cluster: str, project: str, location: str
+) -> bool:
+  """Checks whether the active kube config context points at the cluster.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    location: The GCP region or zone of the cluster.
+
+  Returns:
+    True if the current kube config context already targets the given cluster.
+  """
+  return get_current_kube_context() == (cluster, project, location)
+
+
+def ensure_cluster_credentials(
+    *, cluster: str, project: str, location: str
+) -> None:
+  """Fetches the GKE cluster credentials unless kube config already has them."""
+  if _is_current_kube_context(
+      cluster=cluster, project=project, location=location
+  ):
+    _logger.info(
+        "The current kube config context already points to cluster '%s' in"
+        " project '%s' and location '%s'. Skipping credential fetch.",
+        cluster,
+        project,
+        location,
+    )
+    return
+
+  fetch_cluster_credentials(
+      cluster_name=cluster, project_id=project, location=location
+  )
 
 
 def get_current_cluster_and_project() -> tuple[str | None, str | None]:
@@ -672,7 +710,6 @@ def stream_pod_logs(pod_name: str) -> subprocess.Popen[str]:
     raise
 
 
-
 def wait_for_deployment(
     name: str, namespace: str = "default", timeout: int = 300
 ) -> None:
@@ -764,21 +801,36 @@ def _get_k8s_custom_objects_api() -> client.CustomObjectsApi:
   return client.CustomObjectsApi()
 
 
-def get_pathways_service_images(
-    pathways_service: str, namespace: str = "default"
-) -> tuple[str, str | None]:
-  """Gets the server image and optional worker sidecar image from the JobSet."""
-  pathways_head_hostname = pathways_service.split(":")[0]
-  _validate_k8s_name(namespace)
+def extract_jobset_name(pathways_service: str) -> str:
+  """Extracts the JobSet name from the Pathways service address.
 
-  # Try to extract the jobset name from the Pathways service hostname.
+  Args:
+    pathways_service: The Pathways service address (e.g.
+      "my-jobset-pathways-head-0-0.my-jobset:29001" or
+      "my-jobset-pathways-head:29001").
+
+  Returns:
+    The JobSet name.
+
+  Raises:
+    ValueError: If the JobSet name cannot be extracted from the address.
+  """
+  pathways_head_hostname = pathways_service.split(":")[0]
   if "-pathways-head" not in pathways_head_hostname:
     raise ValueError(
         "Failed to extract jobset name from Pathways service hostname:"
         f" {pathways_head_hostname}. Expected prefix format:"
         " <jobset_name>-pathways-head"
     )
-  jobset_name = pathways_head_hostname.split("-pathways-head")[0]
+  return pathways_head_hostname.split("-pathways-head")[0]
+
+
+def get_pathways_service_images(
+    pathways_service: str, namespace: str = "default"
+) -> tuple[str, str | None]:
+  """Gets the server image and optional worker sidecar image from the JobSet."""
+  _validate_k8s_name(namespace)
+  jobset_name = extract_jobset_name(pathways_service)
 
   try:
     custom_api = _get_k8s_custom_objects_api()
@@ -850,4 +902,145 @@ def get_compatible_proxy_server_image(server_image: str) -> str:
   return new_repo
 
 
+def _get_pod_labels(pod: client.V1Pod) -> dict[str, str]:
+  if pod.metadata and pod.metadata.labels:
+    return pod.metadata.labels
+  return {}
 
+
+def _is_head_pod(pod: client.V1Pod) -> bool:
+  return (
+      _get_pod_labels(pod).get("jobset.sigs.k8s.io/replicatedjob-name")
+      == gke_jobset.PATHWAYS_HEAD_JOB_NAME
+  )
+
+
+def _is_worker_pod(pod: client.V1Pod) -> bool:
+  return (
+      _get_pod_labels(pod).get("jobset.sigs.k8s.io/replicatedjob-name")
+      == gke_jobset.PATHWAYS_WORKER_JOB_NAME
+  )
+
+
+def _is_pod_ready(pod: client.V1Pod) -> bool:
+  """Returns True if the pod phase is Running and Ready condition is True."""
+  status = pod.status
+  if not status or status.phase != "Running":
+    return False
+  for cond in status.conditions or []:
+    if cond.type == "Ready" and cond.status == "True":
+      return True
+  return False
+
+
+def verify_pathways_service_is_up(
+    *,
+    cluster: str,
+    project: str,
+    region: str,
+    pathways_service: str,
+    tpu_type: str,
+    tpu_count: int,
+    namespace: str = "default",
+) -> None:
+  """Verifies that the Shared Pathways Service pods are up and ready.
+
+  Args:
+    cluster: The name of the GKE cluster.
+    project: The GCP project ID.
+    region: The GCP region.
+    pathways_service: The Pathways service address.
+    tpu_type: The TPU machine type and topology (e.g. 'tpuv6e:4x8').
+    tpu_count: Expected number of TPU slices.
+    namespace: The Kubernetes namespace.
+
+  Raises:
+    ValueError: If the service address, TPU type, or namespace is invalid.
+    RuntimeError: If no pods are found for the JobSet or if the head pod or
+      requested worker slices are not ready.
+  """
+  _validate_k8s_name(namespace)
+  jobset_name = extract_jobset_name(pathways_service)
+  _logger.info(
+      "Verifying Shared Pathways Service '%s' in namespace '%s' on cluster"
+      " '%s'...",
+      jobset_name,
+      namespace,
+      cluster,
+  )
+  ensure_cluster_credentials(
+      cluster=cluster, project=project, location=region
+  )
+
+  core_api = _get_k8s_core_api()
+  try:
+    pod_list = core_api.list_namespaced_pod(
+        namespace=namespace,
+        label_selector=f"jobset.sigs.k8s.io/jobset-name={jobset_name}",
+    )
+  except Exception as e:
+    raise RuntimeError(
+        "Failed to list pods for Shared Pathways Service JobSet"
+        f" '{jobset_name}': {e}"
+    ) from e
+
+  pods = pod_list.items or []
+  if not pods:
+    raise RuntimeError(
+        f"No pods found for Shared Pathways Service JobSet '{jobset_name}' in"
+        f" namespace '{namespace}'."
+    )
+
+  head_pod_ready = False
+  ready_worker_pod_count_by_slice: dict[str, int] = {}
+  ready_worker_pods_count = 0
+  for pod in pods:
+    if not _is_pod_ready(pod):
+      continue
+    if _is_head_pod(pod):
+      head_pod_ready = True
+    elif _is_worker_pod(pod):
+      slice_idx = _get_pod_labels(pod).get("jobset.sigs.k8s.io/job-index")
+      if slice_idx is None:
+        continue
+      ready_worker_pods_count += 1
+      ready_worker_pod_count_by_slice[slice_idx] = (
+          ready_worker_pod_count_by_slice.get(slice_idx, 0) + 1
+      )
+
+  if not head_pod_ready:
+    raise RuntimeError(
+        "Shared Pathways Service head pod is not ready for JobSet"
+        f" '{jobset_name}' in namespace '{namespace}'. Please check the jobset"
+        " or deploy it again by running `python3 -m"
+        " pathwaysutils.experimental.shared_pathways_service.deploy_pathways_service`."
+    )
+
+  parsed_tpu_type, topology = tpu_specs.parse_tpu_type_string(tpu_type)
+  tpu_config = tpu_specs.get_tpu_config(parsed_tpu_type)
+  vms_per_slice = tpu_specs.calculate_vms_per_slice(
+      topology, tpu_config.chips_per_vm
+  )
+
+  ready_slices = sum(
+      1
+      for count in ready_worker_pod_count_by_slice.values()
+      if count == vms_per_slice
+  )
+  if ready_slices < tpu_count:
+    raise RuntimeError(
+        f"Shared Pathways Service JobSet '{jobset_name}' is not ready:"
+        f" requested {tpu_count} slice(s) with {vms_per_slice} worker"
+        f" pod(s) per slice, but only {ready_slices} slice(s)"
+        f" ({ready_worker_pods_count} worker pod(s)) are ready. Please check"
+        " the jobset or re-deploy it again by running `python3 -m"
+        " pathwaysutils.experimental.shared_pathways_service.deploy_pathways_service`."
+    )
+
+  _logger.info(
+      "Shared Pathways Service '%s' is up and ready (%d ready slice(s), %d"
+      " ready worker pod(s)).",
+      jobset_name,
+      ready_slices,
+      ready_worker_pods_count,
+  )

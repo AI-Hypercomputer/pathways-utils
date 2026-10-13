@@ -115,6 +115,7 @@ def run_command(
       expected to be a callable that returns a context manager.
 
   Raises:
+    RuntimeError: If the Shared Pathways Service is not up or ready.
     subprocess.CalledProcessError: If the workload command fails.
   """
   if proxy_server_image:
@@ -125,6 +126,15 @@ def run_command(
         DeprecationWarning,
         stacklevel=2,
     )
+  logging.info("Verifying Shared Pathways Service is up and ready...")
+  gke_utils.verify_pathways_service_is_up(
+      cluster=cluster,
+      project=project,
+      region=region,
+      pathways_service=pathways_service,
+      tpu_type=tpu_type,
+      tpu_count=tpu_count,
+  )
   logging.info("Connecting to Shared Pathways Service...")
   with connect_fn(
       cluster=cluster,
