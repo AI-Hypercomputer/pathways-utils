@@ -15,6 +15,7 @@ from kubernetes import client
 from kubernetes import config as k8s_config
 from pathwaysutils.experimental.gke import jobset as gke_jobset
 from pathwaysutils.experimental.shared_pathways_service import tpu_specs
+from pathwaysutils.experimental.shared_pathways_service import validators
 import portpicker
 
 _logger = logging.getLogger(__name__)
@@ -1044,3 +1045,124 @@ def verify_pathways_service_is_up(
       ready_slices,
       ready_worker_pods_count,
   )
+
+
+_PACKAGES_VERSION_SNIPPET = (
+    "import jax, jaxlib, sys; "
+    "print(f'{sys.version_info.major}.{sys.version_info.minor},"
+    "{jax.__version__},{jaxlib.__version__}')"
+)
+
+
+def get_sidecar_versions(
+    jobset_name: str,
+    namespace: str = "default",
+    sidecar_image: str | None = None,
+) -> tuple[str | None, validators.SidecarVersions]:
+  """Gets sidecar image and JAX/JAXLib/Python versions from the SPS instance.
+
+  Queries a running `colocated-python-sidecar` container in the JobSet for the
+  installed Python, JAX, and JAXLib versions.
+
+  Args:
+    jobset_name: The name of the Pathways JobSet.
+    namespace: The Kubernetes namespace of the JobSet.
+    sidecar_image: Optional pre-fetched sidecar image string. If None, fetched
+      from the JobSet via `get_pathways_service_images`.
+
+  Returns:
+    A tuple of (sidecar_image, SidecarVersions). If colocated python sidecar
+    is not enabled, sidecar_image is None and SidecarVersions is empty.
+
+  Raises:
+    RuntimeError: If sidecar versions cannot be queried from a running worker
+      pod in the JobSet.
+  """
+  _validate_k8s_name(namespace)
+  _validate_k8s_name(jobset_name)
+  if sidecar_image is None:
+    _, sidecar_image = get_pathways_service_images(
+        f"{jobset_name}-pathways-head:29001", namespace=namespace
+    )
+  if not sidecar_image:
+    _logger.warning(
+        "JobSet '%s' does not define a sidecar image for the worker pods.",
+        jobset_name,
+    )
+    return (None, validators.SidecarVersions())
+
+  cmd = [
+      "kubectl",
+      "get",
+      "pods",
+      "-n",
+      namespace,
+      "-l",
+      f"jobset.sigs.k8s.io/jobset-name={jobset_name}",
+      "--field-selector=status.phase=Running",
+      "-o",
+      "jsonpath={.items[*].metadata.name}",
+  ]
+  try:
+    pod_result = subprocess.run(
+        cmd, capture_output=True, text=True, check=True, timeout=10
+    )
+    pod_names = [
+        p
+        for p in pod_result.stdout.strip().split()
+        if not p.startswith(f"{jobset_name}-pathways-head-")
+    ]
+  except Exception as e:
+    raise RuntimeError(
+        f"Failed to list running worker pods for JobSet '{jobset_name}' in"
+        f" namespace '{namespace}': {e}"
+    ) from e
+
+  if not pod_names:
+    raise RuntimeError(
+        f"No running worker pods found for JobSet '{jobset_name}' in"
+        f" namespace '{namespace}'."
+    )
+
+  last_error = None
+  for pod_name in pod_names[:3]:
+    try:
+      _validate_k8s_name(pod_name)
+      exec_cmd = [
+          "kubectl",
+          "exec",
+          "-n",
+          namespace,
+          f"pod/{pod_name}",
+          "-c",
+          "colocated-python-sidecar",
+          "--",
+          "python3",
+          "-c",
+          _PACKAGES_VERSION_SNIPPET,
+      ]
+      exec_result = subprocess.run(
+          exec_cmd, capture_output=True, text=True, check=True, timeout=10
+      )
+      py_ver, jax_ver, jaxlib_ver = [
+          part.strip() for part in exec_result.stdout.strip().split(",")
+      ]
+      if py_ver and jax_ver and jaxlib_ver:
+        return (
+            sidecar_image,
+            validators.SidecarVersions(
+                python_version=py_ver,
+                jax_version=jax_ver,
+                jaxlib_version=jaxlib_ver,
+            ),
+        )
+    except Exception as e:  # pylint: disable=broad-exception-caught
+      last_error = e
+      _logger.debug(
+          "Could not query live sidecar pod %s for versions: %r", pod_name, e
+      )
+
+  raise RuntimeError(
+      f"Failed to query sidecar versions from running worker pods for JobSet"
+      f" '{jobset_name}' in namespace '{namespace}'."
+  ) from last_error

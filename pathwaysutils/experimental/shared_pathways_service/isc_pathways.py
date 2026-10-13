@@ -608,8 +608,21 @@ def connect(
   proxy_server_image = compatible_proxy_image
 
   proxy_options_obj = ProxyOptions.from_list(proxy_options)
-  if proxy_options_obj.sidecar and sidecar_image:
-    validators.validate_sidecar_image_versions(sidecar_image)
+  if sidecar_image:
+    jobset_name = gke_utils.extract_jobset_name(pathways_service)
+    _, sidecar_versions = gke_utils.get_sidecar_versions(
+        jobset_name, sidecar_image=sidecar_image
+    )
+    _logger.info(
+        "\n%s",
+        validators.format_sidecar_versions(
+            pathways_service, sidecar_image, sidecar_versions
+        ),
+    )
+    if proxy_options_obj.sidecar:
+      validators.validate_sidecar_image_versions(
+          sidecar_image, sidecar_versions=sidecar_versions
+      )
   _logger.info("Validation complete.")
 
   if not proxy_job_name:
@@ -653,3 +666,4 @@ def connect(
           " _wait_for_placement."
       )
     yield t
+

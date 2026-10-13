@@ -1,17 +1,24 @@
 """Validation functions for Shared Pathways Service."""
 
 from collections.abc import Iterable, Mapping
+import dataclasses
+import importlib
 import logging
 import re
 import sys
 from typing import Any
 from absl import flags
-import jax
 
 _logger = logging.getLogger(__name__)
 
-_PYTHON_VERSION_REGEX = r"python[-_]?(\d+\.\d+(?:\.\d+)*)"
-_JAX_VERSION_REGEX = r"jax[-_]?(\d+\.\d+(?:\.\d+)*)"
+
+@dataclasses.dataclass(frozen=True)
+class SidecarVersions:
+  """Holds Python, JAX, and JAXLib versions for a colocated python sidecar."""
+
+  python_version: str | None = None
+  jax_version: str | None = None
+  jaxlib_version: str | None = None
 
 
 def validate_proxy_options(proxy_options: Iterable[str] | None) -> None:
@@ -124,50 +131,47 @@ def validate_xla_flags(xla_flags: Iterable[str] | None) -> None:
       )
 
 
-def validate_sidecar_image_versions(sidecar_image: str) -> None:
-  """Checks compatibility of sidecar image versions with user environment.
+def format_sidecar_versions(
+    pathways_service: str,
+    sidecar_image: str,
+    sidecar_versions: SidecarVersions,
+) -> str:
+  """Formats the sidecar versions into a human-readable summary string."""
+  lines = [
+      (
+          "Colocated Python sidecar found for Pathways service"
+          f" '{pathways_service}':"
+      ),
+      f"  Sidecar Image: {sidecar_image}",
+  ]
+  if sidecar_versions.python_version:
+    lines.append(f"  Python: {sidecar_versions.python_version}")
+  if sidecar_versions.jax_version:
+    lines.append(f"  JAX: {sidecar_versions.jax_version}")
+  if sidecar_versions.jaxlib_version:
+    lines.append(f"  JAXLib: {sidecar_versions.jaxlib_version}")
+  return "\n".join(lines)
 
-  Compares the Python and JAX versions in the sidecar image tag with the user
-  environment's Python and JAX versions.
+
+def validate_sidecar_image_versions(
+    sidecar_image: str, sidecar_versions: SidecarVersions
+) -> None:
+  """Checks compatibility of sidecar package versions with user environment.
+
+  Compares the Python, JAX, and JAXLib versions in the sidecar container with
+  the user environment's Python, JAX, and JAXLib versions.
 
   Args:
-    sidecar_image: The sidecar image string, e.g.,
-      "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0".
+    sidecar_image: The sidecar image string.
+    sidecar_versions: The SidecarVersions queried from the sidecar container.
 
   Raises:
-    ValueError: If the sidecar image Python or JAX versions do not match the
+    ValueError: If the sidecar Python, JAX, or JAXLib versions do not match the
       user environment.
   """
   _logger.info(
       "Checking sidecar image version compatibility: %s", sidecar_image
   )
-
-  parts = sidecar_image.rsplit(":", 1)
-  if len(parts) < 2:
-    _logger.warning(
-        "No tag found in sidecar image: %s. Skipping version validation.",
-        sidecar_image,
-    )
-    return
-  tag = parts[1]
-
-  sidecar_python_match = re.search(
-      _PYTHON_VERSION_REGEX, tag, re.IGNORECASE
-  )
-  sidecar_jax_match = re.search(
-      _JAX_VERSION_REGEX, tag, re.IGNORECASE
-  )
-  if not sidecar_python_match and not sidecar_jax_match:
-    _logger.warning(
-        "No Python or JAX versions found in sidecar image tag: %s. Skipping "
-        "version validation.",
-        tag,
-    )
-    return
-
-  def clean_version(version_str: str) -> str:
-    match = re.match(r"^(\d+(?:\.\d+)*)", version_str)
-    return match.group(1) if match else version_str
 
   def versions_match(sidecar_ver: str, env_ver: str) -> bool:
     sidecar_parts = sidecar_ver.split(".")
@@ -177,8 +181,15 @@ def validate_sidecar_image_versions(sidecar_image: str) -> None:
       return False
     return sidecar_parts[:compare_len] == env_parts[:compare_len]
 
-  if sidecar_python_match:
-    sidecar_python = clean_version(sidecar_python_match.group(1))
+  install_hint = ""
+  if sidecar_versions.jax_version and sidecar_versions.jaxlib_version:
+    install_hint = (
+        f" by running: pip install jax=={sidecar_versions.jax_version}"
+        f" jaxlib=={sidecar_versions.jaxlib_version}"
+    )
+
+  if sidecar_versions.python_version:
+    sidecar_python = sidecar_versions.python_version.strip()
     env_python = (
         f"{sys.version_info.major}.{sys.version_info.minor}."
         f"{sys.version_info.micro}"
@@ -198,21 +209,38 @@ def validate_sidecar_image_versions(sidecar_image: str) -> None:
         env_python,
     )
 
-  if sidecar_jax_match:
-    sidecar_jax = clean_version(sidecar_jax_match.group(1))
-    env_jax = clean_version(jax.__version__)
-    if not versions_match(sidecar_jax, env_jax):
-      raise ValueError(
-          f"JAX version mismatch: sidecar image matches JAX version "
-          f"{sidecar_jax}, but the user environment is running JAX "
-          f"{env_jax}. Either rebuild the sidecar image with a matching "
-          "JAX version or update the user environment to match the sidecar "
-          "image."
-      )
-    _logger.info(
-        "JAX version match: sidecar image matches JAX version %s, and the user"
-        " environment is running JAX %s.",
-        sidecar_jax,
-        env_jax,
-    )
+  for pkg_name, display_name, raw_sidecar_ver in (
+      ("jax", "JAX", sidecar_versions.jax_version),
+      ("jaxlib", "JAXLib", sidecar_versions.jaxlib_version),
+  ):
+    if not raw_sidecar_ver:
+      continue
+    sidecar_ver = raw_sidecar_ver.strip()
+    env_ver = None
+    try:
+      mod = sys.modules.get(pkg_name)
+      if mod is None:
+        mod = importlib.import_module(pkg_name)
+      if hasattr(mod, "__version__"):
+        env_ver = mod.__version__.strip()
+    except (ImportError, AttributeError):
+      env_ver = None
 
+    if env_ver is not None:
+      if sidecar_ver != env_ver:
+        raise ValueError(
+            f"{display_name} version mismatch: sidecar image matches"
+            f" {display_name} version {sidecar_ver}, but the user environment"
+            f" is running {display_name} {env_ver}. Either rebuild the sidecar"
+            f" image with a matching {display_name} version or update the user"
+            f" environment to match the sidecar image{install_hint}."
+        )
+      _logger.info(
+          "%s version match: sidecar image matches %s version %s, and the user"
+          " environment is running %s %s.",
+          display_name,
+          display_name,
+          sidecar_ver,
+          display_name,
+          env_ver,
+      )

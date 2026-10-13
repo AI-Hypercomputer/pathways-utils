@@ -2123,7 +2123,129 @@ class GKEUtilsTest(absltest.TestCase):
           namespace="invalid namespace!",
       )
 
+  def test_get_sidecar_versions_no_sidecar(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", None),
+    ), self.assertLogs(gke_utils._logger, level="WARNING") as log_cm:
+      sidecar_img, versions = gke_utils.get_sidecar_versions("my-jobset")
+      self.assertIsNone(sidecar_img)
+      self.assertIsNone(versions.python_version)
+      self.assertIsNone(versions.jax_version)
+      self.assertIsNone(versions.jaxlib_version)
+    self.assertTrue(
+        any(
+            "does not define a sidecar image" in msg
+            for msg in log_cm.output
+        )
+    )
+
+  def test_get_sidecar_versions_live_query_success(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=(
+            "server_img",
+            "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+        ),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          mock.Mock(
+              stdout="my-jobset-pathways-head-0-0 my-jobset-worker-0-0\n",
+              returncode=0,
+          ),
+          mock.Mock(stdout="3.12,0.10.0,0.10.0\n", returncode=0),
+      ]
+      sidecar_img, versions = gke_utils.get_sidecar_versions("my-jobset")
+      self.assertEqual(
+          sidecar_img,
+          "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+      )
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.10.0")
+      self.assertEqual(versions.jaxlib_version, "0.10.0")
+
+  def test_get_sidecar_versions_jobset_name_containing_pathways_head(self):
+    jobset_name = "test-pathways-head-eval"
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", "us-docker.pkg.dev/repo/sidecar:latest"),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          mock.Mock(
+              stdout=(
+                  f"{jobset_name}-pathways-head-0-0"
+                  f" {jobset_name}-pathways-worker-0-0\n"
+              ),
+              returncode=0,
+          ),
+          mock.Mock(stdout="3.12,0.11.1,0.11.1\n", returncode=0),
+      ]
+      _, versions = gke_utils.get_sidecar_versions(jobset_name)
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.11.1")
+      self.assertEqual(versions.jaxlib_version, "0.11.1")
+
+  def test_get_sidecar_versions_first_pod_timeout_retries_second_pod(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=(
+            "server_img",
+            "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+        ),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          mock.Mock(stdout="pod-0 pod-1\n", returncode=0),
+          subprocess.TimeoutExpired(cmd=["kubectl", "exec"], timeout=10),
+          mock.Mock(stdout="3.12,0.10.0,0.10.0\n", returncode=0),
+      ]
+      sidecar_img, versions = gke_utils.get_sidecar_versions("my-jobset")
+      self.assertEqual(
+          sidecar_img,
+          "us-docker.pkg.dev/repo/sidecar:20260423-python_3.12-jax_0.10.0",
+      )
+      self.assertEqual(versions.python_version, "3.12")
+      self.assertEqual(versions.jax_version, "0.10.0")
+      self.assertEqual(versions.jaxlib_version, "0.10.0")
+      self.assertEqual(mock_run.call_count, 3)
+
+  def test_get_sidecar_versions_no_running_worker_pods_raises(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", "us-docker.pkg.dev/repo/sidecar:latest"),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.return_value = mock.Mock(
+          stdout="my-jobset-pathways-head-0-0\n", returncode=0
+      )
+      with self.assertRaisesRegex(
+          RuntimeError, "No running worker pods found for JobSet 'my-jobset'"
+      ):
+        gke_utils.get_sidecar_versions("my-jobset")
+
+  def test_get_sidecar_versions_bounds_pod_attempts_to_three(self):
+    with mock.patch.object(
+        gke_utils,
+        "get_pathways_service_images",
+        return_value=("server_img", "us-docker.pkg.dev/repo/sidecar:latest"),
+    ), mock.patch.object(subprocess, "run") as mock_run:
+      mock_run.side_effect = [
+          mock.Mock(stdout="pod-0 pod-1 pod-2 pod-3 pod-4\n", returncode=0),
+          subprocess.TimeoutExpired(cmd=["kubectl", "exec"], timeout=10),
+          subprocess.TimeoutExpired(cmd=["kubectl", "exec"], timeout=10),
+          subprocess.TimeoutExpired(cmd=["kubectl", "exec"], timeout=10),
+      ]
+      with self.assertRaisesRegex(
+          RuntimeError,
+          "Failed to query sidecar versions from running worker pods",
+      ):
+        gke_utils.get_sidecar_versions("my-jobset")
+      # 1 call for kubectl get pods + 3 calls for kubectl exec
+      self.assertEqual(mock_run.call_count, 4)
+
 
 if __name__ == "__main__":
   absltest.main()
-

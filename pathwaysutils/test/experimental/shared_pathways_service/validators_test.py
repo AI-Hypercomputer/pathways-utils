@@ -1,5 +1,6 @@
 """Tests for validation functions for the Shared Pathways service."""
 
+import sys
 from unittest import mock
 
 from absl import flags
@@ -265,22 +266,18 @@ class ValidatorsTest(parameterized.TestCase):
     mock_sys_info.major = 3
     mock_sys_info.minor = 12
     mock_sys_info.micro = 8
-    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
-        "jax.__version__", "0.10.0"
+    mock_jax = mock.Mock(__version__="0.10.0")
+    mock_jaxlib = mock.Mock(__version__="0.10.0")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch.dict(
+        sys.modules, {"jax": mock_jax, "jaxlib": mock_jaxlib}
     ):
-      # Python 3.12 (matches 3.12.8), JAX 0.10.0 (matches 0.10.0)
       validators.validate_sidecar_image_versions(
-          "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
-      )
-
-      # Python omitted, JAX 0.10 (matches 0.10.0)
-      validators.validate_sidecar_image_versions(
-          "us-docker.pkg.dev/.../sidecar:20260423-jax_0.10"
-      )
-
-      # No version info
-      validators.validate_sidecar_image_versions(
-          "us-docker.pkg.dev/.../sidecar:latest"
+          "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
+          sidecar_versions=validators.SidecarVersions(
+              python_version="3.12",
+              jax_version="0.10.0",
+              jaxlib_version="0.10.0",
+          ),
       )
 
   def test_validate_sidecar_image_versions_python_mismatch(self):
@@ -288,12 +285,19 @@ class ValidatorsTest(parameterized.TestCase):
     mock_sys_info.major = 3
     mock_sys_info.minor = 11
     mock_sys_info.micro = 5
-    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
-        "jax.__version__", "0.10.0"
+    mock_jax = mock.Mock(__version__="0.10.0")
+    mock_jaxlib = mock.Mock(__version__="0.10.0")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch.dict(
+        sys.modules, {"jax": mock_jax, "jaxlib": mock_jaxlib}
     ):
       with self.assertRaisesRegex(ValueError, "Python version mismatch"):
         validators.validate_sidecar_image_versions(
-            "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+            "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
+            sidecar_versions=validators.SidecarVersions(
+                python_version="3.12",
+                jax_version="0.10.0",
+                jaxlib_version="0.10.0",
+            ),
         )
 
   def test_validate_sidecar_image_versions_jax_mismatch(self):
@@ -301,13 +305,91 @@ class ValidatorsTest(parameterized.TestCase):
     mock_sys_info.major = 3
     mock_sys_info.minor = 12
     mock_sys_info.micro = 8
-    with mock.patch("sys.version_info", mock_sys_info), mock.patch(
-        "jax.__version__", "0.9.0"
+    mock_jax = mock.Mock(__version__="0.9.0")
+    mock_jaxlib = mock.Mock(__version__="0.9.0")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch.dict(
+        sys.modules, {"jax": mock_jax, "jaxlib": mock_jaxlib}
     ):
-      with self.assertRaisesRegex(ValueError, "JAX version mismatch"):
+      with self.assertRaisesRegex(
+          ValueError,
+          r"JAX version mismatch.*pip install jax==0\.10\.0 jaxlib==0\.10\.0",
+      ):
         validators.validate_sidecar_image_versions(
-            "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0"
+            "us-docker.pkg.dev/.../sidecar:20260423-python_3.12-jax_0.10.0",
+            sidecar_versions=validators.SidecarVersions(
+                python_version="3.12",
+                jax_version="0.10.0",
+                jaxlib_version="0.10.0",
+            ),
         )
+
+  def test_validate_sidecar_image_versions_jaxlib_mismatch(self):
+    mock_sys_info = mock.Mock()
+    mock_sys_info.major = 3
+    mock_sys_info.minor = 12
+    mock_sys_info.micro = 8
+    mock_jax = mock.Mock(__version__="0.10.0")
+    mock_jaxlib = mock.Mock(__version__="0.9.0")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch.dict(
+        sys.modules, {"jax": mock_jax, "jaxlib": mock_jaxlib}
+    ):
+      with self.assertRaisesRegex(
+          ValueError,
+          r"JAXLib version mismatch.*pip install jax==0\.10\.0"
+          r" jaxlib==0\.10\.0",
+      ):
+        validators.validate_sidecar_image_versions(
+            "us-docker.pkg.dev/.../sidecar@sha256:80b6718",
+            sidecar_versions=validators.SidecarVersions(
+                python_version="3.12",
+                jax_version="0.10.0",
+                jaxlib_version="0.10.0",
+            ),
+        )
+
+  def test_validate_sidecar_image_versions_suffix_mismatch(self):
+    mock_sys_info = mock.Mock()
+    mock_sys_info.major = 3
+    mock_sys_info.minor = 12
+    mock_sys_info.micro = 8
+    mock_jax = mock.Mock(__version__="0.11.0")
+    mock_jaxlib = mock.Mock(__version__="0.11.0rc2")
+    with mock.patch("sys.version_info", mock_sys_info), mock.patch.dict(
+        sys.modules, {"jax": mock_jax, "jaxlib": mock_jaxlib}
+    ):
+      with self.assertRaisesRegex(
+          ValueError,
+          r"JAX version mismatch.*0\.11\.0rc2.*0\.11\.0",
+      ):
+        validators.validate_sidecar_image_versions(
+            "us-docker.pkg.dev/.../sidecar:latest",
+            sidecar_versions=validators.SidecarVersions(
+                python_version="3.12",
+                jax_version="0.11.0rc2",
+                jaxlib_version="0.11.0rc2",
+            ),
+        )
+
+  def test_format_sidecar_versions(self):
+    versions = validators.SidecarVersions(
+        python_version="3.12",
+        jax_version="0.11.1",
+        jaxlib_version="0.11.1",
+    )
+    text_out = validators.format_sidecar_versions(
+        pathways_service="test-service:29001",
+        sidecar_image="repo/sidecar:tag",
+        sidecar_versions=versions,
+    )
+    self.assertEqual(
+        text_out,
+        "Colocated Python sidecar found for Pathways service"
+        " 'test-service:29001':\n"
+        "  Sidecar Image: repo/sidecar:tag\n"
+        "  Python: 3.12\n"
+        "  JAX: 0.11.1\n"
+        "  JAXLib: 0.11.1",
+    )
 
 
 if __name__ == "__main__":
