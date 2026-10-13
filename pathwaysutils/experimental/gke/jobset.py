@@ -376,21 +376,12 @@ class PathwaysJobSet:
         ),
     )
 
-    rm_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
-    proxy_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
-
-    init_containers = [rm_container]
+    containers = [rm_container]
     if not shared_pathways_service:
-      init_containers.append(proxy_container)
-
-    dummy_container = client.V1Container(
-        name="dummy-job",
-        image="gcr.io/google-containers/pause:3.2",
-    )
+      containers.append(proxy_container)
 
     pod_spec_kwargs: dict[str, Any] = {
-        "init_containers": init_containers,
-        "containers": [dummy_container],
+        "containers": containers,
         "restart_policy": "Never",
         "node_selector": {GKE_NODEPOOL_KEY: "cpu-np"},
     }
@@ -668,11 +659,16 @@ class PathwaysJobSet:
 
     user_container = client.V1Container(**container_spec_kwargs)
 
-    containers = [
-        c for c in pod_spec.containers
-        if c.name != name and c.name != "dummy-job"
-    ]
+    init_containers = list(pod_spec.init_containers or [])
+    containers = []
+    for c in pod_spec.containers:
+      if c.name in ("pathways-rm", "pathways-proxy"):
+        c.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
+        init_containers.append(c)
+      elif c.name != name:
+        containers.append(c)
     containers.append(user_container)
+    pod_spec.init_containers = init_containers
     pod_spec.containers = containers
 
     if not self._shared_pathways_service:

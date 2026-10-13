@@ -160,19 +160,18 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(config)
 
     pod_spec = helper.pod_specs["pathways-head"]
-    self.assertLen(pod_spec["initContainers"], 2)
-    self.assertLen(pod_spec["containers"], 1)
-    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
-    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
-    self.assertIn("dummy-job", helper.containers["pathways-head"])
+    self.assertNotIn("initContainers", pod_spec)
+    self.assertLen(pod_spec["containers"], 2)
+    self.assertIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.containers["pathways-head"])
 
-    rm_container = helper.init_containers["pathways-head"]["pathways-rm"]
+    rm_container = helper.containers["pathways-head"]["pathways-rm"]
     self.assertEqual(
         rm_container["image"],
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
     )
 
-    proxy_container = helper.init_containers["pathways-head"]["pathways-proxy"]
+    proxy_container = helper.containers["pathways-head"]["pathways-proxy"]
     self.assertEqual(
         proxy_container["image"],
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
@@ -297,7 +296,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
     helper = JobSetManifestHelper(pw_jobset.to_dict())
 
-    rm_container = helper.init_containers["pathways-head"]["pathways-rm"]
+    rm_container = helper.containers["pathways-head"]["pathways-rm"]
     mounts = {m["name"]: m for m in rm_container.get("volumeMounts", [])}
     self.assertIn(expected_vol_name, mounts)
     self.assertEqual(mounts[expected_vol_name].get("readOnly", False), read_only)
@@ -708,7 +707,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     # Verify head job containers.
     head_containers = {
         c.name: c.image
-        for c in pw_jobset.head_job_template.spec.template.spec.init_containers
+        for c in pw_jobset.head_job_template.spec.template.spec.containers
     }
     self.assertEqual(head_containers["pathways-rm"], "gcr.io/custom/server:v2.0")
     self.assertEqual(
@@ -865,10 +864,10 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("pathways-head", helper.jobs)
     pod_spec = helper.pod_specs["pathways-head"]
 
-    # Head job should have pathways-rm in init_containers, no pathways-proxy, and dummy-job in containers.
-    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
-    self.assertNotIn("pathways-proxy", helper.init_containers["pathways-head"])
-    self.assertIn("dummy-job", helper.containers["pathways-head"])
+    # Head job should only have pathways-rm container, no pathways-proxy.
+    self.assertNotIn("initContainers", pod_spec)
+    self.assertIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
 
   def test_add_user_workload(self):
@@ -924,11 +923,12 @@ class PathwaysJobSetTest(parameterized.TestCase):
         )
     )
 
-    # Verify RM and Proxy are in initContainers (native sidecars)
+    # Verify RM and Proxy are moved to initContainers (native sidecars)
     self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
     self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertIn("user-workload", helper.containers["pathways-head"])
-    self.assertNotIn("dummy-job", helper.containers["pathways-head"])
 
   def test_add_user_workload_roundtrip(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
@@ -974,10 +974,12 @@ class PathwaysJobSetTest(parameterized.TestCase):
     config = pw_jobset.to_dict()
     helper = JobSetManifestHelper(config)
 
+    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
+    self.assertLen(helper.pod_specs["pathways-head"]["initContainers"], 2)
     self.assertIn("custom-sidecar", helper.containers["pathways-head"])
     self.assertIn("user-workload-1", helper.containers["pathways-head"])
     self.assertIn("user-workload-2", helper.containers["pathways-head"])
-    self.assertNotIn("dummy-job", helper.containers["pathways-head"])
     self.assertLen(helper.pod_specs["pathways-head"]["containers"], 3)
 
     c1 = helper.containers["pathways-head"]["user-workload-1"]
@@ -1102,7 +1104,8 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
     self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
     self.assertIn("user-workload", helper.containers["pathways-head"])
-    self.assertNotIn("dummy-job", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
 
     user_container = helper.containers["pathways-head"]["user-workload"]
     self.assertEqual(
