@@ -154,7 +154,9 @@ class PathwaysJobSet:
       pathways_proxy_image: Base Docker image for Proxy container.
       head_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the head pod (e.g., `node_selector`,
-        `priority_class_name`, `host_network`, `dns_policy`).
+        `priority_class_name`, `host_network`, `dns_policy`). Unless
+        `shared_pathways_service` is set, `node_selector` defaults to
+        `{"cloud.google.com/gke-nodepool": "cpu-np"}`.
       worker_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the worker pods (e.g., `priority_class_name`,
         `host_network`, `dns_policy`).
@@ -285,7 +287,7 @@ class PathwaysJobSet:
         f"--server_port={PATHWAYS_RM_PORT}",
         f"--gcs_scratch_location={pathways_dir}",
         "--node_type=resource_manager",
-        "--instance_count=1",
+        f"--instance_count={num_slices}",
         f"--instance_type={instance_type}",
     ]
     rm_env = [
@@ -383,8 +385,12 @@ class PathwaysJobSet:
     pod_spec_kwargs: dict[str, Any] = {
         "containers": containers,
         "restart_policy": "Never",
-        "node_selector": {GKE_NODEPOOL_KEY: "cpu-np"},
     }
+    # Shared Pathways Service clusters are not guaranteed to provide a
+    # dedicated `cpu-np` node pool, so the head pod is only pinned to it by
+    # default for batch and headless workloads.
+    if not shared_pathways_service:
+      pod_spec_kwargs["node_selector"] = {GKE_NODEPOOL_KEY: "cpu-np"}
     if head_pod_spec_kwargs:
       pod_spec_kwargs.update(head_pod_spec_kwargs)
 
