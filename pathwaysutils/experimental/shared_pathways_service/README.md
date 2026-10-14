@@ -30,6 +30,11 @@ python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_se
 
 Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
 
+`--sidecar_image` is optional. Set it to deploy the colocated Python sidecar
+next to the TPU workers, which workloads need to use
+`--proxy_options=sidecar:true`. Without it, the service is deployed without the
+sidecar.
+
 ### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
 Verify that the Shared Pathways Service components are started, specifically the Pathways resource manager (RM) and
