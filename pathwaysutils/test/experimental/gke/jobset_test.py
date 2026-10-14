@@ -160,6 +160,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     helper = JobSetManifestHelper(config)
 
     pod_spec = helper.pod_specs["pathways-head"]
+    self.assertNotIn("initContainers", pod_spec)
     self.assertLen(pod_spec["containers"], 2)
     self.assertIn("pathways-rm", helper.containers["pathways-head"])
     self.assertIn("pathways-proxy", helper.containers["pathways-head"])
@@ -176,6 +177,35 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
     )
     self.assertIn("--num_elastic_slices=2", proxy_container["args"])
+    self.assertTrue(
+        any(
+            e.get("name") == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+            and e.get("value") == "true"
+            for e in proxy_container.get("env", [])
+        )
+    )
+
+  def test_configurable_host_network_and_dns_policy(self):
+    js = self._create_jobset(
+        head_pod_spec_kwargs={
+            "host_network": True,
+            "dns_policy": "ClusterFirstWithHostNet",
+        },
+        worker_pod_spec_kwargs={
+            "host_network": True,
+            "dns_policy": "ClusterFirstWithHostNet",
+        },
+    )
+    config = js.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    head_pod_spec = helper.pod_specs["pathways-head"]
+    self.assertTrue(head_pod_spec["hostNetwork"])
+    self.assertEqual(head_pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
+
+    worker_pod_spec = helper.pod_specs["pathways-worker"]
+    self.assertTrue(worker_pod_spec["hostNetwork"])
+    self.assertEqual(worker_pod_spec["dnsPolicy"], "ClusterFirstWithHostNet")
 
   def test_worker_job_replicas(self):
     js = self._create_jobset(num_slices=2)
@@ -826,13 +856,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     config = pw_jobset.to_dict()
     helper = JobSetManifestHelper(config)
 
-    self.assertEqual(
-        config["spec"]["successPolicy"],
-        {
-            "operator": "All",
-            "targetReplicatedJobs": ["pathways-head"],
-        },
-    )
+    self.assertNotIn("successPolicy", config["spec"])
 
     self.assertTrue(config["spec"]["network"]["enableDNSHostnames"])
     self.assertTrue(config["spec"]["network"]["publishNotReadyAddresses"])
@@ -841,9 +865,257 @@ class PathwaysJobSetTest(parameterized.TestCase):
     pod_spec = helper.pod_specs["pathways-head"]
 
     # Head job should only have pathways-rm container, no pathways-proxy.
+    self.assertNotIn("initContainers", pod_spec)
     self.assertIn("pathways-rm", helper.containers["pathways-head"])
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
+
+  def test_add_user_workload(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test_module",
+        env={"CUSTOM_ENV": "123"},
+    )
+
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    # Verify JobSet spec-level success policy targets pathways-head
+    self.assertEqual(
+        config["spec"]["successPolicy"],
+        {
+            "operator": "All",
+            "targetReplicatedJobs": ["pathways-head"],
+        },
+    )
+
+    # Verify head pod has user-workload container in containers
+    self.assertIn("user-workload", helper.containers["pathways-head"])
+    user_c = helper.containers["pathways-head"]["user-workload"]
+    self.assertEqual(user_c["image"], "us-docker.pkg.dev/my-project/test:v1")
+    self.assertEqual(user_c["command"], ["sh", "-c", "python3 -m test_module"])
+    self.assertNotIn("resources", user_c)
+    self.assertTrue(
+        any(
+            e["name"] == "CUSTOM_ENV" and e["value"] == "123"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "JAX_PLATFORMS" and e["value"] == "proxy"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "JAX_BACKEND_TARGET"
+            and e["value"] == "grpc://localhost:29000"
+            for e in user_c["env"]
+        )
+    )
+    self.assertTrue(
+        any(
+            e["name"] == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+            and e["value"] == "true"
+            for e in user_c["env"]
+        )
+    )
+
+    # Verify RM and Proxy are moved to initContainers (native sidecars)
+    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
+    self.assertIn("user-workload", helper.containers["pathways-head"])
+
+  def test_add_user_workload_roundtrip(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command=["python3", "test.py"],
+    )
+
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "jobset_user_workload.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported.to_dict()),
+    )
+
+  def test_add_user_workload_preserves_existing_containers(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    custom_container = client.V1Container(
+        name="custom-sidecar", image="custom:v1"
+    )
+    pw_jobset._head_job_template.spec.template.spec.containers.append(
+        custom_container
+    )
+    custom_resources = client.V1ResourceRequirements(
+        limits={"cpu": "8", "memory": "32G"}
+    )
+    pw_jobset.add_user_workload(
+        name="user-workload-1",
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test1",
+        env={"IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS": "false"},
+        resources=custom_resources,
+    )
+    pw_jobset.add_user_workload(
+        name="user-workload-2",
+        image="us-docker.pkg.dev/my-project/test:v2",
+        command="python3 -m test2",
+    )
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
+    self.assertLen(helper.pod_specs["pathways-head"]["initContainers"], 2)
+    self.assertIn("custom-sidecar", helper.containers["pathways-head"])
+    self.assertIn("user-workload-1", helper.containers["pathways-head"])
+    self.assertIn("user-workload-2", helper.containers["pathways-head"])
+    self.assertLen(helper.pod_specs["pathways-head"]["containers"], 3)
+
+    c1 = helper.containers["pathways-head"]["user-workload-1"]
+    self.assertEqual(c1["resources"], {"limits": {"cpu": "8", "memory": "32G"}})
+    insecure_envs = [
+        e["value"]
+        for e in c1["env"]
+        if e["name"] == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
+    ]
+    self.assertEqual(insecure_envs, ["false"])
+
+    # Calling add_user_workload with existing name replaces it rather than appending duplicate
+    pw_jobset.add_user_workload(
+        name="user-workload-1",
+        image="us-docker.pkg.dev/my-project/test:v3",
+        command="python3 -m test1_updated",
+    )
+    config2 = pw_jobset.to_dict()
+    helper2 = JobSetManifestHelper(config2)
+    self.assertLen(helper2.pod_specs["pathways-head"]["containers"], 3)
+    self.assertEqual(
+        helper2.containers["pathways-head"]["user-workload-1"]["image"],
+        "us-docker.pkg.dev/my-project/test:v3",
+    )
+
+  def test_configurable_priority_class_and_head_node_selector(self):
+    # Default: no priority class or custom head pod node selector
+    default_js = self._create_jobset()
+    default_helper = JobSetManifestHelper(default_js.to_dict())
+    self.assertNotIn(
+        "priorityClassName", default_helper.pod_specs["pathways-head"]
+    )
+    self.assertEqual(
+        default_helper.pod_specs["pathways-head"]["nodeSelector"][
+            jobset.GKE_NODEPOOL_KEY
+        ],
+        "cpu-np",
+    )
+    self.assertNotIn(
+        "priorityClassName", default_helper.pod_specs["pathways-worker"]
+    )
+
+    # Configured: priority class and head node selector set via pod_spec_kwargs
+    configured_js = self._create_jobset(
+        head_pod_spec_kwargs={
+            "node_selector": {"zone": "us-central1-a"},
+            "priority_class_name": "high",
+        },
+        worker_pod_spec_kwargs={
+            "priority_class_name": "high",
+        },
+    )
+    configured_helper = JobSetManifestHelper(configured_js.to_dict())
+    head_spec = configured_helper.pod_specs["pathways-head"]
+    worker_spec = configured_helper.pod_specs["pathways-worker"]
+
+    self.assertEqual(head_spec["priorityClassName"], "high")
+    self.assertEqual(worker_spec["priorityClassName"], "high")
+    self.assertEqual(head_spec["nodeSelector"], {"zone": "us-central1-a"})
+
+    # Overriding GKE_NODEPOOL_KEY explicitly
+    custom_np_js = self._create_jobset(
+        head_pod_spec_kwargs={
+            "node_selector": {jobset.GKE_NODEPOOL_KEY: "custom-cpu-pool"},
+        },
+    )
+    custom_np_helper = JobSetManifestHelper(custom_np_js.to_dict())
+    self.assertEqual(
+        custom_np_helper.pod_specs["pathways-head"]["nodeSelector"][
+            jobset.GKE_NODEPOOL_KEY
+        ],
+        "custom-cpu-pool",
+    )
+
+  def test_kokoro_pretraining_workload_generation(self):
+    """Verifies that PathwaysJobSet can generate a JobSet matching Kokoro pretraining test workloads."""
+    pw_jobset = jobset.PathwaysJobSet(
+        name="maxtext-pretraining-test",
+        namespace="default",
+        pathways_dir="gs://my-bucket/scratch",
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=1,
+        labels={"kueue.x-k8s.io/queue-name": "multislice-queue"},
+        head_pod_spec_kwargs={
+            "node_selector": {jobset.GKE_NODEPOOL_KEY: "cpu-np"},
+            "priority_class_name": "high",
+        },
+        worker_pod_spec_kwargs={
+            "priority_class_name": "high",
+        },
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/maxtext:latest",
+        command="python3 MaxText/train.py MaxText/configs/base.yml",
+    )
+
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    # Verify queue label
+    self.assertEqual(
+        config["metadata"]["labels"]["kueue.x-k8s.io/queue-name"],
+        "multislice-queue",
+    )
+
+    # Verify success policy
+    self.assertEqual(
+        config["spec"]["successPolicy"]["targetReplicatedJobs"],
+        ["pathways-head"],
+    )
+
+    # Verify head pod spec: priorityClassName, nodeSelector
+    head_pod_spec = helper.pod_specs["pathways-head"]
+    self.assertEqual(head_pod_spec["priorityClassName"], "high")
+    self.assertEqual(
+        head_pod_spec["nodeSelector"][jobset.GKE_NODEPOOL_KEY],
+        "cpu-np",
+    )
+
+    # Verify head containers: RM and Proxy are in initContainers, user workload in containers
+    self.assertIn("pathways-rm", helper.init_containers["pathways-head"])
+    self.assertIn("pathways-proxy", helper.init_containers["pathways-head"])
+    self.assertIn("user-workload", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-rm", helper.containers["pathways-head"])
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
+
+    user_container = helper.containers["pathways-head"]["user-workload"]
+    self.assertEqual(
+        user_container["command"],
+        ["sh", "-c", "python3 MaxText/train.py MaxText/configs/base.yml"],
+    )
+
+    # Verify worker pod spec: priorityClassName
+    worker_pod_spec = helper.pod_specs["pathways-worker"]
+    self.assertEqual(worker_pod_spec["priorityClassName"], "high")
 
 
 if __name__ == "__main__":
