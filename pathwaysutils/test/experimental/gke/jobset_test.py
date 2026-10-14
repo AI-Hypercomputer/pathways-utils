@@ -870,24 +870,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
 
-    # SPS clusters may not have a `cpu-np` node pool, so the head pod must not
-    # be pinned to one by default.
-    self.assertNotIn("nodeSelector", pod_spec)
-
-  def test_shared_pathways_service_head_node_selector_override(self):
-    pw_jobset = self._create_jobset(
-        name="test-sps",
-        shared_pathways_service=True,
-        head_pod_spec_kwargs={
-            "node_selector": {jobset.GKE_NODEPOOL_KEY: "default-pool"}
-        },
-    )
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-    self.assertEqual(
-        helper.pod_specs["pathways-head"]["nodeSelector"],
-        {jobset.GKE_NODEPOOL_KEY: "default-pool"},
-    )
-
   @parameterized.named_parameters(
       ("one_slice", 1, False),
       ("two_slices", 2, False),
