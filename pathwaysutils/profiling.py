@@ -16,6 +16,7 @@
 import asyncio
 from collections.abc import Iterator, Mapping
 import contextlib
+import copy
 import dataclasses
 import datetime
 import json
@@ -35,6 +36,11 @@ import requests
 import uvicorn
 
 _logger = logging.getLogger(__name__)
+
+# Keys of `jax.profiler.ProfileOptions.advanced_configuration` that configure
+# how JAX traces Pathways backends.
+_MAX_NUM_HOSTS_KEY = "pathways_max_num_hosts"
+_PROFILE_REQUEST_KEY = "pathways_profile_request"
 
 
 class _ProfileState:
@@ -262,6 +268,42 @@ def _validate_gcs_bucket(log_dir: str) -> None:
       )
 
 
+def is_native_profiling_supported() -> bool:
+  """Returns whether JAX natively supports tracing Pathways backends.
+
+  If so, JAX traces the Pathways backend of its `proxy` backend in every
+  profiling session, so the `jax.profiler` APIs do not need to be monkey
+  patched.
+  """
+  try:
+    from jax._src import pathways_profiler  # pylint: disable=g-import-not-at-top
+  except ImportError:  # Older JAX versions.
+    return False
+  return hasattr(pathways_profiler, "register")
+
+
+def _with_advanced_configuration(
+    profiler_options: jax.profiler.ProfileOptions | None,
+    advanced_configuration: Mapping[str, Any],
+) -> jax.profiler.ProfileOptions:
+  """Returns a copy of `profiler_options` with additional configuration.
+
+  Args:
+    profiler_options: The options to copy, if any.
+    advanced_configuration: Advanced configuration to add, unless
+      `profiler_options` already sets the respective keys.
+  """
+  if profiler_options is None:
+    options = jax.profiler.ProfileOptions()
+  else:
+    options = copy.copy(profiler_options)
+  options.advanced_configuration = {
+      **advanced_configuration,
+      **options.advanced_configuration,
+  }
+  return options
+
+
 def start_trace(
     log_dir: os.PathLike[str] | str,
     *,
@@ -317,6 +359,17 @@ def start_trace(
     _logger.warning(
         "create_perfetto_link and create_perfetto_trace are experimental "
         "features for Pathways on Cloud and may not be fully supported."
+    )
+
+  if is_native_profiling_supported():
+    # JAX traces the Pathways backend itself.
+    return _original_start_trace(
+        log_dir=log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=_with_advanced_configuration(
+            profiler_options, {_MAX_NUM_HOSTS_KEY: max_num_hosts}
+        ),
     )
 
   if jax.version.__version_info__ < (0, 9, 2):
@@ -376,6 +429,9 @@ def stop_trace() -> Any:
       `jax.profiler.stop_trace` fails to stop the trace. The JAX trace is
       stopped even if stopping the Pathways trace fails.
   """
+  if is_native_profiling_supported():
+    return _original_stop_trace()
+
   try:
     with _profile_state.lock:
       if _profile_state.executable is None:
@@ -590,6 +646,9 @@ def collect_profile(
 
 def monkey_patch_jax() -> None:
   """Monkey patches JAX with Pathways versions of functions.
+
+  This is not needed if `is_native_profiling_supported()`, in which case JAX
+  traces the Pathways backend itself.
 
   The signatures in patched functions should match the original.
 
