@@ -78,29 +78,6 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
     mock_jobset = mock_jobset_cls.return_value
     mock_jobset.to_dict.return_value = {"metadata": {"name": "test-jobset"}}
 
-    # Mock head and worker job templates for mutation
-    mock_head_job = mock.MagicMock()
-    mock_head_job.spec.template.spec.containers = [
-        mock.MagicMock(name="pathways-rm")
-    ]
-    mock_head_job.spec.template.spec.containers[0].name = "pathways-rm"
-
-    mock_worker_job = mock.MagicMock()
-    mock_worker_job.spec.template.spec.containers = [
-        mock.MagicMock(name="pathways-worker")
-    ]
-    mock_worker_job.spec.template.spec.containers[0].name = "pathways-worker"
-    mock_worker_job.spec.template.spec.containers[0].args = []
-    
-    # Sidecar will be added by add_colocated_python, but we mock it here as if it was added
-    mock_sidecar = mock.MagicMock(name="colocated-python-sidecar")
-    mock_sidecar.name = "colocated-python-sidecar"
-    mock_sidecar.env = []
-    mock_worker_job.spec.template.spec.init_containers = [mock_sidecar]
-
-    mock_jobset.head_job_template = mock_head_job
-    mock_jobset.worker_job_template = mock_worker_job
-
     mock_deploy = mock.MagicMock()
 
     deploy_pathways_service.run_deployment(
@@ -126,25 +103,18 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         shared_pathways_service=True,
         max_restarts=30,
         max_slice_restarts=1000000,
+        pathways_rm_and_worker_image="custom-server-image",
     )
 
-    # Verify colocated python was added with correct image and SHM path
+    # Verify colocated python was added with correct image, SHM path, and
+    # verbose logging env vars.
     mock_jobset.add_colocated_python.assert_called_once_with(
         image="custom-sidecar-image",
         shm_mount_path="/tmp/sidecar_dir",
+        env=deploy_pathways_service._SIDECAR_DEBUG_ENV,
     )
-
-    # Verify server images were mutated
-    self.assertEqual(mock_head_job.spec.template.spec.containers[0].image, "custom-server-image")
-    self.assertEqual(mock_worker_job.spec.template.spec.containers[0].image, "custom-server-image")
-
-    # Verify extra logging env vars were added to sidecar
-    self.assertTrue(any(e.name == "LOGLEVEL" and e.value == "DEBUG" for e in mock_sidecar.env))
-
-    # Verify arg was added to pathways-worker
-    self.assertIn(
-        "--cloud_pathways_sidecar_shm_directory=/tmp/sidecar_dir",
-        mock_worker_job.spec.template.spec.containers[0].args,
+    self.assertEqual(
+        deploy_pathways_service._SIDECAR_DEBUG_ENV["LOGLEVEL"], "DEBUG"
     )
 
     # Verify deploy_func was called with the dict
@@ -214,6 +184,60 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         captured_config["spec"]["failurePolicy"],
         {"restartStrategy": "Recreate", "maxRestarts": 3},
     )
+
+  def test_run_deployment_colocated_python_sidecar(self):
+    captured_config = {}
+
+    def capture_yaml_dump(config, *args, **kwargs):
+      del args, kwargs
+      captured_config.update(config)
+      return ""
+
+    with mock.patch.object(
+        deploy_pathways_service.yaml, "dump", side_effect=capture_yaml_dump
+    ):
+      deploy_pathways_service.run_deployment(
+          tpu_type="v5e",
+          topology="4x8",
+          num_slices=2,
+          jobset_name="test-jobset",
+          gcs_bucket="gs://test-bucket",
+          server_image=(
+              "us-docker.pkg.dev/test-project/test-repo/server:test-tag"
+          ),
+          sidecar_image=(
+              "us-docker.pkg.dev/test-project/test-repo/sidecar:test-tag"
+          ),
+          dry_run=True,
+      )
+
+    worker_job = next(
+        j
+        for j in captured_config["spec"]["replicatedJobs"]
+        if j["name"] == "pathways-worker"
+    )
+    containers = {
+        c["name"]: c
+        for c in worker_job["template"]["spec"]["template"]["spec"][
+            "containers"
+        ]
+    }
+    self.assertEqual(
+        containers["pathways-worker"]["image"],
+        "us-docker.pkg.dev/test-project/test-repo/server:test-tag",
+    )
+    self.assertIn(
+        "--cloud_pathways_sidecar_shm_directory=/tmp/sidecar_dir",
+        containers["pathways-worker"]["args"],
+    )
+    sidecar_env = {
+        e["name"]: e["value"]
+        for e in containers["colocated-python-sidecar"]["env"]
+    }
+    self.assertEqual(
+        sidecar_env["CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"], "/tmp/sidecar_dir"
+    )
+    self.assertEqual(sidecar_env["LOGLEVEL"], "DEBUG")
 
   @mock.patch.object(gke_utils, "get_log_link")
   @mock.patch.object(gke_utils, "get_current_cluster_and_project")

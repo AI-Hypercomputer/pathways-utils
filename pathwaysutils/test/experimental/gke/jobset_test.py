@@ -106,7 +106,6 @@ class JobSetManifestHelper:
     return matches
 
 
-
 class PathwaysJobSetTest(parameterized.TestCase):
 
   def _create_jobset(
@@ -358,7 +357,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_handles_none_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force metadata to be None to simulate imported templates or raw specs without metadata
     pw_jobset._head_job_template.metadata = None
     pw_jobset._head_job_template.spec.template.metadata = None
@@ -372,7 +371,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         bucket="my-bucket",
     )
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertEqual(helper.job_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.pod_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.job_metadatas["pathways-worker"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
@@ -380,7 +379,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_preserves_existing_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate metadata, annotations, and labels
     pw_jobset._head_job_template.metadata = client.V1ObjectMeta(
         labels={"existing-job-label": "value"},
@@ -433,14 +432,14 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_colocated_python_handles_none_volumes(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force volumes to be None
     pw_jobset._worker_job_template.spec.template.spec.volumes = None
 
     # Should not crash and should correctly add volume
     pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertIn("shared-memory", helper.volumes["pathways-worker"])
 
   def test_add_colocated_python_sidecar(self):
@@ -468,7 +467,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_colocated_python_preserves_init_containers(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate init container on worker pod
     worker_spec = pw_jobset._worker_job_template.spec.template.spec
     existing_init = client.V1Container(name="existing-init-container", image="ubuntu:latest")
@@ -557,6 +556,95 @@ class PathwaysJobSetTest(parameterized.TestCase):
             and e["value"] == "/tmp/custom-shm"
             for e in worker_container["env"]
         )
+    )
+
+  @parameterized.named_parameters(
+      ("default_shm", None, "/tmp/shared-memory"),
+      ("custom_shm", "/tmp/custom-shm", "/tmp/custom-shm"),
+  )
+  def test_add_colocated_python_sets_worker_shm_flag(
+      self, shm_mount_path, expected_path
+  ):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    kwargs = {"shm_mount_path": shm_mount_path} if shm_mount_path else {}
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest", **kwargs
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    worker_args = helper.containers["pathways-worker"]["pathways-worker"][
+        "args"
+    ]
+    self.assertEqual(
+        [a for a in worker_args if "cloud_pathways_sidecar_shm_directory" in a],
+        [f"--cloud_pathways_sidecar_shm_directory={expected_path}"],
+    )
+
+  def test_add_colocated_python_keeps_existing_worker_shm_flag(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    worker_spec = pw_jobset.worker_job_template.spec.template.spec
+    worker_spec.containers[0].args.append(
+        "--cloud_pathways_sidecar_shm_directory=/tmp/preset"
+    )
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest"
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    worker_args = helper.containers["pathways-worker"]["pathways-worker"][
+        "args"
+    ]
+    self.assertEqual(
+        [a for a in worker_args if "cloud_pathways_sidecar_shm_directory" in a],
+        ["--cloud_pathways_sidecar_shm_directory=/tmp/preset"],
+    )
+
+  def test_add_colocated_python_env(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest",
+        env={"LOGLEVEL": "DEBUG", "GRPC_SERVER_ADDRESS": "0.0.0.0:50052"},
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
+    self.assertEqual(
+        sidecar["env"],
+        [
+            {"name": "GRPC_SERVER_ADDRESS", "value": "0.0.0.0:50052"},
+            {
+                "name": "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
+                "value": "/tmp/shared-memory",
+            },
+            {"name": "LOGLEVEL", "value": "DEBUG"},
+        ],
+    )
+
+  def test_add_colocated_python_container_kwargs(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest",
+        resources=client.V1ResourceRequirements(
+            limits={"cpu": "4", "memory": "16Gi"}
+        ),
+        volume_mounts=[
+            client.V1VolumeMount(name="extra-data", mount_path="/data")
+        ],
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    sidecar = helper.containers["pathways-worker"]["colocated-python-sidecar"]
+    self.assertEqual(
+        sidecar["resources"], {"limits": {"cpu": "4", "memory": "16Gi"}}
+    )
+    # User volume mounts are appended to the required default mounts.
+    self.assertEqual(
+        sidecar["volumeMounts"],
+        [
+            {"mountPath": "/tmp", "name": "shared-tmp"},
+            {"mountPath": "/tmp/shared-memory", "name": "shared-memory"},
+            {"mountPath": "/data", "name": "extra-data"},
+        ],
     )
 
   # Reference similar GKE / JobSet custom object unit test suites:

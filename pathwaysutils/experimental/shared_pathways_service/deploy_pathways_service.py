@@ -62,6 +62,29 @@ _MAX_RESTARTS = flags.DEFINE_integer(
     lower_bound=0,
 )
 _SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
+# These make the colocated Python sidecar logs as verbose as possible so that
+# issues in the sidecar (e.g. array (de)serialization during checkpointing) can
+# be debugged from the container logs.
+_SIDECAR_DEBUG_ENV = {
+    # Disable Python stdout/stderr buffering so logs are emitted immediately
+    # and are not lost if the container crashes.
+    "PYTHONUNBUFFERED": "1",
+    # Python logging level for the sidecar.
+    "LOGLEVEL": "DEBUG",
+    # glog (C++) logging: emit INFO and above (0 = INFO) and enable VLOG(n)
+    # messages for n <= 5.
+    "GLOG_minloglevel": "0",
+    "GLOG_v": "5",
+    # TSL/XLA (C++) logging used by JAX: emit INFO and above and enable VLOG(n)
+    # messages for n <= 5.
+    "TF_CPP_MIN_LOG_LEVEL": "0",
+    "TF_CPP_MIN_VLOG_LEVEL": "5",
+    # TPU runtime (libtpu) logging: emit INFO and above.
+    "TPU_MIN_LOG_LEVEL": "0",
+    # Per-module verbose logging (level 5) for the array serialization modules
+    # used when transferring/checkpointing arrays via the sidecar.
+    "GLOG_vmodule": "jax_array_handlers=5,type_handlers=5,tensorstore_utils=5",
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -200,75 +223,17 @@ def run_deployment(
       # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
       # implemented
       max_slice_restarts=1000000,
+      pathways_rm_and_worker_image=(
+          server_image or jobset.DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE
+      ),
   )
-
-  # If custom server_image is provided, mutate the templates to use it.
-  if server_image:
-    # Mutate head job.
-    for container in pw_jobset.head_job_template.spec.template.spec.containers:
-      if container.name == "pathways-rm":
-        container.image = server_image
-    # Mutate worker job.
-    for (
-        container
-    ) in pw_jobset.worker_job_template.spec.template.spec.containers:
-      if container.name == "pathways-worker":
-        container.image = server_image
 
   # Add colocated python sidecar.
   pw_jobset.add_colocated_python(
-      image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR
+      image=sidecar_image,
+      shm_mount_path=_SIDECAR_SHM_DIR,
+      env=_SIDECAR_DEBUG_ENV,
   )
-
-  # Mutate the sidecar configuration to match what HEAD expects.
-  worker_spec = pw_jobset.worker_job_template.spec.template.spec
-
-  # 1. Add extra logging env vars to sidecar.
-  # These make the colocated Python sidecar logs as verbose as possible so that
-  # issues in the sidecar (e.g. array (de)serialization during checkpointing)
-  # can be debugged from the container logs.
-  for container in (worker_spec.containers or []) + (
-      worker_spec.init_containers or []
-  ):
-    if container.name == "colocated-python-sidecar":
-      container.env.extend([
-          # Disable Python stdout/stderr buffering so logs are emitted
-          # immediately and are not lost if the container crashes.
-          client.V1EnvVar(name="PYTHONUNBUFFERED", value="1"),
-          # Python logging level for the sidecar.
-          client.V1EnvVar(name="LOGLEVEL", value="DEBUG"),
-          # glog (C++) logging: emit INFO and above (0 = INFO) and enable
-          # VLOG(n) messages for n <= 5.
-          client.V1EnvVar(name="GLOG_minloglevel", value="0"),
-          client.V1EnvVar(name="GLOG_v", value="5"),
-          # TSL/XLA (C++) logging used by JAX: emit INFO and above and enable
-          # VLOG(n) messages for n <= 5.
-          client.V1EnvVar(name="TF_CPP_MIN_LOG_LEVEL", value="0"),
-          client.V1EnvVar(name="TF_CPP_MIN_VLOG_LEVEL", value="5"),
-          # TPU runtime (libtpu) logging: emit INFO and above.
-          client.V1EnvVar(name="TPU_MIN_LOG_LEVEL", value="0"),
-          # Per-module verbose logging (level 5) for the array serialization
-          # modules used when transferring/checkpointing arrays via the
-          # sidecar.
-          client.V1EnvVar(
-              name="GLOG_vmodule",
-              value=(
-                  "jax_array_handlers=5,type_handlers=5,tensorstore_utils=5"
-              ),
-          ),
-      ])
-
-  # 2. Add arg to pathways-worker container.
-  for container in worker_spec.containers:
-    if container.name == "pathways-worker":
-      args = container.args or []
-      if not any(
-          a.startswith("--cloud_pathways_sidecar_shm_directory=") for a in args
-      ):
-        args.append(
-            f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}"
-        )
-      container.args = args
 
   jobset_config = pw_jobset.to_dict()
 

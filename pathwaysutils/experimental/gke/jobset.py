@@ -684,8 +684,31 @@ class PathwaysJobSet:
       image: str,
       shm_mount_path: str = "/tmp/shared-memory",
       shm_size_limit: str | None = None,
+      **container_kwargs: Any,
   ) -> "PathwaysJobSet":
-    """Adds colocated python sidecar to the worker pods."""
+    """Adds colocated python sidecar to the worker pods.
+
+    The sidecar and the `pathways-worker` container share a memory-backed
+    volume mounted at `shm_mount_path`, and `pathways-worker` is started with
+    `--cloud_pathways_sidecar_shm_directory=<shm_mount_path>` so that large
+    tensors are transferred through shared host memory.
+
+    Args:
+      image: Docker image for the colocated python sidecar.
+      shm_mount_path: Mount path of the shared memory volume in both the sidecar
+        and the `pathways-worker` container.
+      shm_size_limit: Optional size limit of the shared memory volume (e.g.,
+        "16Gi").
+      **container_kwargs: Optional additional keyword arguments passed to
+        `client.V1Container` for the sidecar (e.g., `env`, `resources`,
+        `volume_mounts`). `env` is a mapping of environment variable names to
+        values whose entries override the default sidecar environment variables
+        with the same name. `volume_mounts` are appended to the default
+        `shared-tmp` and shared memory mounts.
+
+    Returns:
+      The PathwaysJobSet instance for chaining.
+    """
     pod_spec = self._worker_job_template.spec.template.spec
 
     # Add shared memory volume if not exists.
@@ -704,33 +727,59 @@ class PathwaysJobSet:
       pod_spec.volumes = volumes
 
     # Add colocated python container.
-    colocated_container = client.V1Container(
-        name="colocated-python-sidecar",
-        image=image,
-        image_pull_policy="Always",
-        env=[
-            client.V1EnvVar(name="GRPC_SERVER_ADDRESS", value="0.0.0.0:50051"),
-            client.V1EnvVar(
-                name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
-                value=shm_mount_path,
-            ),
+    sidecar_env = {
+        "GRPC_SERVER_ADDRESS": "0.0.0.0:50051",
+        "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY": shm_mount_path,
+    }
+    user_env = container_kwargs.pop("env", None)
+    if user_env:
+      for k, v in user_env.items():
+        if k in sidecar_env:
+          _logger.debug(
+              "Overriding default sidecar environment variable %s=%s with %s",
+              k,
+              sidecar_env[k],
+              v,
+          )
+        sidecar_env[k] = str(v)
+
+    volume_mounts = [
+        client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
+        client.V1VolumeMount(name=shm_volume_name, mount_path=shm_mount_path),
+    ]
+    volume_mounts.extend(container_kwargs.pop("volume_mounts", None) or [])
+
+    container_spec_kwargs: dict[str, Any] = {
+        "name": "colocated-python-sidecar",
+        "image": image,
+        "image_pull_policy": "Always",
+        "env": [
+            client.V1EnvVar(name=k, value=v) for k, v in sidecar_env.items()
         ],
-        ports=[client.V1ContainerPort(container_port=50051)],
-        volume_mounts=[
-            client.V1VolumeMount(name="shared-tmp", mount_path="/tmp"),
-            client.V1VolumeMount(
-                name=shm_volume_name, mount_path=shm_mount_path
-            ),
-        ],
-    )
+        "ports": [client.V1ContainerPort(container_port=50051)],
+        "volume_mounts": volume_mounts,
+    }
+    container_spec_kwargs.update(container_kwargs)
+    colocated_container = client.V1Container(**container_spec_kwargs)
 
     containers = pod_spec.containers or []
     containers.append(colocated_container)
     pod_spec.containers = containers
 
-    # Add volume mount to pathways-worker.
+    # Add volume mount and shared memory flag to pathways-worker.
     for container in pod_spec.containers:
       if container.name == "pathways-worker":
+        # The Pathways worker only enables shared memory transfers to the
+        # sidecar when this flag is set.
+        args = container.args or []
+        if not any(
+            a.startswith("--cloud_pathways_sidecar_shm_directory=")
+            for a in args
+        ):
+          args.append(
+              f"--cloud_pathways_sidecar_shm_directory={shm_mount_path}"
+          )
+        container.args = args
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(
             client.V1VolumeMount(
@@ -739,14 +788,14 @@ class PathwaysJobSet:
         )
         container.volume_mounts = volume_mounts
         # Add env var for shm dir.
-        env = container.env or []
-        env.append(
+        worker_env = container.env or []
+        worker_env.append(
             client.V1EnvVar(
                 name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
                 value=shm_mount_path,
             )
         )
-        container.env = env
+        container.env = worker_env
         break
 
     return self
