@@ -104,6 +104,65 @@ def _deserialize_dict(
   return api_client.deserialize(FakeResponse(json.dumps(data_dict)), klass)
 
 
+def _apply_container_kwargs(
+    container: client.V1Container,
+    container_kwargs: Mapping[str, Any] | None,
+) -> None:
+  """Applies caller-provided `client.V1Container` fields to a container.
+
+  `args` and `volume_mounts` are appended to the container's defaults. `env` is
+  a mapping of environment variable names to values; each one replaces the
+  default variable with the same name or is added after the defaults. Any other
+  field replaces the default.
+
+  Args:
+    container: Container to update in place.
+    container_kwargs: `client.V1Container` fields to apply.
+
+  Raises:
+    ValueError: `container_kwargs` sets `name` or `image`, or a field that
+      `client.V1Container` does not have.
+  """
+  if not container_kwargs:
+    return
+  kwargs = dict(container_kwargs)
+  for field in ("name", "image"):
+    if field in kwargs:
+      raise ValueError(
+          f"Cannot set {field!r} of the {container.name} container; use the"
+          " PathwaysJobSet image arguments instead."
+      )
+  unknown = sorted(set(kwargs) - set(client.V1Container.openapi_types))
+  if unknown:
+    raise ValueError(
+        f"Unknown client.V1Container fields for {container.name}: {unknown}"
+    )
+
+  for field in ("args", "volume_mounts"):
+    if field in kwargs:
+      setattr(
+          container,
+          field,
+          list(getattr(container, field) or []) + list(kwargs.pop(field) or []),
+      )
+
+  env = {k: str(v) for k, v in (kwargs.pop("env", None) or {}).items()}
+  if env:
+    merged_env = []
+    for var in container.env or []:
+      if var.name in env:
+        merged_env.append(
+            client.V1EnvVar(name=var.name, value=env.pop(var.name))
+        )
+      else:
+        merged_env.append(var)
+    merged_env.extend(client.V1EnvVar(name=k, value=v) for k, v in env.items())
+    container.env = merged_env
+
+  for field, value in kwargs.items():
+    setattr(container, field, value)
+
+
 class PathwaysJobSet:
   """JobSet configuration generator for Pathways."""
 
@@ -128,6 +187,9 @@ class PathwaysJobSet:
       pathways_proxy_image: str = DEFAULT_PATHWAYS_PROXY_IMAGE,
       head_pod_spec_kwargs: Mapping[str, Any] | None = None,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      rm_container_kwargs: Mapping[str, Any] | None = None,
+      proxy_container_kwargs: Mapping[str, Any] | None = None,
+      worker_container_kwargs: Mapping[str, Any] | None = None,
   ):
     """Initializes the instance.
 
@@ -158,7 +220,26 @@ class PathwaysJobSet:
       worker_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the worker pods (e.g., `priority_class_name`,
         `host_network`, `dns_policy`).
+      rm_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-rm` container. `args` and `volume_mounts` are appended to the
+        defaults. `env` maps environment variable names to values, which replace
+        the default variables with the same name or are added. Other fields
+        (e.g., `resources`) replace the defaults. `name` and `image` cannot be
+        set.
+      proxy_container_kwargs: Same as `rm_container_kwargs`, for the
+        `pathways-proxy` container. Not allowed with `shared_pathways_service`,
+        which runs no proxy.
+      worker_container_kwargs: Same as `rm_container_kwargs`, for the
+        `pathways-worker` container.
+
+    Raises:
+      ValueError: An argument is invalid.
     """
+    if shared_pathways_service and proxy_container_kwargs:
+      raise ValueError(
+          "proxy_container_kwargs cannot be used with"
+          " shared_pathways_service=True, which runs no proxy."
+      )
     self._shared_pathways_service = shared_pathways_service
     self._pathways_rm_and_worker_image = pathways_rm_and_worker_image
     self._pathways_proxy_image = pathways_proxy_image
@@ -207,6 +288,8 @@ class PathwaysJobSet:
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         pathways_proxy_image=pathways_proxy_image,
         head_pod_spec_kwargs=head_pod_spec_kwargs,
+        rm_container_kwargs=rm_container_kwargs,
+        proxy_container_kwargs=proxy_container_kwargs,
     )
 
     worker_kwargs = (
@@ -228,6 +311,7 @@ class PathwaysJobSet:
         max_slice_restarts=max_slice_restarts,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         worker_pod_spec_kwargs=worker_kwargs,
+        worker_container_kwargs=worker_container_kwargs,
     )
 
     self._success_policy = None
@@ -259,6 +343,8 @@ class PathwaysJobSet:
       pathways_rm_and_worker_image: str,
       pathways_proxy_image: str,
       head_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      rm_container_kwargs: Mapping[str, Any] | None = None,
+      proxy_container_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -274,6 +360,10 @@ class PathwaysJobSet:
       pathways_proxy_image: Base Docker image for Proxy container.
       head_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the head pod.
+      rm_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-rm` container; see `__init__`.
+      proxy_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-proxy` container; see `__init__`.
 
     Returns:
       The head job template.
@@ -335,6 +425,7 @@ class PathwaysJobSet:
             limits={"cpu": "8", "memory": "32G"}
         ),
     )
+    _apply_container_kwargs(rm_container, rm_container_kwargs)
 
     proxy_args = [
         f"--server_port={PATHWAYS_PROXY_PORT}",
@@ -375,6 +466,7 @@ class PathwaysJobSet:
             limits={"cpu": "16", "memory": "100G"}
         ),
     )
+    _apply_container_kwargs(proxy_container, proxy_container_kwargs)
 
     containers = [rm_container]
     if not shared_pathways_service:
@@ -422,6 +514,7 @@ class PathwaysJobSet:
       max_slice_restarts: int,
       pathways_rm_and_worker_image: str,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      worker_container_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the worker job template for the JobSet."""
     worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
@@ -513,6 +606,7 @@ class PathwaysJobSet:
             limits={"google.com/tpu": str(chips_per_vm)}
         ),
     )
+    _apply_container_kwargs(worker_container, worker_container_kwargs)
 
     node_selector = {
         "cloud.google.com/gke-tpu-accelerator": gke_accel_type,

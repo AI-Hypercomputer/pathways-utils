@@ -1070,6 +1070,175 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "custom-cpu-pool",
     )
 
+  def test_container_kwargs(self):
+    pw_jobset = self._create_jobset(
+        rm_container_kwargs={
+            "args": ["--v=1"],
+            "env": {"TPU_SKIP_MDS_QUERY": "false", "TEST_TMPDIR": "/tmp"},
+            "resources": client.V1ResourceRequirements(
+                limits={"cpu": "4", "memory": "16G"}
+            ),
+        },
+        proxy_container_kwargs={
+            "args": [
+                "--xla_jf_enable_multi_output_fusion=false",
+                "--virtual_instances=tpuv5e:2x4",
+            ],
+            "env": {"XLA_FLAGS": "--xla_disable_hlo_passes=tpu_fusion"},
+        },
+        worker_container_kwargs={
+            "args": ["--logtostderr"],
+            "env": {"FLAGS_use_pthread_fiber_wrapper": "true"},
+            "volume_mounts": [
+                client.V1VolumeMount(name="data", mount_path="/data")
+            ],
+        },
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    rm = helper.containers["pathways-head"]["pathways-rm"]
+    proxy = helper.containers["pathways-head"]["pathways-proxy"]
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+
+    # Args are appended to the default args.
+    self.assertEqual(
+        rm["args"],
+        [
+            "--server_port=29001",
+            "--gcs_scratch_location=gs://test-bucket",
+            "--node_type=resource_manager",
+            "--instance_count=2",
+            "--instance_type=tpuv5e:4x8",
+            "--v=1",
+        ],
+    )
+    self.assertEqual(
+        proxy["args"][-2:],
+        [
+            "--xla_jf_enable_multi_output_fusion=false",
+            "--virtual_instances=tpuv5e:2x4",
+        ],
+    )
+    self.assertIn("--server_port=29000", proxy["args"])
+    self.assertEqual(worker["args"][-1], "--logtostderr")
+    self.assertIn("--server_port=29005", worker["args"])
+
+    # Env vars replace defaults with the same name, in place, or are appended.
+    rm_env_names = [e["name"] for e in rm["env"]]
+    self.assertEqual(
+        rm_env_names,
+        [
+            "REPLICATED_JOB_NAME",
+            "JOBSET_NAME",
+            "HOST_ADDRESS",
+            "TPU_SKIP_MDS_QUERY",
+            "TEST_TMPDIR",
+        ],
+    )
+    rm_env = {e["name"]: e.get("value") for e in rm["env"]}
+    self.assertEqual(rm_env["TPU_SKIP_MDS_QUERY"], "false")
+    self.assertEqual(rm_env["TEST_TMPDIR"], "/tmp")
+    self.assertEqual(
+        proxy["env"][-1],
+        {"name": "XLA_FLAGS", "value": "--xla_disable_hlo_passes=tpu_fusion"},
+    )
+    self.assertEqual(
+        worker["env"][-1],
+        {"name": "FLAGS_use_pthread_fiber_wrapper", "value": "true"},
+    )
+
+    # Other fields replace the defaults, and volume mounts are appended.
+    self.assertEqual(rm["resources"], {"limits": {"cpu": "4", "memory": "16G"}})
+    self.assertEqual(
+        proxy["resources"], {"limits": {"cpu": "16", "memory": "100G"}}
+    )
+    self.assertEqual(
+        worker["volumeMounts"],
+        [
+            {"mountPath": "/tmp", "name": "shared-tmp"},
+            {"mountPath": "/data", "name": "data"},
+        ],
+    )
+
+  def test_container_kwargs_env_replaces_field_ref(self):
+    pw_jobset = self._create_jobset(
+        worker_container_kwargs={"env": {"MEGASCALE_NUM_SLICES": "4"}}
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    num_slices_env = [
+        e for e in worker["env"] if e["name"] == "MEGASCALE_NUM_SLICES"
+    ]
+    self.assertEqual(
+        num_slices_env, [{"name": "MEGASCALE_NUM_SLICES", "value": "4"}]
+    )
+
+  def test_container_kwargs_kept_by_add_user_workload(self):
+    pw_jobset = self._create_jobset(
+        rm_container_kwargs={"args": ["--v=1"]},
+        proxy_container_kwargs={"env": {"XLA_FLAGS": "--xla_dump_to=/tmp"}},
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test_module",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    rm = helper.init_containers["pathways-head"]["pathways-rm"]
+    proxy = helper.init_containers["pathways-head"]["pathways-proxy"]
+    self.assertEqual(rm["args"][-1], "--v=1")
+    self.assertEqual(
+        proxy["env"][-1], {"name": "XLA_FLAGS", "value": "--xla_dump_to=/tmp"}
+    )
+
+  def test_container_kwargs_export_import_roundtrip(self):
+    pw_jobset = self._create_jobset(
+        rm_container_kwargs={"args": ["--v=1"]},
+        proxy_container_kwargs={"env": {"XLA_FLAGS": "--xla_dump_to=/tmp"}},
+        worker_container_kwargs={"args": ["--logtostderr"]},
+    )
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "jobset_container_kwargs.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported.to_dict()),
+    )
+
+  @parameterized.named_parameters(
+      ("rm_name", "rm_container_kwargs", {"name": "rm"}, "Cannot set 'name'"),
+      (
+          "proxy_image",
+          "proxy_container_kwargs",
+          {"image": "proxy:v2"},
+          "Cannot set 'image'",
+      ),
+      (
+          "worker_unknown_field",
+          "worker_container_kwargs",
+          {"not_a_field": True},
+          "Unknown client.V1Container fields",
+      ),
+  )
+  def test_container_kwargs_invalid_fields(self, arg_name, kwargs, error):
+    with self.assertRaisesRegex(ValueError, error):
+      self._create_jobset(**{arg_name: kwargs})
+
+  def test_proxy_container_kwargs_with_shared_pathways_service(self):
+    with self.assertRaisesRegex(ValueError, "shared_pathways_service"):
+      self._create_jobset(
+          shared_pathways_service=True,
+          proxy_container_kwargs={"args": ["--v=1"]},
+      )
+
+  def test_rm_container_kwargs_with_shared_pathways_service(self):
+    pw_jobset = self._create_jobset(
+        shared_pathways_service=True, rm_container_kwargs={"args": ["--v=1"]}
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    rm = helper.containers["pathways-head"]["pathways-rm"]
+    self.assertEqual(rm["args"][-1], "--v=1")
+
   def test_kokoro_pretraining_workload_generation(self):
     """Verifies that PathwaysJobSet can generate a JobSet matching Kokoro pretraining test workloads."""
     pw_jobset = jobset.PathwaysJobSet(
