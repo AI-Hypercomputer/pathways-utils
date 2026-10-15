@@ -870,6 +870,22 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertLen(pod_spec["containers"], 1)
 
+  @parameterized.named_parameters(
+      ("one_slice", 1, False),
+      ("two_slices", 2, False),
+      ("two_slices_sps", 2, True),
+  )
+  def test_rm_instance_count_matches_num_slices(
+      self, num_slices, shared_pathways_service
+  ):
+    pw_jobset = self._create_jobset(
+        num_slices=num_slices,
+        shared_pathways_service=shared_pathways_service,
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    rm_args = helper.containers["pathways-head"]["pathways-rm"]["args"]
+    self.assertIn(f"--instance_count={num_slices}", rm_args)
+
   def test_add_user_workload(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
     pw_jobset.add_user_workload(
