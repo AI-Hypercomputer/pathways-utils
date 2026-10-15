@@ -14,7 +14,8 @@
 """Profiling Utilities."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+import contextlib
 import dataclasses
 import datetime
 import json
@@ -268,7 +269,7 @@ def start_trace(
     create_perfetto_trace: bool = False,
     profiler_options: jax.profiler.ProfileOptions | None = None,
     max_num_hosts: int = 1,
-) -> None:
+) -> Any:
   """Starts a profiler trace.
 
   The trace will capture CPU and TPU activity, including Python
@@ -298,6 +299,17 @@ def start_trace(
     profiler_options: Profiler options to configure the profiler for collection.
     max_num_hosts: An optional integer to limit the number of hosts profiled
       (defaults to 1).
+
+  Returns:
+    The value returned by `jax.profiler.start_trace`, i.e. the active
+    `jax.profiler.ProfileSession` on JAX versions that provide it, otherwise
+    None.
+
+  Raises:
+    ValueError: If `log_dir` is not a GCS path, or is not in one of the buckets
+      listed in `PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS`.
+    RuntimeError: If a trace is already being taken, or if the Pathways backend
+      or `jax.profiler.start_trace` fails to start the trace.
   """
   _validate_gcs_bucket(str(log_dir))
 
@@ -334,14 +346,14 @@ def start_trace(
 
   try:
     if jax.version.__version_info__ >= (0, 9, 2):
-      _original_start_trace(
+      return _original_start_trace(
           log_dir=log_dir,
           create_perfetto_link=create_perfetto_link,
           create_perfetto_trace=create_perfetto_trace,
           profiler_options=profiler_options,
       )
     else:
-      _original_start_trace(
+      return _original_start_trace(
           log_dir=log_dir,
           create_perfetto_link=create_perfetto_link,
           create_perfetto_trace=create_perfetto_trace,
@@ -352,8 +364,18 @@ def start_trace(
     raise
 
 
-def stop_trace() -> None:
-  """Stops the currently-running profiler trace."""
+def stop_trace() -> Any:
+  """Stops the currently-running profiler trace.
+
+  Returns:
+    The value returned by `jax.profiler.stop_trace`, i.e. the captured profile
+    data on JAX versions that return it, otherwise None.
+
+  Raises:
+    RuntimeError: If no trace is being taken, or if the Pathways backend or
+      `jax.profiler.stop_trace` fails to stop the trace. The JAX trace is
+      stopped even if stopping the Pathways trace fails.
+  """
   try:
     with _profile_state.lock:
       if _profile_state.executable is None:
@@ -363,7 +385,56 @@ def stop_trace() -> None:
       finally:
         _profile_state.reset()
   finally:
-    _original_stop_trace()
+    profile_data = _original_stop_trace()
+  return profile_data
+
+
+@contextlib.contextmanager
+def trace(
+    log_dir: os.PathLike[str] | str,
+    *,
+    create_perfetto_link: bool = False,
+    create_perfetto_trace: bool = False,
+    profiler_options: jax.profiler.ProfileOptions | None = None,
+    max_num_hosts: int = 1,
+) -> Iterator[Any]:
+  """Context manager to take a profiler trace.
+
+  Calls :func:`start_trace` on entry and :func:`stop_trace` on exit, so that the
+  Pathways components are profiled together with the JAX client. The trace is
+  stopped even if the body of the `with` statement raises an exception, which
+  is then propagated.
+
+  Args:
+    log_dir: The GCS directory to save the profiler trace to (usually the
+      TensorBoard log directory), e.g., "gs://my_bucket/profiles".
+    create_perfetto_link: See :func:`start_trace`.
+    create_perfetto_trace: See :func:`start_trace`.
+    profiler_options: Profiler options to configure the profiler for collection.
+    max_num_hosts: An optional integer to limit the number of hosts profiled
+      (defaults to 1).
+
+  Yields:
+    The value returned by :func:`start_trace`, i.e. the active
+    `jax.profiler.ProfileSession` on JAX versions that provide it, otherwise
+    None.
+
+  Raises:
+    ValueError: If `log_dir` is invalid; see :func:`start_trace`.
+    RuntimeError: If the trace fails to start or stop; see :func:`start_trace`
+      and :func:`stop_trace`.
+  """
+  session = start_trace(
+      log_dir,
+      create_perfetto_link=create_perfetto_link,
+      create_perfetto_trace=create_perfetto_trace,
+      profiler_options=profiler_options,
+      max_num_hosts=max_num_hosts,
+  )
+  try:
+    yield session
+  finally:
+    stop_trace()
 
 
 _profiler_thread: threading.Thread | None = None
@@ -527,6 +598,8 @@ def monkey_patch_jax() -> None:
     https://jax.readthedocs.io/en/latest/_autosummary/jax.profiler.start_trace.html
   - `jax.profiler.stop_trace`
     https://jax.readthedocs.io/en/latest/_autosummary/jax.profiler.stop_trace.html
+  - `jax.profiler.trace`
+    https://jax.readthedocs.io/en/latest/_autosummary/jax.profiler.trace.html
   - `jax.profiler.start_server`
     https://jax.readthedocs.io/en/latest/_autosummary/jax.profiler.start_server.html
   - `jax.profiler.stop_server`
@@ -538,9 +611,9 @@ def monkey_patch_jax() -> None:
       create_perfetto_trace: bool = False,
       profiler_options: jax.profiler.ProfileOptions | None = None,
       max_num_hosts: int = 1,
-  ) -> None:
-    _logger.debug("jax.profile.start_trace patched with pathways' start_trace")
-    start_trace(
+  ) -> Any:
+    _logger.debug("jax.profiler.start_trace patched with pathways' start_trace")
+    return start_trace(
         log_dir,
         create_perfetto_link=create_perfetto_link,
         create_perfetto_trace=create_perfetto_trace,
@@ -551,16 +624,38 @@ def monkey_patch_jax() -> None:
   jax.profiler.start_trace = start_trace_patch
   jax._src.profiler.start_trace = start_trace_patch  # pylint: disable=protected-access
 
-  def stop_trace_patch() -> None:
-    _logger.debug("jax.profile.stop_trace patched with pathways' stop_trace")
-    stop_trace()
+  def stop_trace_patch() -> Any:
+    _logger.debug("jax.profiler.stop_trace patched with pathways' stop_trace")
+    return stop_trace()
 
   jax.profiler.stop_trace = stop_trace_patch
   jax._src.profiler.stop_trace = stop_trace_patch  # pylint: disable=protected-access
 
+  # JAX > 0.11.2 implements `jax.profiler.trace` on top of
+  # `jax.profiler.ProfileSession` instead of `start_trace`/`stop_trace`, so it
+  # must be patched explicitly for the Pathways components to be profiled.
+  def trace_patch(
+      log_dir,
+      create_perfetto_link: bool = False,
+      create_perfetto_trace: bool = False,
+      profiler_options: jax.profiler.ProfileOptions | None = None,
+      max_num_hosts: int = 1,
+  ) -> contextlib.AbstractContextManager[Any]:
+    _logger.debug("jax.profiler.trace patched with pathways' trace")
+    return trace(
+        log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=profiler_options,
+        max_num_hosts=max_num_hosts,
+    )
+
+  jax.profiler.trace = trace_patch  # pyrefly: ignore[bad-assignment]
+  jax._src.profiler.trace = trace_patch  # pylint: disable=protected-access  # pyrefly: ignore[bad-assignment]
+
   def start_server_patch(port: int, requires_backend: bool = True) -> None:
     _logger.debug(
-        "jax.profile.start_server patched with pathways' start_server"
+        "jax.profiler.start_server patched with pathways' start_server"
     )
     start_server(port, requires_backend=requires_backend)
 
@@ -568,7 +663,7 @@ def monkey_patch_jax() -> None:
   jax._src.profiler.start_server = start_server_patch  # pylint: disable=protected-access  # pyrefly: ignore[bad-assignment]
 
   def stop_server_patch() -> None:
-    _logger.debug("jax.profile.stop_server patched with pathways' stop_server")
+    _logger.debug("jax.profiler.stop_server patched with pathways' stop_server")
     stop_server()
 
   jax.profiler.stop_server = stop_server_patch
