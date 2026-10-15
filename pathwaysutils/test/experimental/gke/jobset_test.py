@@ -1077,6 +1077,34 @@ class PathwaysJobSetTest(parameterized.TestCase):
     self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
     self.assertIn("user-workload", helper.containers["pathways-head"])
 
+    # Verify memory-backed /dev/shm emptyDir volume and mount on user-workload
+    head_volumes = helper.pod_specs["pathways-head"]["volumes"]
+    self.assertIn(
+        {"name": "dshm", "emptyDir": {"medium": "Memory"}},
+        head_volumes,
+    )
+    self.assertIn(
+        {"name": "dshm", "mountPath": "/dev/shm"},
+        user_c["volumeMounts"],
+    )
+
+  def test_add_user_workload_custom_shm_mount_skips_default_dshm(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command=["python3", "test.py"],
+        volume_mounts=[
+            client.V1VolumeMount(name="custom-shm", mount_path="/dev/shm")
+        ],
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    self.assertNotIn("dshm", helper.volumes["pathways-head"])
+    user_c = helper.containers["pathways-head"]["user-workload"]
+    self.assertEqual(
+        user_c["volumeMounts"],
+        [{"name": "custom-shm", "mountPath": "/dev/shm"}],
+    )
+
   def test_add_user_workload_roundtrip(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
     pw_jobset.add_user_workload(
