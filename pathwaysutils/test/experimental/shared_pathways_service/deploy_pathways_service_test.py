@@ -216,12 +216,14 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         for j in captured_config["spec"]["replicatedJobs"]
         if j["name"] == "pathways-worker"
     )
-    containers = {
-        c["name"]: c
-        for c in worker_job["template"]["spec"]["template"]["spec"][
-            "containers"
-        ]
-    }
+    worker_pod_spec = worker_job["template"]["spec"]["template"]["spec"]
+    containers = {c["name"]: c for c in worker_pod_spec["containers"]}
+    init_containers = {c["name"]: c for c in worker_pod_spec["initContainers"]}
+    # The sidecar runs as a native sidecar so it starts before pathways-worker.
+    self.assertNotIn("colocated-python-sidecar", containers)
+    self.assertEqual(
+        init_containers["colocated-python-sidecar"]["restartPolicy"], "Always"
+    )
     self.assertEqual(
         containers["pathways-worker"]["image"],
         "us-docker.pkg.dev/test-project/test-repo/server:test-tag",
@@ -232,7 +234,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
     )
     sidecar_env = {
         e["name"]: e["value"]
-        for e in containers["colocated-python-sidecar"]["env"]
+        for e in init_containers["colocated-python-sidecar"]["env"]
     }
     self.assertEqual(
         sidecar_env["CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"], "/tmp/sidecar_dir"
