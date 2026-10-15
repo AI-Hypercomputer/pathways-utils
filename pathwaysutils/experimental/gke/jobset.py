@@ -104,48 +104,6 @@ def _deserialize_dict(
   return api_client.deserialize(FakeResponse(json.dumps(data_dict)), klass)
 
 
-# kubernetes Python clients older than v28 do not model
-# `V1Container.restart_policy` (native sidecars), so (de)serialization silently
-# drops it even when it is set. The helpers below carry it over explicitly.
-
-
-def _sanitize_job_template(
-    api_client: Any, job_template: client.V1JobTemplateSpec
-) -> dict[str, Any]:
-  """Serializes a job template, keeping init container restart policies."""
-  serialized = api_client.sanitize_for_serialization(job_template)
-  pod_spec = job_template.spec.template.spec
-  serialized_init_containers = serialized["spec"]["template"]["spec"].get(
-      "initContainers", []
-  )
-  for container, serialized_container in zip(
-      pod_spec.init_containers or [], serialized_init_containers
-  ):
-    restart_policy = getattr(container, "restart_policy", None)
-    if restart_policy:
-      serialized_container.setdefault("restartPolicy", restart_policy)
-  return serialized
-
-
-def _restore_init_container_restart_policies(
-    job_template: client.V1JobTemplateSpec, raw_template: Mapping[str, Any]
-) -> None:
-  """Restores init container restart policies dropped on deserialization."""
-  raw_init_containers = (
-      raw_template.get("spec", {})
-      .get("template", {})
-      .get("spec", {})
-      .get("initContainers", [])
-  )
-  pod_spec = job_template.spec.template.spec
-  for container, raw_container in zip(
-      pod_spec.init_containers or [], raw_init_containers
-  ):
-    restart_policy = raw_container.get("restartPolicy")
-    if restart_policy and getattr(container, "restart_policy", None) is None:
-      container.restart_policy = restart_policy  # pyrefly: ignore[missing-attribute]
-
-
 class PathwaysJobSet:
   """JobSet configuration generator for Pathways."""
 
@@ -895,11 +853,11 @@ class PathwaysJobSet:
   def _compile_config(self) -> dict[str, Any]:
     """Compiles the JobSet configuration into a dictionary."""
     with client.ApiClient() as api_client:
-      serialized_head = _sanitize_job_template(
-          api_client, self._head_job_template
+      serialized_head = api_client.sanitize_for_serialization(
+          self._head_job_template
       )
-      serialized_worker = _sanitize_job_template(
-          api_client, self._worker_job_template
+      serialized_worker = api_client.sanitize_for_serialization(
+          self._worker_job_template
       )
 
     head_job = {
@@ -986,20 +944,14 @@ class PathwaysJobSet:
 
     with client.ApiClient() as api_client:
       for job in config["spec"]["replicatedJobs"]:
-        if job["name"] not in (
-            PATHWAYS_HEAD_JOB_NAME,
-            "worker",
-            PATHWAYS_WORKER_JOB_NAME,
-        ):
-          continue
-        job_template = _deserialize_dict(
-            api_client, job["template"], client.V1JobTemplateSpec
-        )
-        _restore_init_container_restart_policies(job_template, job["template"])
         if job["name"] == PATHWAYS_HEAD_JOB_NAME:
-          head_job_template = job_template
-        else:
-          worker_job_template = job_template
+          head_job_template = _deserialize_dict(
+              api_client, job["template"], client.V1JobTemplateSpec
+          )
+        elif job["name"] in ("worker", PATHWAYS_WORKER_JOB_NAME):
+          worker_job_template = _deserialize_dict(
+              api_client, job["template"], client.V1JobTemplateSpec
+          )
           instance._worker_replicas = job["replicas"]
 
     if head_job_template is None:

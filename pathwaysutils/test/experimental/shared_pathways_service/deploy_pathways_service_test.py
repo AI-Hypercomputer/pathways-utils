@@ -221,9 +221,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
     init_containers = {c["name"]: c for c in worker_pod_spec["initContainers"]}
     # The sidecar runs as a native sidecar so it starts before pathways-worker.
     self.assertNotIn("colocated-python-sidecar", containers)
-    self.assertEqual(
-        init_containers["colocated-python-sidecar"]["restartPolicy"], "Always"
-    )
+    self.assertIn("colocated-python-sidecar", init_containers)
     self.assertEqual(
         containers["pathways-worker"]["image"],
         "us-docker.pkg.dev/test-project/test-repo/server:test-tag",

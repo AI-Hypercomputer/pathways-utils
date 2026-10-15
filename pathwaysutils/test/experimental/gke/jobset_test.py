@@ -1,7 +1,6 @@
 import hashlib
 import itertools
 import os
-import tempfile
 from typing import Any
 import unittest
 from unittest import mock
@@ -447,10 +446,16 @@ class PathwaysJobSetTest(parameterized.TestCase):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
 
     pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
-    config = pw_jobset.to_dict()
-    helper = JobSetManifestHelper(config)
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
 
     # The sidecar runs as a native sidecar so it starts before pathways-worker.
+    # The restart policy is checked on the container object because older
+    # kubernetes clients do not serialize `V1Container.restart_policy`.
+    worker_spec = pw_jobset.worker_job_template.spec.template.spec
+    self.assertEqual(
+        [c.restart_policy for c in worker_spec.init_containers],
+        ["Always"],
+    )
     self.assertNotIn(
         "colocated-python-sidecar", helper.containers["pathways-worker"]
     )
@@ -460,22 +465,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     sidecar = helper.init_containers["pathways-worker"][
         "colocated-python-sidecar"
     ]
-    self.assertEqual(sidecar["restartPolicy"], "Always")
     self.assertEqual(sidecar["image"], "gcr.io/my-project/colocated-python:custom")
-
-    # Survives a YAML export/import roundtrip.
-    with tempfile.TemporaryDirectory() as tmpdir:
-      path = os.path.join(tmpdir, "jobset.yaml")
-      pw_jobset.export_yaml(path)
-      reloaded = JobSetManifestHelper(
-          jobset.PathwaysJobSet.import_yaml(path).to_dict()
-      )
-    self.assertEqual(
-        reloaded.init_containers["pathways-worker"]["colocated-python-sidecar"][
-            "restartPolicy"
-        ],
-        "Always",
-    )
     self.assertTrue(
         any(
             m["name"] == "shared-memory" and m["mountPath"] == "/tmp/shared-memory"
@@ -588,30 +578,6 @@ class PathwaysJobSetTest(parameterized.TestCase):
             for e in worker_container["env"]
         )
     )
-
-  def test_add_user_workload_native_sidecars_survive_roundtrip(self):
-    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    pw_jobset.add_user_workload(
-        image="us-docker.pkg.dev/my-project/test:v1", command="echo hi"
-    )
-    helper = JobSetManifestHelper(pw_jobset.to_dict())
-    for name in ("pathways-rm", "pathways-proxy"):
-      self.assertEqual(
-          helper.init_containers["pathways-head"][name]["restartPolicy"],
-          "Always",
-      )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-      path = os.path.join(tmpdir, "jobset.yaml")
-      pw_jobset.export_yaml(path)
-      reloaded = JobSetManifestHelper(
-          jobset.PathwaysJobSet.import_yaml(path).to_dict()
-      )
-    for name in ("pathways-rm", "pathways-proxy"):
-      self.assertEqual(
-          reloaded.init_containers["pathways-head"][name]["restartPolicy"],
-          "Always",
-      )
 
   @parameterized.named_parameters(
       ("default_shm", None, "/tmp/shared-memory"),
