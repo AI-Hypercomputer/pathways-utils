@@ -285,7 +285,7 @@ class PathwaysJobSet:
         f"--server_port={PATHWAYS_RM_PORT}",
         f"--gcs_scratch_location={pathways_dir}",
         "--node_type=resource_manager",
-        "--instance_count=1",
+        f"--instance_count={num_slices}",
         f"--instance_type={instance_type}",
     ]
     rm_env = [

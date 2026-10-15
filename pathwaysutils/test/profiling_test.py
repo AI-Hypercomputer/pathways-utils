@@ -413,6 +413,73 @@ class ProfilingTest(parameterized.TestCase):
     ):
       profiling.stop_trace()
 
+  def test_start_trace_returns_original_start_trace_result(self):
+    result = profiling.start_trace("gs://test_bucket/test_dir")
+
+    self.assertIs(result, self.mock_original_start_trace.return_value)
+
+  def test_stop_trace_returns_original_stop_trace_result(self):
+    profiling.start_trace("gs://test_bucket/test_dir")
+
+    result = profiling.stop_trace()
+
+    self.assertIs(result, self.mock_original_stop_trace.return_value)
+
+  def test_trace_starts_and_stops_pathways_trace(self):
+    with profiling.trace("gs://test_bucket/test_dir") as session:
+      with self.subTest("pathways_trace_started"):
+        self.mock_plugin_executable_cls.assert_called_once_with(
+            json.dumps(
+                self._get_expected_profile_request("gs://test_bucket/test_dir")
+            )
+        )
+        self.mock_plugin_executable_cls.return_value.call.assert_called_once()
+        self.mock_original_start_trace.assert_called_once()
+        self.mock_original_stop_trace.assert_not_called()
+
+    with self.subTest("yields_original_start_trace_result"):
+      self.assertIs(session, self.mock_original_start_trace.return_value)
+    with self.subTest("pathways_trace_stopped"):
+      self.assertEqual(
+          self.mock_plugin_executable_cls.return_value.call.call_count, 2
+      )
+      self.mock_original_stop_trace.assert_called_once()
+      self.assertIsNone(profiling._profile_state.executable)
+
+  def test_trace_with_max_num_hosts(self):
+    with profiling.trace("gs://test_bucket/test_dir", max_num_hosts=4):
+      pass
+
+    self.mock_plugin_executable_cls.assert_called_once_with(
+        json.dumps(
+            self._get_expected_profile_request(
+                "gs://test_bucket/test_dir", max_num_hosts=4
+            )
+        )
+    )
+    self.mock_original_stop_trace.assert_called_once()
+
+  def test_trace_stops_pathways_trace_on_error(self):
+    with self.assertRaisesRegex(ValueError, "error inside trace"):
+      with profiling.trace("gs://test_bucket/test_dir"):
+        raise ValueError("error inside trace")
+
+    self.assertEqual(
+        self.mock_plugin_executable_cls.return_value.call.call_count, 2
+    )
+    self.mock_original_stop_trace.assert_called_once()
+    self.assertIsNone(profiling._profile_state.executable)
+    self.assertFalse(profiling._profile_state.lock.locked())
+
+  def test_trace_log_dir_error_does_not_stop_trace(self):
+    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
+      with profiling.trace("/local/test_dir"):
+        pass
+
+    self.mock_plugin_executable_cls.assert_not_called()
+    self.mock_original_start_trace.assert_not_called()
+    self.mock_original_stop_trace.assert_not_called()
+
   def test_start_server_starts_thread(self):
     mock_thread = self.enter_context(
         mock.patch.object(profiling.threading, "Thread", autospec=True)
@@ -523,10 +590,12 @@ class ProfilingTest(parameterized.TestCase):
     targets = [
         (jax.profiler, "start_trace"),
         (jax.profiler, "stop_trace"),
+        (jax.profiler, "trace"),
         (jax.profiler, "start_server"),
         (jax.profiler, "stop_server"),
         (jax._src.profiler, "start_trace"),
         (jax._src.profiler, "stop_trace"),
+        (jax._src.profiler, "trace"),
         (jax._src.profiler, "start_server"),
         (jax._src.profiler, "stop_server"),
     ]
@@ -567,7 +636,7 @@ class ProfilingTest(parameterized.TestCase):
   def test_monkey_patched_start_trace(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    profiler_module.start_trace("gs://bucket/dir")
+    result = profiler_module.start_trace("gs://bucket/dir")
 
     mocks["start_trace"].assert_called_once_with(
         "gs://bucket/dir",
@@ -576,6 +645,7 @@ class ProfilingTest(parameterized.TestCase):
         profiler_options=None,
         max_num_hosts=1,
     )
+    self.assertIs(result, mocks["start_trace"].return_value)
 
   @parameterized.named_parameters(
       dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
@@ -601,9 +671,68 @@ class ProfilingTest(parameterized.TestCase):
   def test_monkey_patched_stop_trace(self, profiler_module):
     mocks = self._setup_monkey_patch()
 
-    profiler_module.stop_trace()
+    result = profiler_module.stop_trace()
 
     mocks["stop_trace"].assert_called_once()
+    self.assertIs(result, mocks["stop_trace"].return_value)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="jax_profiler",
+          profiler_module=jax.profiler,
+          trace_kwargs={},
+          expected_max_num_hosts=1,
+      ),
+      dict(
+          testcase_name="jax_src_profiler",
+          profiler_module=jax._src.profiler,
+          trace_kwargs={},
+          expected_max_num_hosts=1,
+      ),
+      dict(
+          testcase_name="jax_profiler_with_max_num_hosts",
+          profiler_module=jax.profiler,
+          trace_kwargs={"max_num_hosts": 3},
+          expected_max_num_hosts=3,
+      ),
+      dict(
+          testcase_name="jax_src_profiler_with_max_num_hosts",
+          profiler_module=jax._src.profiler,
+          trace_kwargs={"max_num_hosts": 3},
+          expected_max_num_hosts=3,
+      ),
+  )
+  def test_monkey_patched_trace(
+      self, profiler_module, trace_kwargs, expected_max_num_hosts
+  ):
+    mocks = self._setup_monkey_patch()
+
+    with profiler_module.trace("gs://bucket/dir", **trace_kwargs) as session:
+      mocks["start_trace"].assert_called_once_with(
+          "gs://bucket/dir",
+          create_perfetto_link=False,
+          create_perfetto_trace=False,
+          profiler_options=None,
+          max_num_hosts=expected_max_num_hosts,
+      )
+      mocks["stop_trace"].assert_not_called()
+
+    mocks["stop_trace"].assert_called_once_with()
+    self.assertIs(session, mocks["start_trace"].return_value)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="jax_profiler", profiler_module=jax.profiler),
+      dict(testcase_name="jax_src_profiler", profiler_module=jax._src.profiler),
+  )
+  def test_monkey_patched_trace_stops_trace_on_error(self, profiler_module):
+    mocks = self._setup_monkey_patch()
+
+    with self.assertRaisesRegex(ValueError, "error inside trace"):
+      with profiler_module.trace("gs://bucket/dir"):
+        raise ValueError("error inside trace")
+
+    mocks["start_trace"].assert_called_once()
+    mocks["stop_trace"].assert_called_once_with()
 
   @parameterized.named_parameters(
       dict(testcase_name="jax_profiler", profiler_module=jax.profiler),

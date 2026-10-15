@@ -91,7 +91,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
     ]
     mock_worker_job.spec.template.spec.containers[0].name = "pathways-worker"
     mock_worker_job.spec.template.spec.containers[0].args = []
-    
+
     # Sidecar will be added by add_colocated_python, but we mock it here as if it was added
     mock_sidecar = mock.MagicMock(name="colocated-python-sidecar")
     mock_sidecar.name = "colocated-python-sidecar"
@@ -149,6 +149,59 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
 
     # Verify deploy_func was called with the dict
     mock_deploy.assert_called_once_with({"metadata": {"name": "test-jobset"}})
+
+  @parameterized.named_parameters(
+      dict(testcase_name="none", sidecar_image=None),
+      dict(testcase_name="empty", sidecar_image=""),
+  )
+  @mock.patch.object(gke_utils, "get_current_cluster_and_project")
+  def test_run_deployment_without_sidecar_image_omits_sidecar(
+      self, mock_detect, sidecar_image
+  ):
+    mock_detect.return_value = ("test-cluster", "test-project")
+    mock_deploy = mock.MagicMock()
+
+    deploy_pathways_service.run_deployment(
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=2,
+        jobset_name="test-jobset",
+        gcs_bucket="gs://test-bucket",
+        server_image="server-image",
+        sidecar_image=sidecar_image,
+        dry_run=False,
+        deploy_func=mock_deploy,
+    )
+
+    mock_deploy.assert_called_once()
+    jobset_config = mock_deploy.call_args.args[0]
+    worker_job = next(
+        j
+        for j in jobset_config["spec"]["replicatedJobs"]
+        if j["name"] == "pathways-worker"
+    )
+    worker_pod_spec = worker_job["template"]["spec"]["template"]["spec"]
+    containers = worker_pod_spec.get("containers", []) + worker_pod_spec.get(
+        "initContainers", []
+    )
+    self.assertNotIn(
+        "colocated-python-sidecar", [c["name"] for c in containers]
+    )
+    worker_container = next(
+        c for c in containers if c["name"] == "pathways-worker"
+    )
+    self.assertEmpty([
+        arg
+        for arg in worker_container.get("args", [])
+        if arg.startswith("--cloud_pathways_sidecar_shm_directory")
+    ])
+
+  @mock.patch.object(deploy_pathways_service, "run_deployment", autospec=True)
+  def test_main_deploys_without_sidecar_by_default(self, mock_run_deployment):
+    deploy_pathways_service.main(["deploy_pathways_service"])
+
+    mock_run_deployment.assert_called_once()
+    self.assertIsNone(mock_run_deployment.call_args.kwargs["sidecar_image"])
 
   @mock.patch.object(gke_utils, "get_current_cluster_and_project")
   def test_run_deployment_worker_backoff_limit(self, mock_detect):

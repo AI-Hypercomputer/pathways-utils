@@ -29,8 +29,9 @@ _SERVER_IMAGE = flags.DEFINE_string(
 )
 _SIDECAR_IMAGE = flags.DEFINE_string(
     "sidecar_image",
-    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/sidecar:20260423-python_3.12-jax_0.10.0",
-    "Full path to the sidecar Docker image",
+    None,
+    "Full path to the colocated Python sidecar Docker image. If not set, the"
+    " service is deployed without the sidecar.",
 )
 _TPU_TYPE = flags.DEFINE_enum(
     "tpu_type", "v6e", ["v5e", "v5p", "v6e", "tpu7x"], "TPU type"
@@ -174,48 +175,8 @@ def deploy_jobset(jobset_yaml: dict[str, Any]) -> None:
     _logger.exception("Error loading Kubernetes configuration")
 
 
-def run_deployment(
-    tpu_type,
-    topology,
-    num_slices,
-    jobset_name,
-    gcs_bucket,
-    server_image,
-    sidecar_image,
-    dry_run,
-    deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
-    max_restarts: int = 30,
-) -> None:
-  """Executes the deployment logic."""
-  # Use PathwaysJobSet builder instead of YAML template.
-  pw_jobset = jobset.PathwaysJobSet(
-      name=jobset_name,
-      namespace="default",
-      pathways_dir=gcs_bucket,
-      tpu_type=tpu_type,
-      topology=topology,
-      num_slices=num_slices,
-      shared_pathways_service=True,
-      max_restarts=max_restarts,
-      # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
-      # implemented
-      max_slice_restarts=1000000,
-  )
-
-  # If custom server_image is provided, mutate the templates to use it.
-  if server_image:
-    # Mutate head job.
-    for container in pw_jobset.head_job_template.spec.template.spec.containers:
-      if container.name == "pathways-rm":
-        container.image = server_image
-    # Mutate worker job.
-    for (
-        container
-    ) in pw_jobset.worker_job_template.spec.template.spec.containers:
-      if container.name == "pathways-worker":
-        container.image = server_image
-
-  # Add colocated python sidecar.
+def _add_sidecar(pw_jobset: jobset.PathwaysJobSet, sidecar_image: str) -> None:
+  """Adds the colocated Python sidecar to the workers."""
   pw_jobset.add_colocated_python(
       image=sidecar_image, shm_mount_path=_SIDECAR_SHM_DIR
   )
@@ -269,6 +230,57 @@ def run_deployment(
             f"--cloud_pathways_sidecar_shm_directory={_SIDECAR_SHM_DIR}"
         )
       container.args = args
+
+
+def run_deployment(
+    *,
+    tpu_type,
+    topology,
+    num_slices,
+    jobset_name,
+    gcs_bucket,
+    server_image,
+    sidecar_image: str | None,
+    dry_run,
+    deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
+    max_restarts: int = 30,
+) -> None:
+  """Executes the deployment logic."""
+  # Use PathwaysJobSet builder instead of YAML template.
+  pw_jobset = jobset.PathwaysJobSet(
+      name=jobset_name,
+      namespace="default",
+      pathways_dir=gcs_bucket,
+      tpu_type=tpu_type,
+      topology=topology,
+      num_slices=num_slices,
+      shared_pathways_service=True,
+      max_restarts=max_restarts,
+      # TODO(b/496958026): Remove this once go/sps-worker-pod-stability is
+      # implemented
+      max_slice_restarts=1000000,
+  )
+
+  # If custom server_image is provided, mutate the templates to use it.
+  if server_image:
+    # Mutate head job.
+    for container in pw_jobset.head_job_template.spec.template.spec.containers:
+      if container.name == "pathways-rm":
+        container.image = server_image
+    # Mutate worker job.
+    for (
+        container
+    ) in pw_jobset.worker_job_template.spec.template.spec.containers:
+      if container.name == "pathways-worker":
+        container.image = server_image
+
+  if sidecar_image:
+    _add_sidecar(pw_jobset, sidecar_image)
+  else:
+    _logger.info(
+        "No sidecar image is set. Deploying the service without the colocated"
+        " Python sidecar."
+    )
 
   jobset_config = pw_jobset.to_dict()
 
