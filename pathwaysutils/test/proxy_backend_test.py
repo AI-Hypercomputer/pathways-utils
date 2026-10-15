@@ -95,6 +95,28 @@ class ProxyBackendTest(absltest.TestCase):
     options = args[1]
     self.assertNotEqual(options.connection_timeout_in_seconds, 42)
 
+  def test_proxy_backend_logs_cache_initialization_warning(self):
+    mock_client = mock.MagicMock()
+    warning_msg = (
+        'Persistent compilation cache cannot initialize storage "gcs": '
+        "PERMISSION_DENIED: Permission 'storage.buckets.get' denied). "
+        "Falling back to memory cache storage."
+    )
+    mock_client.persistent_compilation_cache_initialization_warning = (
+        warning_msg
+    )
+    self.enter_context(
+        mock.patch.object(
+            ifrt_proxy,
+            "get_client",
+            return_value=mock_client,
+        )
+    )
+    proxy_backend.register_backend_factory()
+    with self.assertLogs(proxy_backend._logger, level="WARNING") as cm:
+      self.assertIn("proxy", backend.backends())
+    self.assertTrue(any(warning_msg in output for output in cm.output))
+
 
 if __name__ == "__main__":
   absltest.main()
