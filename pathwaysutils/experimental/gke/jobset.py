@@ -129,8 +129,8 @@ def _apply_container_kwargs(
   for field in ("name", "image"):
     if field in kwargs:
       raise ValueError(
-          f"Cannot set {field!r} of the {container.name} container; use the"
-          " PathwaysJobSet image arguments instead."
+          f"Cannot set {field!r} of the {container.name} container with"
+          " container kwargs."
       )
   unknown = sorted(set(kwargs) - set(client.V1Container.openapi_types))
   if unknown:
@@ -139,21 +139,24 @@ def _apply_container_kwargs(
     )
 
   for field in ("args", "volume_mounts"):
-    if field in kwargs:
-      setattr(
-          container,
-          field,
-          list(getattr(container, field) or []) + list(kwargs.pop(field) or []),
-      )
+    extra = kwargs.pop(field, None)
+    if extra:
+      defaults = list(getattr(container, field) or [])
+      setattr(container, field, defaults + list(extra))
 
   env = {k: str(v) for k, v in (kwargs.pop("env", None) or {}).items()}
   if env:
     merged_env = []
     for var in container.env or []:
       if var.name in env:
-        merged_env.append(
-            client.V1EnvVar(name=var.name, value=env.pop(var.name))
+        value = env.pop(var.name)
+        _logger.debug(
+            "Overriding environment variable %s of %s with %s",
+            var.name,
+            container.name,
+            value,
         )
+        merged_env.append(client.V1EnvVar(name=var.name, value=value))
       else:
         merged_env.append(var)
     merged_env.extend(client.V1EnvVar(name=k, value=v) for k, v in env.items())
@@ -711,8 +714,10 @@ class PathwaysJobSet:
       command: Command to execute in the container (string or sequence of
         strings).
       name: Container name for the user workload (default: 'user-workload').
-      **container_kwargs: Optional additional keyword arguments passed to
-        `client.V1Container` (e.g., `env`, `resources`, `volume_mounts`).
+      **container_kwargs: Optional `client.V1Container` fields (e.g., `env`,
+        `resources`, `volume_mounts`), merged like `rm_container_kwargs` of
+        `__init__`. `env` maps names to values, which replace the default JAX
+        environment variables with the same name or are added.
 
     Returns:
       The PathwaysJobSet instance for chaining.
@@ -726,32 +731,14 @@ class PathwaysJobSet:
         "JAX_BACKEND_TARGET": f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
         "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS": "true",
     }
-    user_env = container_kwargs.pop("env", None)
-    if user_env:
-      for k, v in user_env.items():
-        if k in default_env:
-          _logger.debug(
-              "Overriding default environment variable %s=%s with %s",
-              k,
-              default_env[k],
-              v,
-          )
-        default_env[k] = str(v)
-
-    user_env_list = [
-        client.V1EnvVar(name=k, value=v) for k, v in default_env.items()
-    ]
-
-    container_spec_kwargs: dict[str, Any] = {
-        "name": name,
-        "image": image,
-        "image_pull_policy": "Always",
-        "command": cmd,
-        "env": user_env_list,
-    }
-    container_spec_kwargs.update(container_kwargs)
-
-    user_container = client.V1Container(**container_spec_kwargs)
+    user_container = client.V1Container(
+        name=name,
+        image=image,
+        image_pull_policy="Always",
+        command=cmd,
+        env=[client.V1EnvVar(name=k, value=v) for k, v in default_env.items()],
+    )
+    _apply_container_kwargs(user_container, container_kwargs)
 
     init_containers = list(pod_spec.init_containers or [])
     containers = []

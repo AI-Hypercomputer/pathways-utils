@@ -1239,6 +1239,40 @@ class PathwaysJobSetTest(parameterized.TestCase):
     rm = helper.containers["pathways-head"]["pathways-rm"]
     self.assertEqual(rm["args"][-1], "--v=1")
 
+  def test_add_user_workload_env(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 -m test_module",
+        env={"JAX_PLATFORMS": "cpu", "CUSTOM_ENV": 123},
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    user_c = helper.containers["pathways-head"]["user-workload"]
+    # Defaults with the same name are replaced in place; others are appended.
+    self.assertEqual(
+        user_c["env"],
+        [
+            {"name": "JAX_PLATFORMS", "value": "cpu"},
+            {"name": "JAX_BACKEND_TARGET", "value": "grpc://localhost:29000"},
+            {
+                "name": "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
+                "value": "true",
+            },
+            {"name": "CUSTOM_ENV", "value": "123"},
+        ],
+    )
+
+  def test_add_user_workload_unknown_field(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    with self.assertRaisesRegex(
+        ValueError, "Unknown client.V1Container fields for user-workload"
+    ):
+      pw_jobset.add_user_workload(
+          image="us-docker.pkg.dev/my-project/test:v1",
+          command="python3 -m test_module",
+          not_a_field=True,
+      )
+
   def test_kokoro_pretraining_workload_generation(self):
     """Verifies that PathwaysJobSet can generate a JobSet matching Kokoro pretraining test workloads."""
     pw_jobset = jobset.PathwaysJobSet(
