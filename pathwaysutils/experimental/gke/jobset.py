@@ -907,8 +907,38 @@ class PathwaysJobSet:
       image: str,
       shm_mount_path: str = "/tmp/shared-memory",
       shm_size_limit: str | None = None,
+      **container_kwargs: Any,
   ) -> "PathwaysJobSet":
-    """Adds colocated python sidecar to the worker pods."""
+    """Adds colocated python sidecar to the worker pods.
+
+    The sidecar runs as a native sidecar (an init container with
+    `restartPolicy: Always`), so Kubernetes starts it before `pathways-worker`,
+    which connects to it during placement initialization, and stops it when
+    `pathways-worker` exits. The sidecar and the `pathways-worker` container
+    share a memory-backed volume mounted at `shm_mount_path`, and
+    `pathways-worker` is started with
+    `--cloud_pathways_sidecar_shm_directory=<shm_mount_path>` so that large
+    tensors are transferred through shared host memory.
+
+    Args:
+      image: Docker image for the colocated python sidecar.
+      shm_mount_path: Mount path of the shared memory volume in both the sidecar
+        and the `pathways-worker` container.
+      shm_size_limit: Optional size limit of the shared memory volume (e.g.,
+        "16Gi"). If `None`, no `sizeLimit` is set: the memory-backed volume
+        can grow up to the pod's memory limit (or the node's allocatable
+        memory if the pod has no limit), and data written to it counts toward
+        the pod's memory usage.
+      **container_kwargs: Optional `client.V1Container` fields for the sidecar
+        (e.g., `env`, `resources`, `volume_mounts`), merged like
+        `rm_container_kwargs` of `__init__`. `env` maps names to values, which
+        replace the default sidecar environment variables with the same name or
+        are added. `volume_mounts` are appended to the default `shared-tmp` and
+        shared memory mounts.
+
+    Returns:
+      The PathwaysJobSet instance for chaining.
+    """
     pod_spec = self._worker_job_template.spec.template.spec
 
     # Add shared memory volume if not exists.
@@ -946,14 +976,29 @@ class PathwaysJobSet:
             ),
         ],
     )
+    _apply_container_kwargs(colocated_container, container_kwargs)
+    # Run the sidecar as a native sidecar so that it is started before, and
+    # stopped after, pathways-worker.
+    colocated_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
-    containers = pod_spec.containers or []
-    containers.append(colocated_container)
-    pod_spec.containers = containers
+    init_containers = list(pod_spec.init_containers or [])
+    init_containers.append(colocated_container)
+    pod_spec.init_containers = init_containers
 
-    # Add volume mount to pathways-worker.
+    # Add volume mount and shared memory flag to pathways-worker.
     for container in pod_spec.containers:
       if container.name == "pathways-worker":
+        # The Pathways worker only enables shared memory transfers to the
+        # sidecar when this flag is set.
+        args = container.args or []
+        if not any(
+            a.startswith("--cloud_pathways_sidecar_shm_directory=")
+            for a in args
+        ):
+          args.append(
+              f"--cloud_pathways_sidecar_shm_directory={shm_mount_path}"
+          )
+        container.args = args
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(
             client.V1VolumeMount(
@@ -962,14 +1007,14 @@ class PathwaysJobSet:
         )
         container.volume_mounts = volume_mounts
         # Add env var for shm dir.
-        env = container.env or []
-        env.append(
+        worker_env = container.env or []
+        worker_env.append(
             client.V1EnvVar(
                 name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
                 value=shm_mount_path,
             )
         )
-        container.env = env
+        container.env = worker_env
         break
 
     return self
