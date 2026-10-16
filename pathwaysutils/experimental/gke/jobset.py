@@ -17,8 +17,10 @@ import hashlib
 import json
 import logging
 import math
+import posixpath
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence
+
 import yaml
 
 try:
@@ -51,6 +53,7 @@ PATHWAYS_RM_PORT = 29001
 PATHWAYS_WORKER_PORT = 29005
 
 GKE_NODEPOOL_KEY = "cloud.google.com/gke-nodepool"
+CUSTOM_LIBTPU_VOLUME_NAME = "custom-libtpu"
 
 MACHINE_TYPE_TO_TPU_VERSION_MAP = {
     "tpu7x-standard-4t": "tpu7x",
@@ -757,15 +760,19 @@ class PathwaysJobSet:
       mount_path: str,
       bucket: str,
       read_only: bool = False,
+      mount_options: str = "implicit-dirs",
   ) -> "PathwaysJobSet":
     """Adds GCSFuse mount to specified containers."""
     bucket_hash = int(hashlib.md5(bucket.encode()).hexdigest(), 16) % (10**8)
     volume_name = f"gcsfuse-{bucket_hash}"
+    volume_attributes = {"bucketName": bucket}
+    if mount_options:
+      volume_attributes["mountOptions"] = mount_options
     volume = client.V1Volume(
         name=volume_name,
         csi=client.V1CSIVolumeSource(
             driver="gcsfuse.csi.storage.gke.io",
-            volume_attributes={"bucketName": bucket},
+            volume_attributes=volume_attributes,
         ),
     )
     volume_mount = client.V1VolumeMount(
@@ -791,6 +798,76 @@ class PathwaysJobSet:
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(volume_mount)
         container.volume_mounts = volume_mounts
+
+    return self
+
+  def with_custom_libtpu(
+      self,
+      libtpu_path: str,
+      containers: str | Sequence[str] = "all",
+      mount_host_dir: bool = False,
+  ) -> "PathwaysJobSet":
+    """Overrides `TPU_LIBRARY_PATH` in the selected Pathways containers.
+
+    Args:
+      libtpu_path: Absolute container path to `libtpu.so`.
+      containers: Target container selector (e.g. `"all"` or `"worker"`).
+      mount_host_dir: If True, mounts the parent directory of `libtpu_path` from
+        the host node into matching containers.
+
+    Returns:
+      Self for method chaining.
+
+    Raises:
+      ValueError: If `libtpu_path` is not a valid absolute file path or has no
+        parent subdirectory when `mount_host_dir=True`.
+    """
+    stripped = libtpu_path.strip()
+    if not stripped.startswith("/") or stripped.endswith("/"):
+      raise ValueError(
+          "libtpu_path must be an absolute container file path (got"
+          f" {libtpu_path!r})."
+      )
+    path = posixpath.normpath(stripped)
+    parent_dir = posixpath.dirname(path)
+    if mount_host_dir and parent_dir == "/":
+      raise ValueError(
+          f"mount_host_dir=True requires a subdirectory (got {libtpu_path!r})."
+      )
+
+    for job_template in (self._head_job_template, self._worker_job_template):
+      pod_spec = job_template.spec.template.spec
+      all_containers = (pod_spec.containers or []) + (
+          pod_spec.init_containers or []
+      )
+      matching = self._filter_matching_containers(containers, all_containers)
+      if not matching:
+        continue
+
+      if mount_host_dir:
+        self._add_volume_to_pod_spec(
+            pod_spec,
+            client.V1Volume(
+                name=CUSTOM_LIBTPU_VOLUME_NAME,
+                host_path=client.V1HostPathVolumeSource(
+                    path=parent_dir, type="DirectoryOrCreate"
+                ),
+            ),
+        )
+      for container in matching:
+        if mount_host_dir:
+          volume_mounts = container.volume_mounts or []
+          volume_mounts.append(
+              client.V1VolumeMount(
+                  name=CUSTOM_LIBTPU_VOLUME_NAME,
+                  mount_path=parent_dir,
+                  read_only=True,
+              )
+          )
+          container.volume_mounts = volume_mounts
+        env = container.env or []
+        env.append(client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path))
+        container.env = env
 
     return self
 

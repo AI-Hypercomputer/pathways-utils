@@ -106,7 +106,6 @@ class JobSetManifestHelper:
     return matches
 
 
-
 class PathwaysJobSetTest(parameterized.TestCase):
 
   def _create_jobset(
@@ -348,6 +347,9 @@ class PathwaysJobSetTest(parameterized.TestCase):
     vol = helper.volumes["pathways-worker"][expected_vol_name]
     self.assertEqual(vol["csi"]["driver"], "gcsfuse.csi.storage.gke.io")
     self.assertEqual(vol["csi"]["volumeAttributes"]["bucketName"], "my-bucket")
+    self.assertEqual(
+        vol["csi"]["volumeAttributes"]["mountOptions"], "implicit-dirs"
+    )
     self.assertEqual(helper.job_metadatas["pathways-worker"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.pod_metadatas["pathways-worker"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
 
@@ -358,7 +360,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_handles_none_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force metadata to be None to simulate imported templates or raw specs without metadata
     pw_jobset._head_job_template.metadata = None
     pw_jobset._head_job_template.spec.template.metadata = None
@@ -372,7 +374,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         bucket="my-bucket",
     )
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertEqual(helper.job_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.pod_metadatas["pathways-head"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
     self.assertEqual(helper.job_metadatas["pathways-worker"].get("annotations", {}).get("gke-gcsfuse/volumes"), "true")
@@ -380,7 +382,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_gcsfuse_preserves_existing_metadata(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate metadata, annotations, and labels
     pw_jobset._head_job_template.metadata = client.V1ObjectMeta(
         labels={"existing-job-label": "value"},
@@ -433,14 +435,14 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_colocated_python_handles_none_volumes(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Force volumes to be None
     pw_jobset._worker_job_template.spec.template.spec.volumes = None
 
     # Should not crash and should correctly add volume
     pw_jobset.add_colocated_python(image="gcr.io/my-project/colocated-python:custom")
     helper = JobSetManifestHelper(pw_jobset.to_dict())
-    
+
     self.assertIn("shared-memory", helper.volumes["pathways-worker"])
 
   def test_add_colocated_python_sidecar(self):
@@ -468,7 +470,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
 
   def test_add_colocated_python_preserves_init_containers(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    
+
     # Pre-populate init container on worker pod
     worker_spec = pw_jobset._worker_job_template.spec.template.spec
     existing_init = client.V1Container(name="existing-init-container", image="ubuntu:latest")
@@ -1132,6 +1134,108 @@ class PathwaysJobSetTest(parameterized.TestCase):
     # Verify worker pod spec: priorityClassName
     worker_pod_spec = helper.pod_specs["pathways-worker"]
     self.assertEqual(worker_pod_spec["priorityClassName"], "high")
+
+  def test_with_custom_libtpu_gcsfuse_path(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    returned = pw_jobset.add_gcsfuse(
+        containers="all",
+        mount_path="/mnt/gcs",
+        bucket="my-libtpu-bucket",
+        read_only=True,
+    ).with_custom_libtpu("/mnt/gcs/nightlies/libtpu.so")
+    self.assertIs(returned, pw_jobset)
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    for job_name in ("pathways-head", "pathways-worker"):
+      self.assertNotIn("custom-libtpu", helper.volumes[job_name])
+      self.assertEqual(
+          helper.pod_metadatas[job_name]
+          .get("annotations", {})
+          .get("gke-gcsfuse/volumes"),
+          "true",
+      )
+
+    for container_name in ("pathways-rm", "pathways-proxy", "pathways-worker"):
+      matches = helper.get_all_containers_by_name(container_name)
+      self.assertLen(matches, 1, container_name)
+      _, container = matches[0]
+      self.assertIn(
+          {"name": "TPU_LIBRARY_PATH", "value": "/mnt/gcs/nightlies/libtpu.so"},
+          container["env"],
+      )
+      self.assertTrue(
+          any(
+              mount["mountPath"] == "/mnt/gcs" and bool(mount.get("readOnly"))
+              for mount in container.get("volumeMounts", [])
+          )
+      )
+
+  def test_with_custom_libtpu_mount_host_dir(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.with_custom_libtpu(
+        "/var/lib/custom_tpu/libtpu.so",
+        containers="worker",
+        mount_host_dir=True,
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertNotIn("custom-libtpu", helper.volumes["pathways-head"])
+    self.assertEqual(
+        helper.volumes["pathways-worker"]["custom-libtpu"],
+        {
+            "name": "custom-libtpu",
+            "hostPath": {
+                "path": "/var/lib/custom_tpu",
+                "type": "DirectoryOrCreate",
+            },
+        },
+    )
+
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    self.assertIn(
+        {
+            "name": "custom-libtpu",
+            "mountPath": "/var/lib/custom_tpu",
+            "readOnly": True,
+        },
+        worker["volumeMounts"],
+    )
+    self.assertIn(
+        {"name": "TPU_LIBRARY_PATH", "value": "/var/lib/custom_tpu/libtpu.so"},
+        worker["env"],
+    )
+    for head_container_name in ("pathways-rm", "pathways-proxy"):
+      head_container = helper.containers["pathways-head"][head_container_name]
+      self.assertNotIn(
+          "TPU_LIBRARY_PATH",
+          [env_var["name"] for env_var in head_container.get("env", [])],
+      )
+
+  @parameterized.named_parameters(
+      dict(testcase_name="empty", path=""),
+      dict(testcase_name="whitespace", path="   "),
+      dict(testcase_name="gcs_uri", path="gs://bucket/libtpu.so"),
+      dict(testcase_name="https_uri", path="https://example.com/libtpu.so"),
+      dict(testcase_name="relative", path="relative/libtpu.so"),
+      dict(testcase_name="root", path="/"),
+      dict(testcase_name="directory", path="/mnt/gcs/dir/"),
+      dict(
+          testcase_name="root_file_with_host_dir",
+          path="/libtpu.so",
+          mount_host_dir=True,
+          expected_error="mount_host_dir",
+      ),
+  )
+  def test_with_custom_libtpu_rejects_invalid_paths(
+      self,
+      path: str,
+      mount_host_dir: bool = False,
+      expected_error: str = "libtpu_path",
+  ):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    with self.assertRaisesRegex(ValueError, expected_error):
+      pw_jobset.with_custom_libtpu(path, mount_host_dir=mount_host_dir)
 
 
 if __name__ == "__main__":
