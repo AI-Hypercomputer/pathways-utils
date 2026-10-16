@@ -23,6 +23,21 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-10-16
+## What's Changed
+* Stop clearing JAX caches and deleting live arrays on elastic events. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/339
+* Verify Shared Pathways Service is up and ready before running a workload. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/333
+* Discover and validate SPS colocated Python sidecar package versions. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/335
+* Add user workload support and configurable scheduling for batch training by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/317
+* Restore Pathways RM instance_count for Shared Pathways Service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/342
+* Restore Pathways traces when profiling with jax.profiler.trace. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/341
+* Make the colocated Python sidecar optional when deploying SPS by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/340
+* Add `PathwaysJobSet.with_custom_libtpu` to override `TPU_LIBRARY_PATH` at runtime on GKE by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/331
+* Add rm/proxy/worker container kwargs to PathwaysJobSet by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/343
+* Improve PathwaysJobSet.add_colocated_python: native sidecar, worker shm flag, and container_kwargs by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/344
+* Bump min JAX version to 0.10.0 by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/350
+* Add reference Transformer model for Pathways elasticity. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/349
+
 ## [0.1.12] - 2026-09-24
 ## What's Changed
 * Increase JAX IFRT proxy client connection timeout to 10 minutes. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/278
