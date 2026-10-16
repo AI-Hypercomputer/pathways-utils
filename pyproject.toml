@@ -14,7 +14,7 @@ keywords = []
 dependencies = [
     "absl-py",
     "fastapi",
-    "jax>=0.8.3",
+    "jax>=0.10.0",
     "orbax-checkpoint>=0.12.3",
     "uvicorn",
     "requests",
