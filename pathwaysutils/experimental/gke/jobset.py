@@ -17,8 +17,10 @@ import hashlib
 import json
 import logging
 import math
+import posixpath
 import time
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence
+
 import yaml
 
 try:
@@ -51,6 +53,7 @@ PATHWAYS_RM_PORT = 29001
 PATHWAYS_WORKER_PORT = 29005
 
 GKE_NODEPOOL_KEY = "cloud.google.com/gke-nodepool"
+CUSTOM_LIBTPU_VOLUME_NAME = "custom-libtpu"
 
 MACHINE_TYPE_TO_TPU_VERSION_MAP = {
     "tpu7x-standard-4t": "tpu7x",
@@ -104,6 +107,282 @@ def _deserialize_dict(
   return api_client.deserialize(FakeResponse(json.dumps(data_dict)), klass)
 
 
+def _make_env_var(
+    name: str, value: str | client.V1EnvVarSource
+) -> client.V1EnvVar:
+  """Returns an environment variable with a literal value or a value source."""
+  if isinstance(value, client.V1EnvVarSource):
+    return client.V1EnvVar(name=name, value_from=value)
+  return client.V1EnvVar(name=name, value=value)
+
+
+def _apply_container_kwargs(
+    container: client.V1Container,
+    container_kwargs: Mapping[str, Any] | None,
+) -> None:
+  """Applies caller-provided `client.V1Container` fields to a container.
+
+  `args` and `volume_mounts` are appended to the container's defaults. `env` is
+  a mapping of environment variable names to values, either strings or
+  `client.V1EnvVarSource`s (e.g., a `field_ref` or `secret_key_ref`); each one
+  replaces the default variable with the same name or is added after the
+  defaults. Any other field replaces the default, with a warning if the
+  container already sets that field.
+
+  Args:
+    container: Container to update in place.
+    container_kwargs: `client.V1Container` fields to apply.
+
+  Raises:
+    ValueError: `container_kwargs` sets `name` or `image`, or a field that
+      `client.V1Container` does not have.
+    TypeError: `env` is not a mapping, or one of its values is neither a string
+      nor a `client.V1EnvVarSource`.
+  """
+  if not container_kwargs:
+    return
+  kwargs = dict(container_kwargs)
+  for field in ("name", "image"):
+    if field in kwargs:
+      raise ValueError(
+          f"Cannot set {field!r} of the {container.name} container with"
+          " container kwargs."
+      )
+  unknown = sorted(set(kwargs) - set(client.V1Container.openapi_types))
+  if unknown:
+    raise ValueError(
+        f"Unknown client.V1Container fields for {container.name}: {unknown}"
+    )
+
+  extra_args = kwargs.pop("args", None)
+  if extra_args:
+    container.args = list(container.args or []) + list(extra_args)
+  extra_volume_mounts = kwargs.pop("volume_mounts", None)
+  if extra_volume_mounts:
+    container.volume_mounts = list(container.volume_mounts or []) + list(
+        extra_volume_mounts
+    )
+
+  env = kwargs.pop("env", None) or {}
+  if not isinstance(env, Mapping):
+    raise TypeError(
+        f"env of the {container.name} container must be a mapping of names to"
+        f" values, got {type(env).__name__}."
+    )
+  env = dict(env)
+  for var_name, value in env.items():
+    if not isinstance(value, (str, client.V1EnvVarSource)):
+      raise TypeError(
+          f"Environment variable {var_name} of the {container.name} container"
+          " must be a str or client.V1EnvVarSource, got"
+          f" {type(value).__name__}."
+      )
+  if env:
+    merged_env = []
+    for var in container.env or []:
+      if var.name in env:
+        value = env.pop(var.name)
+        _logger.debug(
+            "Overriding environment variable %s of %s with %s",
+            var.name,
+            container.name,
+            value,
+        )
+        merged_env.append(_make_env_var(var.name, value))
+      else:
+        merged_env.append(var)
+    merged_env.extend(_make_env_var(k, v) for k, v in env.items())
+    container.env = merged_env
+
+  for field, value in kwargs.items():
+    if getattr(container, field) is not None:
+      _logger.warning(
+          "Replacing the default %s of the %s container.",
+          field,
+          container.name,
+      )
+    setattr(container, field, value)
+
+
+def _merge_pod_spec_kwargs(
+    defaults: Mapping[str, Any],
+    pod_spec_kwargs: Mapping[str, Any] | None,
+    pod_name: str,
+) -> dict[str, Any]:
+  """Merges caller-provided `client.V1PodSpec` fields into the defaults.
+
+  `volumes` are merged by name: a volume replaces the default volume with the
+  same name (with a warning if they differ) or is added after the defaults, so
+  that required volumes such as `shared-tmp` are kept. Any other field replaces
+  the default.
+
+  Args:
+    defaults: Default `client.V1PodSpec` fields.
+    pod_spec_kwargs: `client.V1PodSpec` fields to apply.
+    pod_name: Name of the pod, for log messages.
+
+  Returns:
+    The merged `client.V1PodSpec` fields.
+  """
+  merged = dict(defaults)
+  if not pod_spec_kwargs:
+    return merged
+  overrides = dict(pod_spec_kwargs)
+  extra_volumes = overrides.pop("volumes", None)
+  merged.update(overrides)
+  if extra_volumes:
+    volumes = {v.name: v for v in merged.get("volumes") or []}
+    for volume in extra_volumes:
+      if volume.name in volumes and volumes[volume.name] != volume:
+        _logger.warning(
+            "Replacing the default %s volume of the %s pod.",
+            volume.name,
+            pod_name,
+        )
+      volumes[volume.name] = volume
+    merged["volumes"] = list(volumes.values())
+  return merged
+
+
+def _build_rm_container(
+    pathways_dir: str,
+    num_slices: int,
+    instance_type: str,
+    rm_image: str,
+    rm_container_kwargs: Mapping[str, Any] | None,
+) -> client.V1Container:
+  """Builds the `pathways-rm` container.
+
+  Args:
+    pathways_dir: GCS path for Pathways scratch space.
+    num_slices: Number of slices.
+    instance_type: TPU instance type (e.g., "tpuv5:2x2").
+    rm_image: Docker image for the Resource Manager, including the tag.
+    rm_container_kwargs: Optional `client.V1Container` fields for the container;
+      see `PathwaysJobSet.__init__`.
+
+  Returns:
+    The `pathways-rm` container.
+  """
+  rm_args = [
+      f"--server_port={PATHWAYS_RM_PORT}",
+      f"--gcs_scratch_location={pathways_dir}",
+      "--node_type=resource_manager",
+      f"--instance_count={num_slices}",
+      f"--instance_type={instance_type}",
+  ]
+  rm_env = [
+      client.V1EnvVar(
+          name="REPLICATED_JOB_NAME",
+          value_from=client.V1EnvVarSource(
+              field_ref=client.V1ObjectFieldSelector(
+                  field_path="metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']"
+              )
+          ),
+      ),
+      client.V1EnvVar(
+          name="JOBSET_NAME",
+          value_from=client.V1EnvVarSource(
+              field_ref=client.V1ObjectFieldSelector(
+                  field_path=(
+                      "metadata.annotations['jobset.sigs.k8s.io/jobset-name']"
+                  )
+              )
+          ),
+      ),
+      client.V1EnvVar(
+          name="HOST_ADDRESS",
+          value_from=client.V1EnvVarSource(
+              field_ref=client.V1ObjectFieldSelector(
+                  field_path=(
+                      "metadata.labels['jobset.sigs.k8s.io/coordinator']"
+                  )
+              )
+          ),
+      ),
+      client.V1EnvVar(name="TPU_SKIP_MDS_QUERY", value="true"),
+  ]
+  rm_container = client.V1Container(
+      name="pathways-rm",
+      image=rm_image,
+      image_pull_policy="Always",
+      args=rm_args,
+      env=rm_env,
+      ports=[
+          client.V1ContainerPort(
+              container_port=PATHWAYS_RM_PORT, protocol="TCP"
+          ),
+          client.V1ContainerPort(container_port=29002, protocol="TCP"),
+      ],
+      resources=client.V1ResourceRequirements(
+          limits={"cpu": "8", "memory": "32G"}
+      ),
+  )
+  _apply_container_kwargs(rm_container, rm_container_kwargs)
+  return rm_container
+
+
+def _build_proxy_container(
+    pathways_dir: str,
+    elastic_slices: int,
+    proxy_image: str,
+    proxy_container_kwargs: Mapping[str, Any] | None,
+) -> client.V1Container:
+  """Builds the `pathways-proxy` container.
+
+  Args:
+    pathways_dir: GCS path for Pathways scratch space.
+    elastic_slices: Number of elastic slices.
+    proxy_image: Docker image for the Proxy, including the tag.
+    proxy_container_kwargs: Optional `client.V1Container` fields for the
+      container; see `PathwaysJobSet.__init__`.
+
+  Returns:
+    The `pathways-proxy` container.
+  """
+  proxy_args = [
+      f"--server_port={PATHWAYS_PROXY_PORT}",
+      f"--resource_manager_address=$(PATHWAYS_HEAD):{PATHWAYS_RM_PORT}",
+      f"--gcs_scratch_location={pathways_dir}",
+  ]
+  if elastic_slices > 0:
+    proxy_args.append(f"--num_elastic_slices={elastic_slices}")
+
+  proxy_env = [
+      client.V1EnvVar(
+          name="PATHWAYS_HEAD",
+          value_from=client.V1EnvVarSource(
+              field_ref=client.V1ObjectFieldSelector(
+                  field_path=(
+                      "metadata.labels['jobset.sigs.k8s.io/coordinator']"
+                  )
+              )
+          ),
+      ),
+      client.V1EnvVar(
+          name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
+          value="true",
+      ),
+  ]
+  proxy_container = client.V1Container(
+      name="pathways-proxy",
+      image=proxy_image,
+      image_pull_policy="Always",
+      args=proxy_args,
+      env=proxy_env,
+      ports=[
+          client.V1ContainerPort(
+              container_port=PATHWAYS_PROXY_PORT, protocol="TCP"
+          )
+      ],
+      resources=client.V1ResourceRequirements(
+          limits={"cpu": "16", "memory": "100G"}
+      ),
+  )
+  _apply_container_kwargs(proxy_container, proxy_container_kwargs)
+  return proxy_container
+
+
 class PathwaysJobSet:
   """JobSet configuration generator for Pathways."""
 
@@ -128,6 +407,9 @@ class PathwaysJobSet:
       pathways_proxy_image: str = DEFAULT_PATHWAYS_PROXY_IMAGE,
       head_pod_spec_kwargs: Mapping[str, Any] | None = None,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      rm_container_kwargs: Mapping[str, Any] | None = None,
+      proxy_container_kwargs: Mapping[str, Any] | None = None,
+      worker_container_kwargs: Mapping[str, Any] | None = None,
   ):
     """Initializes the instance.
 
@@ -154,11 +436,36 @@ class PathwaysJobSet:
       pathways_proxy_image: Base Docker image for Proxy container.
       head_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the head pod (e.g., `node_selector`,
-        `priority_class_name`, `host_network`, `dns_policy`).
+        `priority_class_name`, `host_network`, `dns_policy`). `volumes` are
+        merged with the default volumes by name; other fields replace the
+        defaults.
       worker_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the worker pods (e.g., `priority_class_name`,
-        `host_network`, `dns_policy`).
+        `host_network`, `dns_policy`, `volumes`). `volumes` are merged with the
+        default volumes by name, so the default `shared-tmp` volume is kept
+        unless a volume with the same name replaces it; other fields replace the
+        defaults.
+      rm_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-rm` container. `args` and `volume_mounts` are appended to the
+        defaults. `env` maps environment variable names to values (strings or
+        `client.V1EnvVarSource`s), which replace the default variables with the
+        same name or are added. Other fields (e.g., `resources`) replace the
+        defaults, with a warning if the container sets them by default. `name`
+        and `image` cannot be set.
+      proxy_container_kwargs: Same as `rm_container_kwargs`, for the
+        `pathways-proxy` container. Not allowed with `shared_pathways_service`,
+        which runs no proxy.
+      worker_container_kwargs: Same as `rm_container_kwargs`, for the
+        `pathways-worker` container.
+
+    Raises:
+      ValueError: An argument is invalid.
     """
+    if shared_pathways_service and proxy_container_kwargs:
+      raise ValueError(
+          "proxy_container_kwargs cannot be used with"
+          " shared_pathways_service=True, which runs no proxy."
+      )
     self._shared_pathways_service = shared_pathways_service
     self._pathways_rm_and_worker_image = pathways_rm_and_worker_image
     self._pathways_proxy_image = pathways_proxy_image
@@ -207,6 +514,8 @@ class PathwaysJobSet:
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         pathways_proxy_image=pathways_proxy_image,
         head_pod_spec_kwargs=head_pod_spec_kwargs,
+        rm_container_kwargs=rm_container_kwargs,
+        proxy_container_kwargs=proxy_container_kwargs,
     )
 
     worker_kwargs = (
@@ -228,6 +537,7 @@ class PathwaysJobSet:
         max_slice_restarts=max_slice_restarts,
         pathways_rm_and_worker_image=pathways_rm_and_worker_image,
         worker_pod_spec_kwargs=worker_kwargs,
+        worker_container_kwargs=worker_container_kwargs,
     )
 
     self._success_policy = None
@@ -259,6 +569,8 @@ class PathwaysJobSet:
       pathways_rm_and_worker_image: str,
       pathways_proxy_image: str,
       head_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      rm_container_kwargs: Mapping[str, Any] | None = None,
+      proxy_container_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the head job template for the JobSet.
 
@@ -274,119 +586,42 @@ class PathwaysJobSet:
       pathways_proxy_image: Base Docker image for Proxy container.
       head_pod_spec_kwargs: Optional keyword arguments passed to
         `client.V1PodSpec` for the head pod.
+      rm_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-rm` container; see `__init__`.
+      proxy_container_kwargs: Optional `client.V1Container` fields for the
+        `pathways-proxy` container; see `__init__`.
 
     Returns:
       The head job template.
     """
-    rm_image = _format_image(pathways_rm_and_worker_image, image_tag)
-    proxy_image = _format_image(pathways_proxy_image, image_tag)
-
-    rm_args = [
-        f"--server_port={PATHWAYS_RM_PORT}",
-        f"--gcs_scratch_location={pathways_dir}",
-        "--node_type=resource_manager",
-        f"--instance_count={num_slices}",
-        f"--instance_type={instance_type}",
+    containers = [
+        _build_rm_container(
+            pathways_dir=pathways_dir,
+            num_slices=num_slices,
+            instance_type=instance_type,
+            rm_image=_format_image(pathways_rm_and_worker_image, image_tag),
+            rm_container_kwargs=rm_container_kwargs,
+        )
     ]
-    rm_env = [
-        client.V1EnvVar(
-            name="REPLICATED_JOB_NAME",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path="metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']"
-                )
-            ),
-        ),
-        client.V1EnvVar(
-            name="JOBSET_NAME",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path=(
-                        "metadata.annotations['jobset.sigs.k8s.io/jobset-name']"
-                    )
-                )
-            ),
-        ),
-        client.V1EnvVar(
-            name="HOST_ADDRESS",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path=(
-                        "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                    )
-                )
-            ),
-        ),
-        client.V1EnvVar(name="TPU_SKIP_MDS_QUERY", value="true"),
-    ]
-    rm_container = client.V1Container(
-        name="pathways-rm",
-        image=rm_image,
-        image_pull_policy="Always",
-        args=rm_args,
-        env=rm_env,
-        ports=[
-            client.V1ContainerPort(
-                container_port=PATHWAYS_RM_PORT, protocol="TCP"
-            ),
-            client.V1ContainerPort(container_port=29002, protocol="TCP"),
-        ],
-        resources=client.V1ResourceRequirements(
-            limits={"cpu": "8", "memory": "32G"}
-        ),
-    )
-
-    proxy_args = [
-        f"--server_port={PATHWAYS_PROXY_PORT}",
-        f"--resource_manager_address=$(PATHWAYS_HEAD):{PATHWAYS_RM_PORT}",
-        f"--gcs_scratch_location={pathways_dir}",
-    ]
-    if elastic_slices > 0:
-      proxy_args.append(f"--num_elastic_slices={elastic_slices}")
-
-    proxy_env = [
-        client.V1EnvVar(
-            name="PATHWAYS_HEAD",
-            value_from=client.V1EnvVarSource(
-                field_ref=client.V1ObjectFieldSelector(
-                    field_path=(
-                        "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                    )
-                )
-            ),
-        ),
-        client.V1EnvVar(
-            name="IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS",
-            value="true",
-        ),
-    ]
-    proxy_container = client.V1Container(
-        name="pathways-proxy",
-        image=proxy_image,
-        image_pull_policy="Always",
-        args=proxy_args,
-        env=proxy_env,
-        ports=[
-            client.V1ContainerPort(
-                container_port=PATHWAYS_PROXY_PORT, protocol="TCP"
-            )
-        ],
-        resources=client.V1ResourceRequirements(
-            limits={"cpu": "16", "memory": "100G"}
-        ),
-    )
-
-    containers = [rm_container]
     if not shared_pathways_service:
-      containers.append(proxy_container)
+      containers.append(
+          _build_proxy_container(
+              pathways_dir=pathways_dir,
+              elastic_slices=elastic_slices,
+              proxy_image=_format_image(pathways_proxy_image, image_tag),
+              proxy_container_kwargs=proxy_container_kwargs,
+          )
+      )
 
-    pod_spec_kwargs: dict[str, Any] = {
-        "containers": containers,
-        "restart_policy": "Never",
-        "node_selector": {GKE_NODEPOOL_KEY: "cpu-np"},
-    }
-    if head_pod_spec_kwargs:
-      pod_spec_kwargs.update(head_pod_spec_kwargs)
+    pod_spec_kwargs = _merge_pod_spec_kwargs(
+        {
+            "containers": containers,
+            "restart_policy": "Never",
+            "node_selector": {GKE_NODEPOOL_KEY: "cpu-np"},
+        },
+        head_pod_spec_kwargs,
+        PATHWAYS_HEAD_JOB_NAME,
+    )
 
     head_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
@@ -422,6 +657,7 @@ class PathwaysJobSet:
       max_slice_restarts: int,
       pathways_rm_and_worker_image: str,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      worker_container_kwargs: Mapping[str, Any] | None = None,
   ) -> client.V1JobTemplateSpec:
     """Builds the worker job template for the JobSet."""
     worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
@@ -513,6 +749,7 @@ class PathwaysJobSet:
             limits={"google.com/tpu": str(chips_per_vm)}
         ),
     )
+    _apply_container_kwargs(worker_container, worker_container_kwargs)
 
     node_selector = {
         "cloud.google.com/gke-tpu-accelerator": gke_accel_type,
@@ -521,21 +758,23 @@ class PathwaysJobSet:
 
     backoff_limit = num_vms * max_slice_restarts
 
-    pod_spec_kwargs: dict[str, Any] = {
-        "containers": [worker_container],
-        "node_selector": node_selector,
-        "volumes": [
-            client.V1Volume(
-                name="shared-tmp",
-                host_path=client.V1HostPathVolumeSource(
-                    path="/tmp", type="DirectoryOrCreate"
-                ),
-            )
-        ],
-        "restart_policy": "OnFailure",
-    }
-    if worker_pod_spec_kwargs:
-      pod_spec_kwargs.update(worker_pod_spec_kwargs)
+    pod_spec_kwargs = _merge_pod_spec_kwargs(
+        {
+            "containers": [worker_container],
+            "node_selector": node_selector,
+            "volumes": [
+                client.V1Volume(
+                    name="shared-tmp",
+                    host_path=client.V1HostPathVolumeSource(
+                        path="/tmp", type="DirectoryOrCreate"
+                    ),
+                )
+            ],
+            "restart_policy": "OnFailure",
+        },
+        worker_pod_spec_kwargs,
+        PATHWAYS_WORKER_JOB_NAME,
+    )
 
     worker_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
 
@@ -617,8 +856,10 @@ class PathwaysJobSet:
       command: Command to execute in the container (string or sequence of
         strings).
       name: Container name for the user workload (default: 'user-workload').
-      **container_kwargs: Optional additional keyword arguments passed to
-        `client.V1Container` (e.g., `env`, `resources`, `volume_mounts`).
+      **container_kwargs: Optional `client.V1Container` fields (e.g., `env`,
+        `resources`, `volume_mounts`), merged like `rm_container_kwargs` of
+        `__init__`. `env` maps names to values, which replace the default JAX
+        environment variables with the same name or are added.
 
     Returns:
       The PathwaysJobSet instance for chaining.
@@ -632,32 +873,14 @@ class PathwaysJobSet:
         "JAX_BACKEND_TARGET": f"grpc://localhost:{PATHWAYS_PROXY_PORT}",
         "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS": "true",
     }
-    user_env = container_kwargs.pop("env", None)
-    if user_env:
-      for k, v in user_env.items():
-        if k in default_env:
-          _logger.debug(
-              "Overriding default environment variable %s=%s with %s",
-              k,
-              default_env[k],
-              v,
-          )
-        default_env[k] = str(v)
-
-    user_env_list = [
-        client.V1EnvVar(name=k, value=v) for k, v in default_env.items()
-    ]
-
-    container_spec_kwargs: dict[str, Any] = {
-        "name": name,
-        "image": image,
-        "image_pull_policy": "Always",
-        "command": cmd,
-        "env": user_env_list,
-    }
-    container_spec_kwargs.update(container_kwargs)
-
-    user_container = client.V1Container(**container_spec_kwargs)
+    user_container = client.V1Container(
+        name=name,
+        image=image,
+        image_pull_policy="Always",
+        command=cmd,
+        env=[client.V1EnvVar(name=k, value=v) for k, v in default_env.items()],
+    )
+    _apply_container_kwargs(user_container, container_kwargs)
 
     init_containers = list(pod_spec.init_containers or [])
     containers = []
@@ -684,8 +907,38 @@ class PathwaysJobSet:
       image: str,
       shm_mount_path: str = "/tmp/shared-memory",
       shm_size_limit: str | None = None,
+      **container_kwargs: Any,
   ) -> "PathwaysJobSet":
-    """Adds colocated python sidecar to the worker pods."""
+    """Adds colocated python sidecar to the worker pods.
+
+    The sidecar runs as a native sidecar (an init container with
+    `restartPolicy: Always`), so Kubernetes starts it before `pathways-worker`,
+    which connects to it during placement initialization, and stops it when
+    `pathways-worker` exits. The sidecar and the `pathways-worker` container
+    share a memory-backed volume mounted at `shm_mount_path`, and
+    `pathways-worker` is started with
+    `--cloud_pathways_sidecar_shm_directory=<shm_mount_path>` so that large
+    tensors are transferred through shared host memory.
+
+    Args:
+      image: Docker image for the colocated python sidecar.
+      shm_mount_path: Mount path of the shared memory volume in both the sidecar
+        and the `pathways-worker` container.
+      shm_size_limit: Optional size limit of the shared memory volume (e.g.,
+        "16Gi"). If `None`, no `sizeLimit` is set: the memory-backed volume
+        can grow up to the pod's memory limit (or the node's allocatable
+        memory if the pod has no limit), and data written to it counts toward
+        the pod's memory usage.
+      **container_kwargs: Optional `client.V1Container` fields for the sidecar
+        (e.g., `env`, `resources`, `volume_mounts`), merged like
+        `rm_container_kwargs` of `__init__`. `env` maps names to values, which
+        replace the default sidecar environment variables with the same name or
+        are added. `volume_mounts` are appended to the default `shared-tmp` and
+        shared memory mounts.
+
+    Returns:
+      The PathwaysJobSet instance for chaining.
+    """
     pod_spec = self._worker_job_template.spec.template.spec
 
     # Add shared memory volume if not exists.
@@ -723,14 +976,29 @@ class PathwaysJobSet:
             ),
         ],
     )
+    _apply_container_kwargs(colocated_container, container_kwargs)
+    # Run the sidecar as a native sidecar so that it is started before, and
+    # stopped after, pathways-worker.
+    colocated_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
-    containers = pod_spec.containers or []
-    containers.append(colocated_container)
-    pod_spec.containers = containers
+    init_containers = list(pod_spec.init_containers or [])
+    init_containers.append(colocated_container)
+    pod_spec.init_containers = init_containers
 
-    # Add volume mount to pathways-worker.
+    # Add volume mount and shared memory flag to pathways-worker.
     for container in pod_spec.containers:
       if container.name == "pathways-worker":
+        # The Pathways worker only enables shared memory transfers to the
+        # sidecar when this flag is set.
+        args = container.args or []
+        if not any(
+            a.startswith("--cloud_pathways_sidecar_shm_directory=")
+            for a in args
+        ):
+          args.append(
+              f"--cloud_pathways_sidecar_shm_directory={shm_mount_path}"
+          )
+        container.args = args
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(
             client.V1VolumeMount(
@@ -739,14 +1007,14 @@ class PathwaysJobSet:
         )
         container.volume_mounts = volume_mounts
         # Add env var for shm dir.
-        env = container.env or []
-        env.append(
+        worker_env = container.env or []
+        worker_env.append(
             client.V1EnvVar(
                 name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
                 value=shm_mount_path,
             )
         )
-        container.env = env
+        container.env = worker_env
         break
 
     return self
@@ -757,15 +1025,19 @@ class PathwaysJobSet:
       mount_path: str,
       bucket: str,
       read_only: bool = False,
+      mount_options: str = "implicit-dirs",
   ) -> "PathwaysJobSet":
     """Adds GCSFuse mount to specified containers."""
     bucket_hash = int(hashlib.md5(bucket.encode()).hexdigest(), 16) % (10**8)
     volume_name = f"gcsfuse-{bucket_hash}"
+    volume_attributes = {"bucketName": bucket}
+    if mount_options:
+      volume_attributes["mountOptions"] = mount_options
     volume = client.V1Volume(
         name=volume_name,
         csi=client.V1CSIVolumeSource(
             driver="gcsfuse.csi.storage.gke.io",
-            volume_attributes={"bucketName": bucket},
+            volume_attributes=volume_attributes,
         ),
     )
     volume_mount = client.V1VolumeMount(
@@ -791,6 +1063,76 @@ class PathwaysJobSet:
         volume_mounts = container.volume_mounts or []
         volume_mounts.append(volume_mount)
         container.volume_mounts = volume_mounts
+
+    return self
+
+  def with_custom_libtpu(
+      self,
+      libtpu_path: str,
+      containers: str | Sequence[str] = "all",
+      mount_host_dir: bool = False,
+  ) -> "PathwaysJobSet":
+    """Overrides `TPU_LIBRARY_PATH` in the selected Pathways containers.
+
+    Args:
+      libtpu_path: Absolute container path to `libtpu.so`.
+      containers: Target container selector (e.g. `"all"` or `"worker"`).
+      mount_host_dir: If True, mounts the parent directory of `libtpu_path` from
+        the host node into matching containers.
+
+    Returns:
+      Self for method chaining.
+
+    Raises:
+      ValueError: If `libtpu_path` is not a valid absolute file path or has no
+        parent subdirectory when `mount_host_dir=True`.
+    """
+    stripped = libtpu_path.strip()
+    if not stripped.startswith("/") or stripped.endswith("/"):
+      raise ValueError(
+          "libtpu_path must be an absolute container file path (got"
+          f" {libtpu_path!r})."
+      )
+    path = posixpath.normpath(stripped)
+    parent_dir = posixpath.dirname(path)
+    if mount_host_dir and parent_dir == "/":
+      raise ValueError(
+          f"mount_host_dir=True requires a subdirectory (got {libtpu_path!r})."
+      )
+
+    for job_template in (self._head_job_template, self._worker_job_template):
+      pod_spec = job_template.spec.template.spec
+      all_containers = (pod_spec.containers or []) + (
+          pod_spec.init_containers or []
+      )
+      matching = self._filter_matching_containers(containers, all_containers)
+      if not matching:
+        continue
+
+      if mount_host_dir:
+        self._add_volume_to_pod_spec(
+            pod_spec,
+            client.V1Volume(
+                name=CUSTOM_LIBTPU_VOLUME_NAME,
+                host_path=client.V1HostPathVolumeSource(
+                    path=parent_dir, type="DirectoryOrCreate"
+                ),
+            ),
+        )
+      for container in matching:
+        if mount_host_dir:
+          volume_mounts = container.volume_mounts or []
+          volume_mounts.append(
+              client.V1VolumeMount(
+                  name=CUSTOM_LIBTPU_VOLUME_NAME,
+                  mount_path=parent_dir,
+                  read_only=True,
+              )
+          )
+          container.volume_mounts = volume_mounts
+        env = container.env or []
+        env.append(client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path))
+        container.env = env
 
     return self
 
