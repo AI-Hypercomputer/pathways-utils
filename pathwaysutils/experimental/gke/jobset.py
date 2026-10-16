@@ -847,6 +847,7 @@ class PathwaysJobSet:
       image: str,
       command: Sequence[str] | str,
       name: str = "user-workload",
+      shm_size_limit: str | None = None,
       **container_kwargs: Any,
   ) -> "PathwaysJobSet":
     """Adds a user workload container to the head pod.
@@ -856,6 +857,9 @@ class PathwaysJobSet:
       command: Command to execute in the container (string or sequence of
         strings).
       name: Container name for the user workload (default: 'user-workload').
+      shm_size_limit: Optional size limit for the memory-backed `/dev/shm`
+        volume mounted on the user workload container (defaults to None, which
+        uses the Kubernetes default of 50% of node RAM).
       **container_kwargs: Optional `client.V1Container` fields (e.g., `env`,
         `resources`, `volume_mounts`), merged like `rm_container_kwargs` of
         `__init__`. `env` maps names to values, which replace the default JAX
@@ -881,6 +885,27 @@ class PathwaysJobSet:
         env=[client.V1EnvVar(name=k, value=v) for k, v in default_env.items()],
     )
     _apply_container_kwargs(user_container, container_kwargs)
+
+    volume_mounts = list(user_container.volume_mounts or [])
+    if not any(
+        getattr(vm, "mount_path", None) == "/dev/shm"
+        or (isinstance(vm, Mapping) and vm.get("mountPath") == "/dev/shm")
+        for vm in volume_mounts
+    ):
+      shm_volume_name = "dshm"
+      self._add_volume_to_pod_spec(
+          pod_spec,
+          client.V1Volume(
+              name=shm_volume_name,
+              empty_dir=client.V1EmptyDirVolumeSource(
+                  medium="Memory", size_limit=shm_size_limit
+              ),
+          ),
+      )
+      volume_mounts.append(
+          client.V1VolumeMount(name=shm_volume_name, mount_path="/dev/shm")
+      )
+      user_container.volume_mounts = volume_mounts
 
     init_containers = list(pod_spec.init_containers or [])
     containers = []
