@@ -38,10 +38,6 @@ dev = [
     "pylint>=2.6.0",
     "pyink",
 ]
-extras = [
-    "flax",
-    "grain",
-]
 gke = [
     "kubernetes",
     "pyyaml",
@@ -60,11 +56,6 @@ test = [
     "portpicker",
     "pyyaml",
     "pytest",
-]
-
-[tool.flit.sdist]
-exclude = [
-    "pathwaysutils/extras",
 ]
 
 [tool.pyink]

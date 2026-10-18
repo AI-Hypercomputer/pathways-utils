@@ -24,10 +24,10 @@ import jax
 from jax import numpy as jnp
 import orbax.checkpoint as ocp
 from pathwaysutils.elastic import manager
-from pathwaysutils.extras.simple_model import compile as compile_lib
-from pathwaysutils.extras.simple_model import config as config_lib
-from pathwaysutils.extras.simple_model import data as data_lib
-from pathwaysutils.extras.simple_model import model as model_lib
+from extras.simple_model import compile as compile_lib
+from extras.simple_model import config as config_lib
+from extras.simple_model import data as data_lib
+from extras.simple_model import model as model_lib
 
 _logger = logging.getLogger(__name__)
 
