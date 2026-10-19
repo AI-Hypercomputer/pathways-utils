@@ -1003,21 +1003,25 @@ class PathwaysJobSet:
           )
         container.args = args
         volume_mounts = container.volume_mounts or []
-        volume_mounts.append(
-            client.V1VolumeMount(
-                name=shm_volume_name, mount_path=shm_mount_path
-            )
-        )
-        container.volume_mounts = volume_mounts
+        if not any(vm.name == shm_volume_name for vm in volume_mounts):
+          volume_mounts.append(
+              client.V1VolumeMount(
+                  name=shm_volume_name, mount_path=shm_mount_path
+              )
+          )
+          container.volume_mounts = volume_mounts
         # Add env var for shm dir.
         worker_env = container.env or []
-        worker_env.append(
-            client.V1EnvVar(
-                name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
-                value=shm_mount_path,
-            )
-        )
-        container.env = worker_env
+        if not any(
+            e.name == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY" for e in worker_env
+        ):
+          worker_env.append(
+              client.V1EnvVar(
+                  name="CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY",
+                  value=shm_mount_path,
+              )
+          )
+          container.env = worker_env
         break
 
     return self

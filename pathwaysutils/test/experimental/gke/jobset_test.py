@@ -716,6 +716,33 @@ class PathwaysJobSetTest(parameterized.TestCase):
     sidecar = helper.init_containers["pathways-worker"]["cpp-sidecar"]
     self.assertEqual(sidecar["image"], "gcr.io/my-project/cpp-sidecar:custom")
 
+  def test_add_multiple_external_sidecars_no_duplicate_worker_mount(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:custom",
+    ).add_external_sidecar(
+        image="gcr.io/my-project/cpp-sidecar:custom",
+        name="cpp",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn(
+        "colocated-python-sidecar", helper.init_containers["pathways-worker"]
+    )
+    self.assertIn("cpp-sidecar", helper.init_containers["pathways-worker"])
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    shm_mounts = [
+        m for m in worker["volumeMounts"] if m["name"] == "shared-memory"
+    ]
+    self.assertLen(shm_mounts, 1)
+    shm_envs = [
+        e
+        for e in worker["env"]
+        if e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
+    ]
+    self.assertLen(shm_envs, 1)
+
   # Reference similar GKE / JobSet custom object unit test suites:
   # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py
   # - Upstream Kubernetes SIGs JobSet unit tests: https://github.com/kubernetes-sigs/jobset/blob/main/pkg/controllers/jobset_controller_test.go
