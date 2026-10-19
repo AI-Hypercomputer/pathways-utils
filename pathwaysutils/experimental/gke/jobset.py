@@ -902,14 +902,15 @@ class PathwaysJobSet:
 
     return self
 
-  def add_colocated_python(
+  def add_external_sidecar(
       self,
       image: str,
       shm_mount_path: str = "/tmp/shared-memory",
       shm_size_limit: str | None = None,
+      name: str = "external",
       **container_kwargs: Any,
   ) -> "PathwaysJobSet":
-    """Adds colocated python sidecar to the worker pods.
+    """Adds an external sidecar to the worker pods.
 
     The sidecar runs as a native sidecar (an init container with
     `restartPolicy: Always`), so Kubernetes starts it before `pathways-worker`,
@@ -921,14 +922,16 @@ class PathwaysJobSet:
     tensors are transferred through shared host memory.
 
     Args:
-      image: Docker image for the colocated python sidecar.
+      image: Docker image for the external sidecar.
       shm_mount_path: Mount path of the shared memory volume in both the sidecar
         and the `pathways-worker` container.
       shm_size_limit: Optional size limit of the shared memory volume (e.g.,
-        "16Gi"). If `None`, no `sizeLimit` is set: the memory-backed volume
-        can grow up to the pod's memory limit (or the node's allocatable
-        memory if the pod has no limit), and data written to it counts toward
-        the pod's memory usage.
+        "16Gi"). If `None`, no `sizeLimit` is set: the memory-backed volume can
+        grow up to the pod's memory limit (or the node's allocatable memory if
+        the pod has no limit), and data written to it counts toward the pod's
+        memory usage.
+      name: Name prefix for the sidecar container, formatted as `<name>-sidecar`
+        (default: 'external').
       **container_kwargs: Optional `client.V1Container` fields for the sidecar
         (e.g., `env`, `resources`, `volume_mounts`), merged like
         `rm_container_kwargs` of `__init__`. `env` maps names to values, which
@@ -956,9 +959,9 @@ class PathwaysJobSet:
       )
       pod_spec.volumes = volumes
 
-    # Add colocated python container.
-    colocated_container = client.V1Container(
-        name="colocated-python-sidecar",
+    # Add external sidecar container.
+    sidecar_container = client.V1Container(
+        name=f"{name}-sidecar",
         image=image,
         image_pull_policy="Always",
         env=[
@@ -976,13 +979,13 @@ class PathwaysJobSet:
             ),
         ],
     )
-    _apply_container_kwargs(colocated_container, container_kwargs)
+    _apply_container_kwargs(sidecar_container, container_kwargs)
     # Run the sidecar as a native sidecar so that it is started before, and
     # stopped after, pathways-worker.
-    colocated_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
+    sidecar_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
     init_containers = list(pod_spec.init_containers or [])
-    init_containers.append(colocated_container)
+    init_containers.append(sidecar_container)
     pod_spec.init_containers = init_containers
 
     # Add volume mount and shared memory flag to pathways-worker.
@@ -1018,6 +1021,36 @@ class PathwaysJobSet:
         break
 
     return self
+
+  def add_colocated_python(
+      self,
+      image: str,
+      shm_mount_path: str = "/tmp/shared-memory",
+      shm_size_limit: str | None = None,
+      **container_kwargs: Any,
+  ) -> "PathwaysJobSet":
+    """Adds colocated python sidecar to the worker pods.
+
+    Args:
+      image: Docker image for the colocated python sidecar.
+      shm_mount_path: Mount path of the shared memory volume in both the sidecar
+        and the `pathways-worker` container.
+      shm_size_limit: Optional size limit of the shared memory volume (e.g.,
+        "16Gi"). If `None`, no `sizeLimit` is set.
+      **container_kwargs: Optional `client.V1Container` fields for the sidecar
+        (e.g., `env`, `resources`, `volume_mounts`), forwarded to
+        `add_external_sidecar`.
+
+    Returns:
+      The PathwaysJobSet instance for chaining.
+    """
+    return self.add_external_sidecar(
+        image=image,
+        shm_mount_path=shm_mount_path,
+        shm_size_limit=shm_size_limit,
+        name="colocated-python",
+        **container_kwargs,
+    )
 
   def add_gcsfuse(
       self,
