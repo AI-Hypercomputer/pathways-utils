@@ -102,7 +102,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_options=isc_pathways.ProxyOptions(use_insecure_credentials=False),
     )
 
-    mock_deploy_gke_yaml.assert_called_once()
+    mock_deploy_gke_yaml.assert_called_once_with(mock.ANY, action="create")
     substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
     self.assertIn("name: test-proxy", substituted_yaml)
     self.assertIn(
@@ -137,7 +137,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_options=isc_pathways.ProxyOptions(use_insecure_credentials=False),
     )
 
-    mock_deploy_gke_yaml.assert_called_once()
+    mock_deploy_gke_yaml.assert_called_once_with(mock.ANY, action="create")
     substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
     self.assertIn(
         'image: "gcr.io/image:latest\\"\\n- command: [pwn]\\\\\\n"',
@@ -165,7 +165,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_options=isc_pathways.ProxyOptions(use_insecure_credentials=True),
     )
 
-    mock_deploy_gke_yaml.assert_called_once()
+    mock_deploy_gke_yaml.assert_called_once_with(mock.ANY, action="create")
     substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
     self.assertIn("env:", substituted_yaml)
     self.assertIn(
@@ -193,7 +193,7 @@ class ISCPathwaysTest(parameterized.TestCase):
             xla_flags=["--xla_flag1", "--xla_flag2"]
         ),
     )
-    mock_deploy_gke_yaml.assert_called_once()
+    mock_deploy_gke_yaml.assert_called_once_with(mock.ANY, action="create")
     substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
     self.assertIn("- --xla_flag1", substituted_yaml)
     self.assertIn("- --xla_flag2", substituted_yaml)
@@ -216,7 +216,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_server_image="test-image:latest",
         proxy_options=isc_pathways.ProxyOptions(sidecar=True),
     )
-    mock_deploy_gke_yaml.assert_called_once()
+    mock_deploy_gke_yaml.assert_called_once_with(mock.ANY, action="create")
     substituted_yaml = mock_deploy_gke_yaml.call_args[0][0]
     self.assertIn("- --sidecar_name=external", substituted_yaml)
 
@@ -1161,6 +1161,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_job_name="test-proxy",
         proxy_server_image="test-image",
     )
+    manager._proxy_deployed = True
     mock_delete = self.enter_context(
         mock.patch.object(
             isc_pathways.gke_utils, "delete_gke_resource", autospec=True
@@ -1169,6 +1170,96 @@ class ISCPathwaysTest(parameterized.TestCase):
     manager._cleanup()
     mock_delete.assert_called_once_with("job", "test-proxy")
     # Second cleanup should be a no-op
+    manager._cleanup()
+    mock_delete.assert_called_once_with("job", "test-proxy")
+
+  def test_enter_deploy_failure_does_not_delete_existing_proxy_job(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="existing-proxy",
+        proxy_server_image="test-image",
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways,
+            "_deploy_pathways_proxy_server",
+            side_effect=subprocess.CalledProcessError(
+                returncode=1,
+                cmd=["kubectl", "create"],
+                stderr=(
+                    "Error from server (AlreadyExists): jobs.batch"
+                    ' "existing-proxy" already exists'
+                ),
+            ),
+        )
+    )
+    mock_delete = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+
+    with self.assertRaises(subprocess.CalledProcessError):
+      manager.__enter__()
+
+    mock_delete.assert_not_called()
+
+  def test_enter_deploy_success_cleanup_deletes_proxy_job(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways, "_deploy_pathways_proxy_server", autospec=True
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_log_link", return_value="http://log"
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "wait_for_pod", return_value="test-proxy-pod"
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "start_port_forwarding",
+            return_value=(12345, mock.MagicMock()),
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "wait_for_port_forwarding", autospec=True
+        )
+    )
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.pathwaysutils, "initialize", autospec=True
+        )
+    )
+    mock_delete = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+
+    manager.__enter__()
+    self.assertTrue(manager._proxy_deployed)
     manager._cleanup()
     mock_delete.assert_called_once_with("job", "test-proxy")
 
@@ -1325,6 +1416,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         proxy_job_name="test-proxy",
         proxy_server_image="test-image",
     )
+    manager._proxy_deployed = True
     mock_pf_proc = mock.create_autospec(subprocess.Popen, instance=True)
     mock_log_proc = mock.create_autospec(subprocess.Popen, instance=True)
     manager._port_forward_process = mock_pf_proc
