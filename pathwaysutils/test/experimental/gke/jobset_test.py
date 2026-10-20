@@ -675,20 +675,73 @@ class PathwaysJobSetTest(parameterized.TestCase):
         ],
     )
 
-  @parameterized.named_parameters(
-      ("name", {"name": "my-sidecar"}, "Cannot set 'name'"),
-      (
-          "unknown_field",
-          {"not_a_field": True},
-          "Unknown client.V1Container fields for colocated-python-sidecar",
-      ),
-  )
-  def test_add_colocated_python_invalid_container_kwargs(self, kwargs, error):
+  def test_add_colocated_python_unknown_field(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
-    with self.assertRaisesRegex(ValueError, error):
+    with self.assertRaisesRegex(
+        ValueError,
+        "Unknown client.V1Container fields for colocated-python-sidecar",
+    ):
       pw_jobset.add_colocated_python(
-          image="gcr.io/my-project/colocated-python:latest", **kwargs
+          image="gcr.io/my-project/colocated-python:latest",
+          not_a_field=True,
       )
+
+  def test_add_external_sidecar_default_name(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_external_sidecar(
+        image="gcr.io/my-project/external-sidecar:custom",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("external-sidecar", helper.init_containers["pathways-worker"])
+    sidecar = helper.init_containers["pathways-worker"]["external-sidecar"]
+    self.assertEqual(
+        sidecar["image"], "gcr.io/my-project/external-sidecar:custom"
+    )
+
+  def test_add_external_sidecar_custom_name(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_external_sidecar(
+        image="gcr.io/my-project/cpp-sidecar:custom",
+        name="cpp",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn("cpp-sidecar", helper.init_containers["pathways-worker"])
+    self.assertNotIn(
+        "external-sidecar", helper.init_containers["pathways-worker"]
+    )
+    sidecar = helper.init_containers["pathways-worker"]["cpp-sidecar"]
+    self.assertEqual(sidecar["image"], "gcr.io/my-project/cpp-sidecar:custom")
+
+  def test_add_multiple_external_sidecars_no_duplicate_worker_mount(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:custom",
+    ).add_external_sidecar(
+        image="gcr.io/my-project/cpp-sidecar:custom",
+        name="cpp",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+
+    self.assertIn(
+        "colocated-python-sidecar", helper.init_containers["pathways-worker"]
+    )
+    self.assertIn("cpp-sidecar", helper.init_containers["pathways-worker"])
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    shm_mounts = [
+        m for m in worker["volumeMounts"] if m["name"] == "shared-memory"
+    ]
+    self.assertLen(shm_mounts, 1)
+    shm_envs = [
+        e
+        for e in worker["env"]
+        if e["name"] == "CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY"
+    ]
+    self.assertLen(shm_envs, 1)
 
   # Reference similar GKE / JobSet custom object unit test suites:
   # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py

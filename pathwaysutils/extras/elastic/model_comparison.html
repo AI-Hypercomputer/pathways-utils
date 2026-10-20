@@ -1,0 +1,2052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recovery Mode Simulation &amp; Comparison</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes pulse-soft {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .animate-pulse-soft {
+      animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      height: 150px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .slice-card {
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.4);
+      border-radius: 0.5rem;
+      padding: 0.625rem;
+      transition: all 0.3s ease;
+    }
+    .slice-card.active {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.06);
+    }
+    .slice-card.inactive {
+      border-color: var(--border);
+      background: rgba(24, 24, 27, 0.3);
+      opacity: 0.7;
+    }
+    .slice-card.disrupted {
+      border-color: rgba(239, 68, 68, 0.6);
+      background: rgba(239, 68, 68, 0.12);
+      animation: pulse-soft 1.5s infinite;
+    }
+
+    /* Precision fixed sizing to eliminate movement / jitter during simulation */
+    #headerClusterStatusPill {
+      width: 270px !important;
+      min-width: 270px !important;
+      max-width: 270px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #headerClusterStatusText {
+      display: block;
+      width: 240px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #topoClusterStatusPill {
+      width: 245px !important;
+      min-width: 245px !important;
+      max-width: 245px !important;
+      height: 24px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #topoClusterStatusText {
+      display: block;
+      width: 215px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #simTimePill {
+      width: 110px !important;
+      min-width: 110px !important;
+      max-width: 110px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #simTimeLabel {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    #btnToggleRun {
+      width: 130px !important;
+      min-width: 130px !important;
+      max-width: 130px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnInterruptSlice0, #btnInterruptSlice1 {
+      width: 175px !important;
+      min-width: 175px !important;
+      max-width: 175px !important;
+      height: 28px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnRestoreSlice1 {
+      width: 175px !important;
+      min-width: 175px !important;
+      max-width: 175px !important;
+      height: 28px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+
+    /* Strategy Comparison Cards */
+    .strategy-card {
+      height: 136px !important;
+      min-height: 136px !important;
+      max-height: 136px !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      box-sizing: border-box !important;
+    }
+    .strategy-card-header {
+      height: 24px !important;
+      min-height: 24px !important;
+      max-height: 24px !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+      gap: 0.5rem !important;
+      flex-shrink: 0 !important;
+    }
+    .strategy-card-title {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+      font-size: 0.75rem;
+    }
+    .strategy-state-badge {
+      width: 135px !important;
+      min-width: 135px !important;
+      max-width: 135px !important;
+      height: 20px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .strategy-desc {
+      height: 16px !important;
+      min-height: 16px !important;
+      max-height: 16px !important;
+      line-height: 16px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      flex-shrink: 0 !important;
+      margin-top: 4px !important;
+    }
+    .kpi-lbl {
+      height: 14px !important;
+      line-height: 14px !important;
+      font-size: 9px !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: var(--muted-foreground) !important;
+      font-weight: 600 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    .kpi-val {
+      height: 24px !important;
+      line-height: 24px !important;
+      font-size: 1rem !important;
+      font-weight: 700 !important;
+      font-family: monospace !important;
+      font-variant-numeric: tabular-nums !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      margin-top: 2px !important;
+    }
+
+    /* Workload Slice Cards */
+    .workload-card {
+      height: 56px !important;
+      min-height: 56px !important;
+      max-height: 56px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+    }
+    .workload-badge {
+      width: 115px !important;
+      min-width: 115px !important;
+      max-width: 115px !important;
+      height: 22px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .workload-mapping {
+      height: 16px !important;
+      line-height: 16px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      margin-top: 2px !important;
+    }
+
+    /* Physical Cluster TPU Slice Cards */
+    .tpu-slice-card {
+      height: 72px !important;
+      min-height: 72px !important;
+      max-height: 72px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+    }
+    .tpu-role-badge {
+      width: 105px !important;
+      min-width: 105px !important;
+      max-width: 105px !important;
+      height: 20px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .tpu-footer {
+      height: 18px !important;
+      min-height: 18px !important;
+      max-height: 18px !important;
+      line-height: 18px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      margin-top: 4px !important;
+    }
+
+    /* Chart Legends */
+    #lossChartLegend, #goodputChartLegend {
+      font-family: monospace !important;
+      font-variant-numeric: tabular-nums !important;
+      min-width: 290px !important;
+      text-align: right !important;
+      height: 16px !important;
+      line-height: 16px !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    :root {
+      --background: #090d16;
+      --foreground: #f8fafc;
+      --card: #0f172a;
+      --card-foreground: #f8fafc;
+      --primary: #3b82f6;
+      --primary-foreground: #ffffff;
+      --secondary: #1e293b;
+      --secondary-foreground: #f8fafc;
+      --muted: #1e293b;
+      --muted-foreground: #94a3b8;
+      --accent: #1e293b;
+      --accent-foreground: #f8fafc;
+      --border: #334155;
+    }
+    body {
+      background-color: var(--background) !important;
+      color: var(--foreground) !important;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    }
+    /* Fallback utility classes for proxy viewers (e.g. htmlpreview.github.io) */
+    .bg-\[var\(--background\)\] { background-color: var(--background) !important; }
+    .bg-\[var\(--card\)\] { background-color: var(--card) !important; }
+    .text-\[var\(--foreground\)\] { color: var(--foreground) !important; }
+    .text-\[var\(--muted-foreground\)\] { color: var(--muted-foreground) !important; }
+    .bg-\[var\(--secondary\)\] { background-color: var(--secondary) !important; }
+    .bg-\[var\(--primary\)\] { background-color: var(--primary) !important; }
+    .text-\[var\(--primary-foreground\)\] { color: var(--primary-foreground) !important; }
+    .text-\[var\(--secondary-foreground\)\] { color: var(--secondary-foreground) !important; }
+    .border-\[var\(--border\)\] { border-color: var(--border) !important; }
+    .border-\[var\(--border\)\]\/40 { border-color: rgba(51, 65, 85, 0.4) !important; }
+    .border-\[var\(--border\)\]\/60 { border-color: rgba(51, 65, 85, 0.6) !important; }
+    .bg-\[var\(--secondary\)\]\/40 { background-color: rgba(30, 41, 59, 0.4) !important; }
+    .text-\[9px\] { font-size: 9px !important; line-height: 12px !important; }
+    .text-\[10px\] { font-size: 10px !important; line-height: 14px !important; }
+    .text-\[11px\] { font-size: 11px !important; line-height: 15px !important; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-2.5 md:p-3.5 min-h-screen text-xs">
+  <div class="max-w-7xl mx-auto space-y-2.5">
+
+    <!-- Header Section -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between pb-2 border-b border-[var(--border)] gap-2">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center justify-center px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-mono font-bold text-xs tracking-wide">
+            JAX / Pathways
+          </span>
+          <h1 class="text-base md:text-lg font-bold tracking-tight">Recovery Mode Simulation &amp; Comparison</h1>
+        </div>
+        <p class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+          Real-time simulation comparing McJAX vs Snapshot Replica Resize vs Snapshot Pause Resume recovery from TPU interruptions.
+        </p>
+      </div>
+
+      <!-- Controls & Status Badge -->
+      <div class="flex items-center gap-2 flex-wrap">
+        <div id="headerClusterStatusPill" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--card)] text-xs font-medium">
+          <span id="headerClusterStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+          <span id="headerClusterStatusText">Cluster Healthy (2 Slices)</span>
+        </div>
+        <div id="simTimePill" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--card)] text-xs font-mono font-medium text-[var(--muted-foreground)]">
+          <span id="simTimeLabel">0.0s elapsed</span>
+        </div>
+        <button id="btnToggleRun" class="px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-150 bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer">
+          Start Training
+        </button>
+        <button id="btnScenario" class="px-2.5 py-1.5 rounded-lg font-medium text-xs transition-all duration-150 bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 shadow-sm cursor-pointer">
+          Run Interruption Scenario
+        </button>
+        <button id="btnReset" class="px-2.5 py-1.5 rounded-lg font-medium text-xs transition-all duration-150 bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--accent)] active:scale-95 border border-[var(--border)] cursor-pointer">
+          Reset Demo
+        </button>
+      </div>
+    </header>
+
+    <!-- Simulation Parameters Configuration List -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-2">
+      <div class="flex items-center justify-between pb-1.5 border-b border-[var(--border)]">
+        <div class="flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
+          <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path>
+          </svg>
+          <span>Simulation Parameters</span>
+        </div>
+        <button id="btnResetParams" title="Reset all simulation parameters to defaults" class="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer transition-colors">
+          Reset to Defaults
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1.5 text-[11px]">
+        <!-- Left Column: Timings & Latencies -->
+        <div class="space-y-1.5">
+          <!-- Cold Start Init -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Initial cluster startup and static mesh compilation delay (also reused as McJAX reinitialization latency)">
+            <label for="inputColdStartInit" class="text-[var(--muted-foreground)]">Cold Start Initialization Time:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputColdStartInit" type="number" min="0" max="60" step="0.5" value="3.0"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">s</span>
+            </div>
+          </div>
+
+          <!-- Scale-Down Init -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Post-interrupt 1-slice adaptation delay for Snapshot Replica Resize">
+            <label for="inputPostInterruptInit" class="text-[var(--muted-foreground)]">Scale-Down Initialization Time:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputPostInterruptInit" type="number" min="0" max="60" step="0.5" value="2.0"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">s</span>
+            </div>
+          </div>
+
+          <!-- Scale-Up Init -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Scale-up re-initialization and mesh reconfiguration latency when a replacement slice joins the workload">
+            <label for="inputScaleUpInit" class="text-[var(--muted-foreground)]">Scale-Up Initialization Time:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputScaleUpInit" type="number" min="0" max="60" step="0.5" value="1.0"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">s</span>
+            </div>
+          </div>
+
+          <!-- Interruption Duration for Scenario -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Duration of hardware outage during interruption scenario before slice reconnection">
+            <label for="inputFaultDuration" class="text-[var(--muted-foreground)]">Interruption Duration for Scenario:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputFaultDuration" type="number" min="1" max="120" step="1" value="9.0"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">s</span>
+            </div>
+          </div>
+
+          <!-- Simulation Step Cadence -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Real-time simulation tick cadence in milliseconds (120ms nominal)">
+            <label for="inputStepInterval" class="text-[var(--muted-foreground)]">Simulation Step Cadence:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputStepInterval" type="number" min="20" max="1000" step="10" value="120"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">ms</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Workload & Model Parameters -->
+        <div class="space-y-1.5">
+          <!-- Max Number of Steps -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Target step count to complete training (default 500 steps, 0 for unlimited)">
+            <label for="inputMaxSteps" class="text-[var(--muted-foreground)]">Max Number of Steps:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputMaxSteps" type="number" min="0" max="10000" step="50" value="500"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">st</span>
+            </div>
+          </div>
+
+          <!-- Checkpoint Cadence -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Checkpoint frequency (steps) for McJAX; progress rolls back to floor(step/cadence)*cadence">
+            <label for="inputMcjaxCkpt" class="text-[var(--muted-foreground)]">Checkpoint Interval:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputMcjaxCkpt" type="number" min="10" max="500" step="10" value="50"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">st</span>
+            </div>
+          </div>
+
+          <!-- Degraded Scaling Factor -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Throughput ratio sustained by Snapshot Replica Resize during outage (default 0.50x for (N-1)/N)">
+            <label for="inputDegradedFactor" class="text-[var(--muted-foreground)]">Degraded Scaling Factor:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputDegradedFactor" type="number" min="0" max="1" step="0.05" value="0.50"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">x</span>
+            </div>
+          </div>
+
+          <!-- Base Initial Loss -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Initial training loss at step 0 in L = L0 * exp(-alpha * step)">
+            <label for="inputBaseLoss" class="text-[var(--muted-foreground)]">Initial Base Loss (L₀):</label>
+            <div class="flex items-center gap-1">
+              <input id="inputBaseLoss" type="number" min="1.0" max="20.0" step="0.05" value="6.85"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left"></span>
+            </div>
+          </div>
+
+          <!-- Loss Decay Rate (alpha) -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Exponential loss decay rate alpha in L = L0 * exp(-alpha * step)">
+            <label for="inputLossAlpha" class="text-[var(--muted-foreground)]">Loss Decay Rate (α):</label>
+            <div class="flex items-center gap-1">
+              <input id="inputLossAlpha" type="number" min="0.0001" max="0.01" step="0.0001" value="0.0012"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Real-Time Comparative Metrics Bar -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+      <!-- Strategy C: McJAX -->
+      <div id="cardMcjax" class="strategy-card bg-[var(--card)] border-2 border-amber-500/30 rounded-lg p-2.5 shadow-sm relative overflow-hidden">
+        <div class="strategy-card-header flex items-center justify-between gap-1">
+          <div class="strategy-card-title flex items-center gap-1.5 min-w-0">
+            <span class="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+            <span class="text-xs font-bold text-amber-600 dark:text-amber-400 truncate">McJAX</span>
+          </div>
+          <span id="badgeMcjaxState" class="strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold">DUAL-SLICE</span>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 mt-2 pt-1 border-t border-[var(--border)] text-center">
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">STEP</div>
+            <div id="kpiMcjaxStep" class="kpi-val text-base font-bold font-mono text-amber-500 mt-0.5">0</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">LOSS</div>
+            <div id="kpiMcjaxLoss" class="kpi-val text-base font-bold font-mono mt-0.5">6.850</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">Goodput</div>
+            <div id="kpiMcjaxGoodput" class="kpi-val text-base font-bold font-mono text-amber-500 mt-0.5">0.0%</div>
+          </div>
+        </div>
+        <div id="descMcjaxStatus" class="strategy-desc text-[10px] text-amber-600 font-medium truncate">
+          Active dual-slice execution
+        </div>
+      </div>
+
+      <!-- Strategy A: Snapshot Replica Resize -->
+      <div id="cardResize" class="strategy-card bg-[var(--card)] border-2 border-emerald-500/40 rounded-lg p-2.5 shadow-sm relative overflow-hidden">
+        <div class="strategy-card-header flex items-center justify-between gap-1">
+          <div class="strategy-card-title flex items-center gap-1.5 min-w-0">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+            <span class="text-xs font-bold text-emerald-600 dark:text-emerald-400 truncate">Snapshot Replica Resize</span>
+          </div>
+          <span id="badgeResizeState" class="strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 font-semibold">DUAL-SLICE</span>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 mt-2 pt-1 border-t border-[var(--border)] text-center">
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">STEP</div>
+            <div id="kpiResizeStep" class="kpi-val text-base font-bold font-mono text-emerald-500 mt-0.5">0</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">LOSS</div>
+            <div id="kpiResizeLoss" class="kpi-val text-base font-bold font-mono mt-0.5">6.850</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">Goodput</div>
+            <div id="kpiResizeGoodput" class="kpi-val text-base font-bold font-mono text-emerald-500 mt-0.5">0.0%</div>
+          </div>
+        </div>
+        <div id="descResizeStatus" class="strategy-desc text-[10px] text-emerald-600 font-medium truncate">
+          Active dual-slice execution
+        </div>
+      </div>
+
+      <!-- Strategy B: Snapshot Pause Resume -->
+      <div id="cardPause" class="strategy-card bg-[var(--card)] border-2 border-rose-500/30 rounded-lg p-2.5 shadow-sm relative overflow-hidden">
+        <div class="strategy-card-header flex items-center justify-between gap-1">
+          <div class="strategy-card-title flex items-center gap-1.5 min-w-0">
+            <span class="w-2 h-2 rounded-full bg-rose-500 shrink-0"></span>
+            <span class="text-xs font-bold text-rose-600 dark:text-rose-400 truncate">Snapshot Pause Resume</span>
+          </div>
+          <span id="badgePauseState" class="strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold">DUAL-SLICE</span>
+        </div>
+        <div class="grid grid-cols-3 gap-1.5 mt-2 pt-1 border-t border-[var(--border)] text-center">
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">STEP</div>
+            <div id="kpiPauseStep" class="kpi-val text-base font-bold font-mono text-rose-500 mt-0.5">0</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">LOSS</div>
+            <div id="kpiPauseLoss" class="kpi-val text-base font-bold font-mono mt-0.5">6.850</div>
+          </div>
+          <div>
+            <div class="kpi-lbl text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">Goodput</div>
+            <div id="kpiPauseGoodput" class="kpi-val text-base font-bold font-mono text-rose-500 mt-0.5">0.0%</div>
+          </div>
+        </div>
+        <div id="descPauseStatus" class="strategy-desc text-[10px] text-rose-600 font-medium truncate">
+          Active dual-slice execution
+        </div>
+      </div>
+    </div>
+
+    <!-- Cluster Slice Topology & Simulated Interruption Injector -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-2.5">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 pb-1.5 border-b border-[var(--border)]">
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-xs font-bold tracking-tight">Cluster Slice Topology &amp; Simulated Interruption Injector</h2>
+            <div id="topoClusterStatusPill" class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono">
+              <span id="topoClusterStatusDot" class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+              <span id="topoClusterStatusText" class="text-emerald-400 font-semibold">Cluster Healthy (2 Slices)</span>
+            </div>
+          </div>
+          <p class="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+            Inject interruption on Workload Slice 0 or Workload Slice 1 to test how Snapshot Replica Resize, Snapshot Pause Resume, and McJAX recover when replacement TPU slices are allocated.
+          </p>
+        </div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button id="btnInterruptSlice0" class="px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer">
+            Interrupt Workload Slice 0
+          </button>
+          <button id="btnInterruptSlice1" class="px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer">
+            Interrupt Workload Slice 1
+          </button>
+          <button id="btnRestoreSlice1" disabled class="px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed">
+            Reconnect a slice
+          </button>
+        </div>
+      </div>
+
+      <!-- Logical Workload Slices -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center justify-between">
+          <span>Logical Workload Slices (2-Slice Mesh)</span>
+          <span class="text-[9px] text-[var(--muted-foreground)] font-normal">Active execution mesh</span>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <!-- Workload Slice 0 -->
+          <div id="workloadSlice0Card" class="slice-card workload-card active flex items-center justify-between p-2">
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <span id="workloadSlice0Dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-bold text-[var(--foreground)] truncate">WORKLOAD SLICE 0</div>
+                <div id="workloadSlice0Mapping" class="workload-mapping text-[10px] text-emerald-400 font-mono">Running on TPU Slice 0</div>
+              </div>
+            </div>
+            <span id="workloadSlice0Badge" class="workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Active Slice</span>
+          </div>
+
+          <!-- Workload Slice 1 -->
+          <div id="workloadSlice1Card" class="slice-card workload-card active flex items-center justify-between p-2">
+            <div class="flex items-center gap-2 min-w-0 flex-1">
+              <span id="workloadSlice1Dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-bold text-[var(--foreground)] truncate">WORKLOAD SLICE 1</div>
+                <div id="workloadSlice1Mapping" class="workload-mapping text-[10px] text-emerald-400 font-mono">Running on TPU Slice 1</div>
+              </div>
+            </div>
+            <span id="workloadSlice1Badge" class="workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Active Slice</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Physical Cluster TPU Slices -->
+      <div class="space-y-1 pt-1 border-t border-[var(--border)]/40">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center justify-between">
+          <span>Physical Cluster TPU Slices (Hardware Pool)</span>
+          <span class="text-[9px] text-[var(--muted-foreground)] font-normal">Reconnecting allocates a random inactive slice to resume the workload</span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <!-- TPU Slice 0 -->
+          <div id="rackSlice0" class="slice-card tpu-slice-card active flex flex-col justify-between">
+            <div class="flex items-center justify-between gap-1 h-5 shrink-0">
+              <div id="rackSlice0Badge" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0">
+                <span id="rackSlice0Dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span id="rackSlice0Text">TPU SLICE 0</span>
+              </div>
+              <span id="rackSlice0RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Active Slice</span>
+            </div>
+            <div id="rackSlice0Footer" class="tpu-footer text-[10px] text-emerald-300 font-medium">
+              Assigned to Workload Slice 0
+            </div>
+          </div>
+
+          <!-- TPU Slice 1 -->
+          <div id="rackSlice1" class="slice-card tpu-slice-card active flex flex-col justify-between">
+            <div class="flex items-center justify-between gap-1 h-5 shrink-0">
+              <div id="rackSlice1Badge" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0">
+                <span id="rackSlice1Dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span id="rackSlice1Text">TPU SLICE 1</span>
+              </div>
+              <span id="rackSlice1RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Active Slice</span>
+            </div>
+            <div id="rackSlice1Footer" class="tpu-footer text-[10px] text-emerald-300 font-medium">
+              Assigned to Workload Slice 1
+            </div>
+          </div>
+
+          <!-- TPU Slice 2 -->
+          <div id="rackSlice2" class="slice-card tpu-slice-card inactive flex flex-col justify-between">
+            <div class="flex items-center justify-between gap-1 h-5 shrink-0">
+              <div id="rackSlice2Badge" class="flex items-center gap-1.5 text-xs font-bold text-zinc-400 shrink-0">
+                <span id="rackSlice2Dot" class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>
+                <span id="rackSlice2Text">TPU SLICE 2</span>
+              </div>
+              <span id="rackSlice2RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-400 font-semibold">Spare Slice</span>
+            </div>
+            <div id="rackSlice2Footer" class="tpu-footer text-[10px] text-zinc-400 font-medium">
+              Spare Slice
+            </div>
+          </div>
+
+          <!-- TPU Slice 3 -->
+          <div id="rackSlice3" class="slice-card tpu-slice-card inactive flex flex-col justify-between">
+            <div class="flex items-center justify-between gap-1 h-5 shrink-0">
+              <div id="rackSlice3Badge" class="flex items-center gap-1.5 text-xs font-bold text-zinc-400 shrink-0">
+                <span id="rackSlice3Dot" class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>
+                <span id="rackSlice3Text">TPU SLICE 3</span>
+              </div>
+              <span id="rackSlice3RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-400 font-semibold">Spare Slice</span>
+            </div>
+            <div id="rackSlice3Footer" class="tpu-footer text-[10px] text-zinc-400 font-medium">
+              Spare Slice
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Comparison Charts (Loss & Cumulative Goodput) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <!-- Training Loss -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-1">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+            <h3 class="text-xs font-bold tracking-tight">Training Loss</h3>
+          </div>
+          <div class="flex items-center gap-3 text-[10px] font-mono">
+            <span class="flex items-center gap-1 text-amber-500">
+              <span class="inline-block w-2.5 h-0.5 bg-amber-500 border-b border-dotted border-amber-500"></span> McJAX
+            </span>
+            <span class="flex items-center gap-1 text-emerald-500">
+              <span class="inline-block w-2.5 h-0.5 bg-emerald-500"></span> Snapshot Replica Resize
+            </span>
+            <span class="flex items-center gap-1 text-rose-500">
+              <span class="inline-block w-2.5 h-0.5 bg-rose-500 border-b border-dashed border-rose-500"></span> Snapshot Pause Resume
+            </span>
+          </div>
+        </div>
+        <div class="canvas-container">
+          <canvas id="lossCanvas"></canvas>
+        </div>
+        <div class="flex items-center justify-between text-[10px] text-[var(--muted-foreground)] pt-0.5 border-t border-[var(--border)]">
+          <span>X: Elapsed Time (s) &bull; Y: Training Loss</span>
+          <span id="lossChartLegend" class="font-mono text-indigo-500">McJAX: 6.850 | Resize: 6.850 | Pause: 6.850</span>
+        </div>
+      </div>
+
+      <!-- Estimated Goodput -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-1">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <h3 class="text-xs font-bold tracking-tight">Estimated Goodput</h3>
+          </div>
+          <div class="flex items-center gap-3 text-[10px] font-mono">
+            <span class="flex items-center gap-1 text-amber-500">
+              <span class="inline-block w-2.5 h-0.5 bg-amber-500 border-b border-dotted border-amber-500"></span> McJAX
+            </span>
+            <span class="flex items-center gap-1 text-emerald-500">
+              <span class="inline-block w-2.5 h-0.5 bg-emerald-500"></span> Snapshot Replica Resize
+            </span>
+            <span class="flex items-center gap-1 text-rose-500">
+              <span class="inline-block w-2.5 h-0.5 bg-rose-500 border-b border-dashed border-rose-500"></span> Snapshot Pause Resume
+            </span>
+          </div>
+        </div>
+        <div class="canvas-container">
+          <canvas id="goodputCanvas"></canvas>
+        </div>
+        <div class="flex items-center justify-between text-[10px] text-[var(--muted-foreground)] pt-0.5 border-t border-[var(--border)]">
+          <span>X: Elapsed Time (s) &bull; Y: Cumulative Goodput (%)</span>
+          <span id="goodputChartLegend" class="font-mono text-emerald-500">McJAX: 0.0% | Resize: 0.0% | Pause: 0.0%</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // Dynamic runtime loader for sandboxed proxies (such as htmlpreview.github.io)
+    if (typeof tailwind === "undefined") {
+      const twScript = document.createElement("script");
+      twScript.src = "https://cdn.tailwindcss.com";
+      document.head.appendChild(twScript);
+    }
+
+    // Dual Simulation State Engine
+    const sim = {
+      running: false,
+      totalSteps: 1000,
+      stepIntervalMs: 120, // Real-time tick interval
+      timerId: null,
+      scenarioTimer: null,
+      elapsedSec: 0,
+      nominalSlices: 2,
+
+      // Configurable Parameters
+      config: {
+        coldStartInitSec: 3.0,
+        scaleUpInitSec: 1.0,
+        postInterruptInitSec: 2.0,
+        faultDurationSec: 9.0,
+        stepIntervalMs: 120,
+        maxSteps: 500,
+        mcjaxCkptInterval: 50,
+        degradedFactor: 0.50,
+        baseLoss: 6.85,
+        lossAlpha: 0.0012
+      },
+
+      // Phase tracking
+      isInitializing: false,
+      initRemainingMs: 0,
+      isScalingDown: false,
+      scaleDownRemainingMs: 0,
+      isScalingUp: false,
+      scaleUpRemainingMs: 0,
+
+      // Workload to TPU Slice Topology Mapping
+      // workloadMapping[w] = tpuSliceIndex (e.g., workload 0 on TPU 0, workload 1 on TPU 1)
+      workloadMapping: [0, 1],
+      sliceStates: ["active", "active", "standby", "standby"],
+      disruptedWorkloadIndex: null,
+      disruptedTpuIndex: null,
+      isDisrupted: false,
+      isReconnecting: false,
+
+      // Workload A: Snapshot Replica Resize
+      resize: {
+        step: 0,
+        effectiveSteps: 0,
+        loss: 6.85,
+        forwardProgressMs: 0,
+        unproductiveMs: 0,
+        isFinished: false,
+        finishTimeSec: null,
+        inRecovery: false,
+        recoveryTimer: null,
+        history: {
+          timeSec: [0],
+          loss: [6.85],
+          goodput: [0.0],
+          step: [0]
+        }
+      },
+
+      // Workload B: Snapshot Pause Resume
+      pause: {
+        step: 0,
+        loss: 6.85,
+        forwardProgressMs: 0,
+        unproductiveMs: 0,
+        isPaused: false,
+        inReload: false,
+        isFinished: false,
+        finishTimeSec: null,
+        downtimeMs: 0,
+        history: {
+          timeSec: [0],
+          loss: [6.85],
+          goodput: [0.0],
+          step: [0]
+        }
+      },
+
+      // Workload C: McJAX
+      mcjax: {
+        step: 0,
+        loss: 6.85,
+        forwardProgressMs: 0,
+        unproductiveMs: 0,
+        isPaused: false,
+        isReinitializing: false,
+        reinitRemainingMs: 0,
+        isFinished: false,
+        finishTimeSec: null,
+        downtimeMs: 0,
+        lastCheckpointStep: 0,
+        lastCheckpointLoss: 6.85,
+        lastCheckpointForwardMs: 0,
+        history: {
+          timeSec: [0],
+          loss: [6.85],
+          goodput: [0.0],
+          step: [0]
+        }
+      }
+    };
+
+    // DOM Elements
+    const simTimeLabel = document.getElementById("simTimeLabel");
+    const headerClusterStatusDot = document.getElementById("headerClusterStatusDot");
+    const headerClusterStatusText = document.getElementById("headerClusterStatusText");
+    const topoClusterStatusDot = document.getElementById("topoClusterStatusDot");
+    const topoClusterStatusText = document.getElementById("topoClusterStatusText");
+
+    function setClusterStatus(text, dotColorClass, textColorClass) {
+      if (headerClusterStatusText) headerClusterStatusText.textContent = text;
+      if (headerClusterStatusDot) headerClusterStatusDot.className = `w-2 h-2 rounded-full ${dotColorClass} shrink-0`;
+      if (topoClusterStatusText) {
+        topoClusterStatusText.textContent = text;
+        topoClusterStatusText.className = `text-[10px] font-mono font-semibold ${textColorClass}`;
+      }
+      if (topoClusterStatusDot) topoClusterStatusDot.className = `w-1.5 h-1.5 rounded-full ${dotColorClass} shrink-0`;
+    }
+    const btnToggleRun = document.getElementById("btnToggleRun");
+    const btnScenario = document.getElementById("btnScenario");
+    const btnReset = document.getElementById("btnReset");
+    const btnInterruptSlice0 = document.getElementById("btnInterruptSlice0");
+    const btnInterruptSlice1 = document.getElementById("btnInterruptSlice1");
+    const btnRestoreSlice1 = document.getElementById("btnRestoreSlice1");
+
+    // Parameter Input Controls
+    const inputColdStartInit = document.getElementById("inputColdStartInit");
+    const inputPostInterruptInit = document.getElementById("inputPostInterruptInit");
+    const inputScaleUpInit = document.getElementById("inputScaleUpInit");
+    const inputFaultDuration = document.getElementById("inputFaultDuration");
+    const inputStepInterval = document.getElementById("inputStepInterval");
+    const inputMaxSteps = document.getElementById("inputMaxSteps");
+    const inputMcjaxCkpt = document.getElementById("inputMcjaxCkpt");
+    const inputDegradedFactor = document.getElementById("inputDegradedFactor");
+    const inputBaseLoss = document.getElementById("inputBaseLoss");
+    const inputLossAlpha = document.getElementById("inputLossAlpha");
+    const btnResetParams = document.getElementById("btnResetParams");
+
+    // Strategy A (Snapshot Replica Resize) KPIs
+    const badgeResizeState = document.getElementById("badgeResizeState");
+    const kpiResizeStep = document.getElementById("kpiResizeStep");
+    const kpiResizeLoss = document.getElementById("kpiResizeLoss");
+    const kpiResizeGoodput = document.getElementById("kpiResizeGoodput");
+    const descResizeStatus = document.getElementById("descResizeStatus");
+
+    // Strategy B (Snapshot Pause Resume) KPIs
+    const badgePauseState = document.getElementById("badgePauseState");
+    const kpiPauseStep = document.getElementById("kpiPauseStep");
+    const kpiPauseLoss = document.getElementById("kpiPauseLoss");
+    const kpiPauseGoodput = document.getElementById("kpiPauseGoodput");
+    const descPauseStatus = document.getElementById("descPauseStatus");
+
+    // Strategy C (McJAX) KPIs
+    const badgeMcjaxState = document.getElementById("badgeMcjaxState");
+    const kpiMcjaxStep = document.getElementById("kpiMcjaxStep");
+    const kpiMcjaxLoss = document.getElementById("kpiMcjaxLoss");
+    const kpiMcjaxGoodput = document.getElementById("kpiMcjaxGoodput");
+    const descMcjaxStatus = document.getElementById("descMcjaxStatus");
+
+    // Chart Legends
+    const lossChartLegend = document.getElementById("lossChartLegend");
+    const goodputChartLegend = document.getElementById("goodputChartLegend");
+
+    // Canvases
+    const lossCanvas = document.getElementById("lossCanvas");
+    const goodputCanvas = document.getElementById("goodputCanvas");
+    const lossCtx = lossCanvas.getContext("2d");
+    const goodputCtx = goodputCanvas.getContext("2d");
+
+    function resizeCanvases() {
+      const dpr = window.devicePixelRatio || 1;
+      [lossCanvas, goodputCanvas].forEach(cv => {
+        const rect = cv.getBoundingClientRect();
+        cv.width = rect.width * dpr;
+        cv.height = rect.height * dpr;
+      });
+      renderCharts();
+    }
+    window.addEventListener("resize", resizeCanvases);
+
+    // Sync Parameter Inputs to Engine State
+    function syncParamsFromInputs() {
+      sim.config.coldStartInitSec = Math.max(0, parseFloat(inputColdStartInit.value) || 0);
+      sim.config.postInterruptInitSec = Math.max(0, parseFloat(inputPostInterruptInit.value) || 0);
+      sim.config.scaleUpInitSec = Math.max(0, parseFloat(inputScaleUpInit.value) || 0);
+      sim.config.faultDurationSec = Math.max(0.5, parseFloat(inputFaultDuration.value) || 9.0);
+      sim.config.stepIntervalMs = Math.max(20, parseInt(inputStepInterval.value, 10) || 120);
+      sim.stepIntervalMs = sim.config.stepIntervalMs;
+
+      sim.config.maxSteps = Math.max(0, parseInt(inputMaxSteps.value, 10) || 0);
+      sim.config.mcjaxCkptInterval = Math.max(1, parseInt(inputMcjaxCkpt.value, 10) || 50);
+      sim.config.degradedFactor = Math.max(0, Math.min(1.0, parseFloat(inputDegradedFactor.value) || 0));
+      sim.config.baseLoss = Math.max(1.0, parseFloat(inputBaseLoss.value) || 6.85);
+      sim.config.lossAlpha = Math.max(0.0001, parseFloat(inputLossAlpha.value) || 0.0012);
+
+      if (sim.elapsedSec === 0 && !sim.running && !sim.isInitializing) {
+        sim.resize.loss = sim.config.baseLoss;
+        sim.resize.history.loss[0] = sim.config.baseLoss;
+        sim.pause.loss = sim.config.baseLoss;
+        sim.pause.history.loss[0] = sim.config.baseLoss;
+        sim.mcjax.loss = sim.config.baseLoss;
+        sim.mcjax.lastCheckpointLoss = sim.config.baseLoss;
+        sim.mcjax.history.loss[0] = sim.config.baseLoss;
+      }
+      updateUI();
+    }
+
+    [inputColdStartInit, inputPostInterruptInit, inputScaleUpInit, inputFaultDuration, inputStepInterval, inputMaxSteps, inputMcjaxCkpt, inputDegradedFactor, inputBaseLoss, inputLossAlpha].forEach(input => {
+      input.addEventListener("input", syncParamsFromInputs);
+      input.addEventListener("change", syncParamsFromInputs);
+    });
+
+    btnResetParams.addEventListener("click", () => {
+      inputColdStartInit.value = "3.0";
+      inputPostInterruptInit.value = "2.0";
+      inputScaleUpInit.value = "1.0";
+      inputFaultDuration.value = "9.0";
+      inputStepInterval.value = "120";
+      inputMaxSteps.value = "500";
+      inputMcjaxCkpt.value = "50";
+      inputDegradedFactor.value = "0.50";
+      inputBaseLoss.value = "6.85";
+      inputLossAlpha.value = "0.0012";
+      syncParamsFromInputs();
+    });
+
+    // Cluster Slices Visualizer (Both Workload Slices & TPU Slices)
+    function updateRackVisualizer() {
+      // 1. Update Logical Workload Slice Cards
+      for (let w = 0; w < 2; w++) {
+        const cardEl = document.getElementById(`workloadSlice${w}Card`);
+        const dotEl = document.getElementById(`workloadSlice${w}Dot`);
+        const mappingEl = document.getElementById(`workloadSlice${w}Mapping`);
+        const badgeEl = document.getElementById(`workloadSlice${w}Badge`);
+        if (!cardEl) continue;
+
+        const assignedTpu = sim.workloadMapping[w];
+        const isDisrupted = sim.isDisrupted && sim.disruptedWorkloadIndex === w;
+
+        if (isDisrupted) {
+          cardEl.className = "slice-card workload-card disrupted flex items-center justify-between p-2";
+          if (dotEl) dotEl.className = "w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0";
+          if (mappingEl) {
+            mappingEl.className = "workload-mapping text-[10px] text-rose-400 font-mono";
+            mappingEl.textContent = `Interrupted on TPU Slice ${assignedTpu}`;
+          }
+          if (badgeEl) {
+            badgeEl.className = "workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold";
+            badgeEl.textContent = "Interrupted Slice";
+          }
+        } else {
+          cardEl.className = "slice-card workload-card active flex items-center justify-between p-2";
+          if (dotEl) dotEl.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0";
+          if (mappingEl) {
+            mappingEl.className = "workload-mapping text-[10px] text-emerald-400 font-mono";
+            mappingEl.textContent = `Running on TPU Slice ${assignedTpu}`;
+          }
+          if (badgeEl) {
+            badgeEl.className = "workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold";
+            badgeEl.textContent = "Active Slice";
+          }
+        }
+      }
+
+      // 2. Update Physical Cluster TPU Slice Cards
+      for (let i = 0; i < 4; i++) {
+        const rackEl = document.getElementById(`rackSlice${i}`);
+        const badgeEl = document.getElementById(`rackSlice${i}Badge`);
+        const dotEl = document.getElementById(`rackSlice${i}Dot`);
+        const textEl = document.getElementById(`rackSlice${i}Text`);
+        const roleBadgeEl = document.getElementById(`rackSlice${i}RoleBadge`);
+        const footerEl = document.getElementById(`rackSlice${i}Footer`);
+
+        if (!rackEl) continue;
+        const st = sim.sliceStates[i];
+        let assignedWorkload = null;
+        if (sim.workloadMapping[0] === i) assignedWorkload = 0;
+        else if (sim.workloadMapping[1] === i) assignedWorkload = 1;
+
+        if (st === "active") {
+          rackEl.className = "slice-card tpu-slice-card active flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold";
+            roleBadgeEl.textContent = "Active Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-emerald-300 font-medium";
+            footerEl.textContent = assignedWorkload !== null ? `Assigned to Workload Slice ${assignedWorkload}` : "Active Slice";
+          }
+        } else if (st === "disrupted") {
+          rackEl.className = "slice-card tpu-slice-card disrupted flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-rose-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold";
+            roleBadgeEl.textContent = "Interrupted Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-rose-300 font-semibold";
+            footerEl.textContent = assignedWorkload !== null ? `Interrupted (Workload Slice ${assignedWorkload})` : "Interrupted Slice";
+          }
+        } else {
+          rackEl.className = "slice-card tpu-slice-card inactive flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-zinc-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-zinc-500";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-400 font-semibold";
+            roleBadgeEl.textContent = "Spare Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-zinc-400 font-medium";
+            footerEl.textContent = "Spare Slice";
+          }
+        }
+      }
+    }
+
+    function calcGoodput(forwardMs, unproductiveMs) {
+      const total = forwardMs + unproductiveMs;
+      if (total <= 0) return 0.0;
+      return (forwardMs / total) * 100.0;
+    }
+
+    function calcExponentialLoss(effectiveSteps, noise = 0) {
+      const L0 = sim.config.baseLoss || 6.85;
+      const alpha = sim.config.lossAlpha || 0.0012;
+      const rawLoss = L0 * Math.exp(-alpha * effectiveSteps);
+      return Math.max(1.0, rawLoss + noise);
+    }
+
+    function updateUI() {
+      simTimeLabel.textContent = `${sim.elapsedSec.toFixed(1)}s elapsed`;
+
+      // 1. Snapshot Replica Resize UI
+      kpiResizeStep.textContent = sim.resize.step;
+      kpiResizeLoss.textContent = sim.resize.loss.toFixed(3);
+      const resizeG = calcGoodput(sim.resize.forwardProgressMs, sim.resize.unproductiveMs);
+      kpiResizeGoodput.textContent = `${resizeG.toFixed(1)}%`;
+
+      if (sim.resize.isFinished) {
+        badgeResizeState.textContent = "COMPLETED";
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 font-bold";
+        const finishStr = sim.resize.finishTimeSec != null ? ` in ${sim.resize.finishTimeSec.toFixed(1)}s` : "";
+        descResizeStatus.textContent = `Completed ${sim.config.maxSteps} steps${finishStr} (${resizeG.toFixed(1)}% G)`;
+        descResizeStatus.className = "strategy-desc text-[10px] text-emerald-600 font-medium truncate";
+      } else if (sim.isInitializing) {
+        badgeResizeState.textContent = `INIT (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descResizeStatus.textContent = `Initial cluster startup (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        descResizeStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else if (sim.isScalingDown) {
+        badgeResizeState.textContent = `INTERRUPT INIT (${(sim.scaleDownRemainingMs/1000).toFixed(1)}s)`;
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descResizeStatus.textContent = `Scale-down init: 1-slice mesh (${(sim.scaleDownRemainingMs/1000).toFixed(1)}s)`;
+        descResizeStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else if (sim.isScalingUp) {
+        badgeResizeState.textContent = `SCALE-UP (${(sim.scaleUpRemainingMs/1000).toFixed(1)}s)`;
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-600 font-semibold animate-pulse";
+        descResizeStatus.textContent = `Scale-up re-init: 2-slice mesh (${(sim.scaleUpRemainingMs/1000).toFixed(1)}s)`;
+        descResizeStatus.className = "strategy-desc text-[10px] text-indigo-600 font-medium truncate";
+      } else if (sim.isDisrupted) {
+        badgeResizeState.textContent = "DEGRADED (1 SLICE)";
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 font-semibold";
+        const survivingWorkload = 1 - (sim.disruptedWorkloadIndex ?? 0);
+        const survivingTpu = sim.workloadMapping[survivingWorkload];
+        descResizeStatus.textContent = `Sustaining progress on Workload Slice ${survivingWorkload} (${(sim.config.degradedFactor * 100).toFixed(0)}% rate)`;
+        descResizeStatus.className = "strategy-desc text-[10px] text-emerald-600 font-medium truncate";
+      } else {
+        badgeResizeState.textContent = "DUAL-SLICE";
+        badgeResizeState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 font-semibold";
+        descResizeStatus.textContent = "Active dual-slice execution";
+        descResizeStatus.className = "strategy-desc text-[10px] text-emerald-600 font-medium truncate";
+      }
+
+      // 2. Snapshot Pause Resume UI
+      kpiPauseStep.textContent = sim.pause.step;
+      kpiPauseLoss.textContent = sim.pause.loss.toFixed(3);
+      const pauseG = calcGoodput(sim.pause.forwardProgressMs, sim.pause.unproductiveMs);
+      kpiPauseGoodput.textContent = `${pauseG.toFixed(1)}%`;
+
+      if (sim.pause.isFinished) {
+        badgePauseState.textContent = "COMPLETED";
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-bold";
+        const finishStr = sim.pause.finishTimeSec != null ? ` in ${sim.pause.finishTimeSec.toFixed(1)}s` : "";
+        descPauseStatus.textContent = `Completed ${sim.config.maxSteps} steps${finishStr} (${pauseG.toFixed(1)}% G)`;
+        descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      } else if (sim.isInitializing) {
+        badgePauseState.textContent = `INIT (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descPauseStatus.textContent = `Initial cluster startup (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        descPauseStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else if (sim.isScalingUp) {
+        badgePauseState.textContent = "RESUMED (0s RE-INIT)";
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold";
+        descPauseStatus.textContent = "Active dual-slice execution";
+        descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      } else if (sim.pause.isPaused) {
+        badgePauseState.textContent = "BLOCKED (WAITING)";
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold animate-pulse";
+        descPauseStatus.textContent = "Waiting for slices to reconnect";
+        descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      } else if (sim.pause.inReload) {
+        badgePauseState.textContent = "RELOADING SNAPSHOT";
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold";
+        descPauseStatus.textContent = "Restoring parameters from snapshot";
+        descPauseStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else {
+        badgePauseState.textContent = "DUAL-SLICE";
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold";
+        descPauseStatus.textContent = "Active dual-slice execution";
+        descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      }
+
+      // 3. McJAX UI
+      kpiMcjaxStep.textContent = sim.mcjax.step;
+      kpiMcjaxLoss.textContent = sim.mcjax.loss.toFixed(3);
+      const mcjaxG = calcGoodput(sim.mcjax.forwardProgressMs, sim.mcjax.unproductiveMs);
+      kpiMcjaxGoodput.textContent = `${mcjaxG.toFixed(1)}%`;
+
+      if (sim.mcjax.isFinished) {
+        badgeMcjaxState.textContent = "COMPLETED";
+        badgeMcjaxState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-bold";
+        const finishStr = sim.mcjax.finishTimeSec != null ? ` in ${sim.mcjax.finishTimeSec.toFixed(1)}s` : "";
+        descMcjaxStatus.textContent = `Completed ${sim.config.maxSteps} steps${finishStr} (${mcjaxG.toFixed(1)}% G)`;
+        descMcjaxStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else if (sim.isInitializing) {
+        badgeMcjaxState.textContent = `INIT (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        badgeMcjaxState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descMcjaxStatus.textContent = `Initial cluster startup (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
+        descMcjaxStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else if (sim.mcjax.isPaused) {
+        badgeMcjaxState.textContent = "BLOCKED (WAITING)";
+        badgeMcjaxState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold animate-pulse";
+        descMcjaxStatus.textContent = "Waiting for slices to reconnect";
+        descMcjaxStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      } else if (sim.mcjax.isReinitializing) {
+        badgeMcjaxState.textContent = `RE-INIT (${(sim.mcjax.reinitRemainingMs / 1000).toFixed(1)}s)`;
+        badgeMcjaxState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descMcjaxStatus.textContent = `Restoring step ${sim.mcjax.step} checkpoint (${(sim.mcjax.reinitRemainingMs / 1000).toFixed(1)}s)`;
+        descMcjaxStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      } else {
+        badgeMcjaxState.textContent = "DUAL-SLICE";
+        badgeMcjaxState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold";
+        descMcjaxStatus.textContent = "Active dual-slice execution";
+        descMcjaxStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
+      }
+
+      // Hardware & Workload Visualizers & Action Buttons
+      updateRackVisualizer();
+
+      const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
+
+      if (allFinished) {
+        setClusterStatus(`Training Complete (${sim.config.maxSteps} Steps Reached)`, "bg-emerald-500", "text-emerald-400");
+        btnInterruptSlice0.disabled = true;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnInterruptSlice1.disabled = true;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.disabled = true;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.textContent = "Reconnect a slice";
+      } else if (sim.isInitializing) {
+        setClusterStatus(`Initializing Cluster (${(sim.initRemainingMs/1000).toFixed(1)}s)`, "bg-amber-500 animate-ping", "text-amber-400");
+        btnInterruptSlice0.disabled = true;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnInterruptSlice1.disabled = true;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.disabled = true;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.textContent = "Reconnect a slice";
+      } else if (sim.isScalingDown) {
+        setClusterStatus(`Post-Interrupt Re-init (${(sim.scaleDownRemainingMs/1000).toFixed(1)}s)`, "bg-amber-500 animate-pulse", "text-amber-400");
+        btnInterruptSlice0.disabled = true;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnInterruptSlice1.disabled = true;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.disabled = true;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-50 cursor-not-allowed animate-pulse";
+        btnRestoreSlice1.textContent = `Re-initializing (${(sim.scaleDownRemainingMs/1000).toFixed(1)}s)...`;
+      } else if (sim.isScalingUp) {
+        setClusterStatus(`Scale-Up Re-init (${(sim.scaleUpRemainingMs/1000).toFixed(1)}s)`, "bg-indigo-500 animate-pulse", "text-indigo-400");
+        btnInterruptSlice0.disabled = true;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnInterruptSlice1.disabled = true;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.disabled = true;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-50 cursor-not-allowed animate-pulse";
+        btnRestoreSlice1.textContent = `Scaling Up (${(sim.scaleUpRemainingMs/1000).toFixed(1)}s)...`;
+      } else if (!sim.isDisrupted) {
+        setClusterStatus("Cluster Healthy (2 Slices)", "bg-emerald-500", "text-emerald-400");
+        btnInterruptSlice0.disabled = false;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer";
+        btnInterruptSlice1.disabled = false;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer";
+        btnRestoreSlice1.disabled = true;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.textContent = "Reconnect a slice";
+      } else {
+        const wIdx = sim.disruptedWorkloadIndex ?? 0;
+        const tpuIdx = sim.disruptedTpuIndex ?? sim.workloadMapping[wIdx];
+        setClusterStatus(`Degraded (Workload ${wIdx} / TPU ${tpuIdx} Interrupted)`, "bg-amber-500", "text-amber-400");
+        btnInterruptSlice0.disabled = true;
+        btnInterruptSlice0.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnInterruptSlice1.disabled = true;
+        btnInterruptSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice1.disabled = false;
+        btnRestoreSlice1.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 shadow-sm cursor-pointer animate-bounce";
+        btnRestoreSlice1.textContent = "Reconnect a slice";
+      }
+
+      if (allFinished) {
+        btnToggleRun.textContent = "Restart Training";
+        btnToggleRun.className = "px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-150 bg-emerald-600 text-white hover:bg-emerald-500 active:scale-95 shadow-sm cursor-pointer";
+      } else {
+        btnToggleRun.textContent = sim.running
+          ? "Pause Training"
+          : (sim.elapsedSec === 0 ? "Start Training" : "Resume Training");
+        btnToggleRun.className = sim.running
+          ? "px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-150 bg-amber-500 text-black hover:bg-amber-400 active:scale-95 shadow-sm cursor-pointer"
+          : "px-3 py-1.5 rounded-lg font-semibold text-xs transition-all duration-150 bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer";
+      }
+    }
+
+    // Real-Time Canvas Rendering
+    function renderCharts() {
+      const dpr = window.devicePixelRatio || 1;
+      const wLoss = lossCanvas.width;
+      const hLoss = lossCanvas.height;
+      const wGp = goodputCanvas.width;
+      const hGp = goodputCanvas.height;
+
+      lossCtx.clearRect(0, 0, wLoss, hLoss);
+      goodputCtx.clearRect(0, 0, wGp, hGp);
+
+      const padLeft = 38 * dpr;
+      const padRight = 14 * dpr;
+      const padTop = 14 * dpr;
+      const padBottom = 22 * dpr;
+      const plotW = wLoss - padLeft - padRight;
+      const plotH = hLoss - padTop - padBottom;
+
+      const maxTimeSec = Math.max(35, Math.ceil((sim.elapsedSec + 5) / 5) * 5);
+      const minLoss = 1.0;
+      const maxLoss = Math.max(7.0, Math.ceil((sim.config.baseLoss || 6.85) * 10) / 10);
+
+      // Draw Chart 1: Training Loss
+      lossCtx.strokeStyle = "rgba(150, 150, 150, 0.15)";
+      lossCtx.lineWidth = 1 * dpr;
+      lossCtx.font = `${8.5 * dpr}px monospace`;
+      lossCtx.fillStyle = "rgba(150, 150, 150, 0.7)";
+      lossCtx.textAlign = "center";
+
+      const numTicks = 5;
+      for (let i = 0; i <= numTicks; i++) {
+        const tVal = Math.round((i / numTicks) * maxTimeSec);
+        const x = padLeft + (tVal / maxTimeSec) * plotW;
+        lossCtx.beginPath();
+        lossCtx.moveTo(x, padTop);
+        lossCtx.lineTo(x, padTop + plotH);
+        lossCtx.stroke();
+        lossCtx.fillText(`${tVal}s`, x, hLoss - 4 * dpr);
+      }
+
+      lossCtx.textAlign = "right";
+      const lossTicks = [
+        maxLoss,
+        maxLoss * 0.75 + minLoss * 0.25,
+        maxLoss * 0.5 + minLoss * 0.5,
+        maxLoss * 0.25 + minLoss * 0.75,
+        minLoss
+      ];
+      for (const val of lossTicks) {
+        const y = padTop + (1 - (val - minLoss) / (maxLoss - minLoss)) * plotH;
+        lossCtx.beginPath();
+        lossCtx.moveTo(padLeft, y);
+        lossCtx.lineTo(padLeft + plotW, y);
+        lossCtx.stroke();
+        lossCtx.fillText(val.toFixed(1), padLeft - 4 * dpr, y + 2.5 * dpr);
+      }
+
+      // Plot Snapshot Replica Resize Loss (Emerald)
+      const nResize = sim.resize.history.timeSec.length;
+      if (nResize >= 1) {
+        lossCtx.beginPath();
+        lossCtx.strokeStyle = "#10b981"; // Emerald
+        lossCtx.lineWidth = 2.2 * dpr;
+        for (let i = 0; i < nResize; i++) {
+          const t = sim.resize.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, (sim.resize.history.loss[i] - minLoss) / (maxLoss - minLoss)));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) lossCtx.moveTo(x, y);
+          else lossCtx.lineTo(x, y);
+        }
+        lossCtx.stroke();
+      }
+
+      // Plot Snapshot Pause Resume Loss (Rose, Dashed)
+      const nPause = sim.pause.history.timeSec.length;
+      if (nPause >= 1) {
+        lossCtx.save();
+        lossCtx.beginPath();
+        lossCtx.strokeStyle = "#ef4444"; // Rose
+        lossCtx.setLineDash([4 * dpr, 3 * dpr]);
+        lossCtx.lineWidth = 2.0 * dpr;
+        for (let i = 0; i < nPause; i++) {
+          const t = sim.pause.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, (sim.pause.history.loss[i] - minLoss) / (maxLoss - minLoss)));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) lossCtx.moveTo(x, y);
+          else lossCtx.lineTo(x, y);
+        }
+        lossCtx.stroke();
+        lossCtx.restore();
+      }
+
+      // Plot McJAX Loss (Amber, Dotted)
+      const nMcjax = sim.mcjax.history.timeSec.length;
+      if (nMcjax >= 1) {
+        lossCtx.save();
+        lossCtx.beginPath();
+        lossCtx.strokeStyle = "#f59e0b"; // Amber
+        lossCtx.setLineDash([2 * dpr, 2.5 * dpr]);
+        lossCtx.lineWidth = 2.0 * dpr;
+        for (let i = 0; i < nMcjax; i++) {
+          const t = sim.mcjax.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, (sim.mcjax.history.loss[i] - minLoss) / (maxLoss - minLoss)));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) lossCtx.moveTo(x, y);
+          else lossCtx.lineTo(x, y);
+        }
+        lossCtx.stroke();
+        lossCtx.restore();
+      }
+
+      lossChartLegend.textContent = `McJAX: ${sim.mcjax.loss.toFixed(3)} | Resize: ${sim.resize.loss.toFixed(3)} | Pause: ${sim.pause.loss.toFixed(3)}`;
+
+      // Draw Chart 2: Estimated Goodput
+      goodputCtx.strokeStyle = "rgba(150, 150, 150, 0.15)";
+      goodputCtx.lineWidth = 1 * dpr;
+      goodputCtx.font = `${8.5 * dpr}px monospace`;
+      goodputCtx.fillStyle = "rgba(150, 150, 150, 0.7)";
+      goodputCtx.textAlign = "center";
+
+      for (let i = 0; i <= numTicks; i++) {
+        const tVal = Math.round((i / numTicks) * maxTimeSec);
+        const x = padLeft + (tVal / maxTimeSec) * plotW;
+        goodputCtx.beginPath();
+        goodputCtx.moveTo(x, padTop);
+        goodputCtx.lineTo(x, padTop + plotH);
+        goodputCtx.stroke();
+        goodputCtx.fillText(`${tVal}s`, x, hGp - 4 * dpr);
+      }
+
+      goodputCtx.textAlign = "right";
+      const gpTicks = [100, 75, 50, 25, 0];
+      for (const gp of gpTicks) {
+        const y = padTop + (1 - gp / 100.0) * plotH;
+        goodputCtx.beginPath();
+        goodputCtx.moveTo(padLeft, y);
+        goodputCtx.lineTo(padLeft + plotW, y);
+        goodputCtx.stroke();
+        goodputCtx.fillText(`${gp}%`, padLeft - 4 * dpr, y + 2.5 * dpr);
+      }
+
+      // 100% nominal ceiling reference line
+      goodputCtx.save();
+      goodputCtx.strokeStyle = "rgba(16, 185, 129, 0.35)";
+      goodputCtx.setLineDash([4 * dpr, 4 * dpr]);
+      goodputCtx.beginPath();
+      goodputCtx.moveTo(padLeft, padTop);
+      goodputCtx.lineTo(padLeft + plotW, padTop);
+      goodputCtx.stroke();
+      goodputCtx.restore();
+
+      // Plot Snapshot Replica Resize Goodput (Emerald)
+      const nResizeGp = sim.resize.history.goodput.length;
+      if (nResizeGp >= 1) {
+        goodputCtx.beginPath();
+        goodputCtx.strokeStyle = "#10b981"; // Emerald
+        goodputCtx.lineWidth = 2.2 * dpr;
+        for (let i = 0; i < nResizeGp; i++) {
+          const t = sim.resize.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, sim.resize.history.goodput[i] / 100.0));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) goodputCtx.moveTo(x, y);
+          else goodputCtx.lineTo(x, y);
+        }
+        goodputCtx.stroke();
+      }
+
+      // Plot Snapshot Pause Resume Goodput (Rose, Dashed)
+      const nPauseGp = sim.pause.history.goodput.length;
+      if (nPauseGp >= 1) {
+        goodputCtx.save();
+        goodputCtx.beginPath();
+        goodputCtx.strokeStyle = "#ef4444"; // Rose
+        goodputCtx.setLineDash([4 * dpr, 3 * dpr]);
+        goodputCtx.lineWidth = 2.0 * dpr;
+        for (let i = 0; i < nPauseGp; i++) {
+          const t = sim.pause.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, sim.pause.history.goodput[i] / 100.0));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) goodputCtx.moveTo(x, y);
+          else goodputCtx.lineTo(x, y);
+        }
+        goodputCtx.stroke();
+        goodputCtx.restore();
+      }
+
+      // Plot McJAX Goodput (Amber, Dotted)
+      const nMcjaxGp = sim.mcjax.history.goodput.length;
+      if (nMcjaxGp >= 1) {
+        goodputCtx.save();
+        goodputCtx.beginPath();
+        goodputCtx.strokeStyle = "#f59e0b"; // Amber
+        goodputCtx.setLineDash([2 * dpr, 2.5 * dpr]);
+        goodputCtx.lineWidth = 2.0 * dpr;
+        for (let i = 0; i < nMcjaxGp; i++) {
+          const t = sim.mcjax.history.timeSec[i];
+          const x = padLeft + (t / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, sim.mcjax.history.goodput[i] / 100.0));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) goodputCtx.moveTo(x, y);
+          else goodputCtx.lineTo(x, y);
+        }
+        goodputCtx.stroke();
+        goodputCtx.restore();
+      }
+
+      const curResizeG = sim.resize.history.goodput[nResizeGp - 1] ?? 0;
+      const curPauseG = sim.pause.history.goodput[nPauseGp - 1] ?? 0;
+      const curMcjaxG = sim.mcjax.history.goodput[nMcjaxGp - 1] ?? 0;
+      goodputChartLegend.textContent = `McJAX: ${curMcjaxG.toFixed(1)}% | Resize: ${curResizeG.toFixed(1)}% | Pause: ${curPauseG.toFixed(1)}%`;
+    }
+
+    // Step Execution Loop for Workloads in Real Time
+    function executeTick() {
+      if (!sim.running) return;
+
+      const dt = sim.stepIntervalMs;
+
+      // 0. Visible Initial Startup Phase (Cold Start)
+      if (sim.isInitializing) {
+        sim.elapsedSec += dt / 1000.0;
+        sim.initRemainingMs -= dt;
+        sim.resize.unproductiveMs += dt;
+        sim.pause.unproductiveMs += dt;
+
+        sim.resize.history.timeSec.push(sim.elapsedSec);
+        sim.resize.history.loss.push(sim.resize.loss);
+        sim.resize.history.goodput.push(0.0);
+        sim.resize.history.step.push(0);
+
+        sim.pause.history.timeSec.push(sim.elapsedSec);
+        sim.pause.history.loss.push(sim.pause.loss);
+        sim.pause.history.goodput.push(0.0);
+        sim.pause.history.step.push(0);
+
+        sim.mcjax.unproductiveMs += dt;
+        sim.mcjax.history.timeSec.push(sim.elapsedSec);
+        sim.mcjax.history.loss.push(sim.mcjax.loss);
+        sim.mcjax.history.goodput.push(0.0);
+        sim.mcjax.history.step.push(0);
+
+        if (sim.initRemainingMs <= 0) {
+          sim.isInitializing = false;
+          sim.initRemainingMs = 0;
+        }
+
+        updateUI();
+        renderCharts();
+        return;
+      }
+
+      // 0b. Visible Snapshot Replica Resize Scale-Down (Post-Interrupt) Init Phase
+      if (sim.isScalingDown) {
+        sim.elapsedSec += dt / 1000.0;
+        sim.scaleDownRemainingMs -= dt;
+        if (!sim.resize.isFinished) sim.resize.unproductiveMs += dt;
+        if (!sim.pause.isFinished) {
+          sim.pause.unproductiveMs += dt;
+          sim.pause.downtimeMs += dt;
+        }
+        if (!sim.mcjax.isFinished) {
+          sim.mcjax.unproductiveMs += dt;
+          sim.mcjax.downtimeMs += dt;
+        }
+
+        const curResizeG = calcGoodput(sim.resize.forwardProgressMs, sim.resize.unproductiveMs);
+        const curPauseG = calcGoodput(sim.pause.forwardProgressMs, sim.pause.unproductiveMs);
+        const curMcjaxG = calcGoodput(sim.mcjax.forwardProgressMs, sim.mcjax.unproductiveMs);
+
+        sim.resize.history.timeSec.push(sim.elapsedSec);
+        sim.resize.history.loss.push(sim.resize.loss);
+        sim.resize.history.goodput.push(curResizeG);
+        sim.resize.history.step.push(sim.resize.step);
+
+        sim.pause.history.timeSec.push(sim.elapsedSec);
+        sim.pause.history.loss.push(sim.pause.loss);
+        sim.pause.history.goodput.push(curPauseG);
+        sim.pause.history.step.push(sim.pause.step);
+
+        sim.mcjax.history.timeSec.push(sim.elapsedSec);
+        sim.mcjax.history.loss.push(sim.mcjax.loss);
+        sim.mcjax.history.goodput.push(curMcjaxG);
+        sim.mcjax.history.step.push(sim.mcjax.step);
+
+        if (sim.scaleDownRemainingMs <= 0) {
+          sim.isScalingDown = false;
+          sim.scaleDownRemainingMs = 0;
+          sim.resize.inRecovery = false;
+        }
+
+        updateUI();
+        renderCharts();
+        return;
+      }
+
+      // 0c. Visible Snapshot Replica Resize Scale-Up Re-init Phase
+      if (sim.isScalingUp) {
+        sim.elapsedSec += dt / 1000.0;
+        sim.scaleUpRemainingMs -= dt;
+        if (!sim.resize.isFinished) sim.resize.unproductiveMs += dt;
+
+        const curResizeG = calcGoodput(sim.resize.forwardProgressMs, sim.resize.unproductiveMs);
+        sim.resize.history.timeSec.push(sim.elapsedSec);
+        sim.resize.history.loss.push(sim.resize.loss);
+        sim.resize.history.goodput.push(curResizeG);
+        sim.resize.history.step.push(sim.resize.step);
+
+        // Pause-Resume has 0s re-initialization time: immediately resumes active stepping upon reconnect!
+        if (!sim.pause.isFinished) {
+          if (sim.config.maxSteps > 0 && sim.pause.step >= sim.config.maxSteps) {
+            sim.pause.step = sim.config.maxSteps;
+            sim.pause.isFinished = true;
+            if (sim.pause.finishTimeSec === null) sim.pause.finishTimeSec = sim.elapsedSec;
+          } else {
+            const pauseStepNoise = (Math.random() - 0.5) * 0.001;
+            sim.pause.step++;
+            sim.pause.forwardProgressMs += dt * 1.0;
+            sim.pause.loss = calcExponentialLoss(sim.pause.step, pauseStepNoise);
+            if (sim.config.maxSteps > 0 && sim.pause.step >= sim.config.maxSteps) {
+              sim.pause.step = sim.config.maxSteps;
+              sim.pause.isFinished = true;
+              if (sim.pause.finishTimeSec === null) sim.pause.finishTimeSec = sim.elapsedSec;
+            }
+          }
+        }
+        const curPauseG = calcGoodput(sim.pause.forwardProgressMs, sim.pause.unproductiveMs);
+
+        sim.pause.history.timeSec.push(sim.elapsedSec);
+        sim.pause.history.loss.push(sim.pause.loss);
+        sim.pause.history.goodput.push(curPauseG);
+        sim.pause.history.step.push(sim.pause.step);
+
+        // McJAX re-initialization countdown runs
+        if (!sim.mcjax.isFinished) {
+          if (sim.mcjax.isReinitializing) {
+            sim.mcjax.reinitRemainingMs -= dt;
+            sim.mcjax.unproductiveMs += dt;
+            sim.mcjax.downtimeMs += dt;
+            if (sim.mcjax.reinitRemainingMs <= 0) {
+              sim.mcjax.isReinitializing = false;
+            }
+          }
+        }
+        const curMcjaxG = calcGoodput(sim.mcjax.forwardProgressMs, sim.mcjax.unproductiveMs);
+        sim.mcjax.history.timeSec.push(sim.elapsedSec);
+        sim.mcjax.history.loss.push(sim.mcjax.loss);
+        sim.mcjax.history.goodput.push(curMcjaxG);
+        sim.mcjax.history.step.push(sim.mcjax.step);
+
+        if (sim.scaleUpRemainingMs <= 0) {
+          sim.isScalingUp = false;
+          sim.scaleUpRemainingMs = 0;
+          sim.isReconnecting = false;
+          sim.resize.inRecovery = false;
+          sim.pause.inReload = false;
+        }
+
+        const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
+        if (allFinished) {
+          sim.running = false;
+          clearInterval(sim.timerId);
+          clearTimeout(sim.scenarioTimer);
+        }
+
+        updateUI();
+        renderCharts();
+        return;
+      }
+
+      // Normal active stepping tick
+      sim.elapsedSec += dt / 1000.0;
+      const stepNoise = (Math.random() - 0.5) * 0.001;
+
+      // 1. Advance Snapshot Replica Resize Workload
+      if (!sim.resize.isFinished) {
+        if (sim.config.maxSteps > 0 && sim.resize.step >= sim.config.maxSteps) {
+          sim.resize.step = sim.config.maxSteps;
+          sim.resize.isFinished = true;
+          if (sim.resize.finishTimeSec === null) sim.resize.finishTimeSec = sim.elapsedSec;
+        } else {
+          if (sim.resize.inRecovery) {
+            sim.resize.unproductiveMs += dt;
+          } else if (sim.isDisrupted) {
+            sim.resize.step++;
+            const degradedFactor = sim.config.degradedFactor;
+            sim.resize.forwardProgressMs += dt * degradedFactor;
+            sim.resize.effectiveSteps += degradedFactor;
+            sim.resize.loss = calcExponentialLoss(sim.resize.effectiveSteps, stepNoise);
+          } else {
+            sim.resize.step++;
+            sim.resize.forwardProgressMs += dt * 1.0;
+            sim.resize.effectiveSteps += 1.0;
+            sim.resize.loss = calcExponentialLoss(sim.resize.effectiveSteps, stepNoise);
+          }
+          if (sim.config.maxSteps > 0 && sim.resize.step >= sim.config.maxSteps) {
+            sim.resize.step = sim.config.maxSteps;
+            sim.resize.isFinished = true;
+            if (sim.resize.finishTimeSec === null) sim.resize.finishTimeSec = sim.elapsedSec;
+          }
+        }
+      }
+
+      const currentResizeG = calcGoodput(sim.resize.forwardProgressMs, sim.resize.unproductiveMs);
+      sim.resize.history.timeSec.push(sim.elapsedSec);
+      sim.resize.history.loss.push(sim.resize.loss);
+      sim.resize.history.goodput.push(currentResizeG);
+      sim.resize.history.step.push(sim.resize.step);
+
+      // 2. Advance Snapshot Pause Resume Workload
+      if (!sim.pause.isFinished) {
+        if (sim.config.maxSteps > 0 && sim.pause.step >= sim.config.maxSteps) {
+          sim.pause.step = sim.config.maxSteps;
+          sim.pause.isFinished = true;
+          if (sim.pause.finishTimeSec === null) sim.pause.finishTimeSec = sim.elapsedSec;
+        } else {
+          if (sim.pause.isPaused) {
+            sim.pause.unproductiveMs += dt;
+            sim.pause.downtimeMs += dt;
+          } else if (sim.pause.inReload) {
+            sim.pause.unproductiveMs += dt;
+            sim.pause.downtimeMs += dt;
+          } else {
+            sim.pause.step++;
+            sim.pause.forwardProgressMs += dt * 1.0;
+            sim.pause.loss = calcExponentialLoss(sim.pause.step, stepNoise);
+          }
+          if (sim.config.maxSteps > 0 && sim.pause.step >= sim.config.maxSteps) {
+            sim.pause.step = sim.config.maxSteps;
+            sim.pause.isFinished = true;
+            if (sim.pause.finishTimeSec === null) sim.pause.finishTimeSec = sim.elapsedSec;
+          }
+        }
+      }
+
+      const currentPauseG = calcGoodput(sim.pause.forwardProgressMs, sim.pause.unproductiveMs);
+      sim.pause.history.timeSec.push(sim.elapsedSec);
+      sim.pause.history.loss.push(sim.pause.loss);
+      sim.pause.history.goodput.push(currentPauseG);
+      sim.pause.history.step.push(sim.pause.step);
+
+      // 3. Advance McJAX Workload
+      if (!sim.mcjax.isFinished) {
+        if (sim.config.maxSteps > 0 && sim.mcjax.step >= sim.config.maxSteps) {
+          sim.mcjax.step = sim.config.maxSteps;
+          sim.mcjax.isFinished = true;
+          if (sim.mcjax.finishTimeSec === null) sim.mcjax.finishTimeSec = sim.elapsedSec;
+        } else {
+          if (sim.mcjax.isPaused) {
+            sim.mcjax.unproductiveMs += dt;
+            sim.mcjax.downtimeMs += dt;
+          } else if (sim.mcjax.isReinitializing) {
+            sim.mcjax.reinitRemainingMs -= dt;
+            sim.mcjax.unproductiveMs += dt;
+            sim.mcjax.downtimeMs += dt;
+            if (sim.mcjax.reinitRemainingMs <= 0) {
+              sim.mcjax.isReinitializing = false;
+            }
+          } else {
+            sim.mcjax.step++;
+            sim.mcjax.forwardProgressMs += dt * 1.0;
+            sim.mcjax.loss = calcExponentialLoss(sim.mcjax.step, stepNoise);
+            if (sim.mcjax.step % sim.config.mcjaxCkptInterval === 0) {
+              sim.mcjax.lastCheckpointStep = sim.mcjax.step;
+              sim.mcjax.lastCheckpointLoss = sim.mcjax.loss;
+              sim.mcjax.lastCheckpointForwardMs = sim.mcjax.forwardProgressMs;
+            }
+          }
+          if (sim.config.maxSteps > 0 && sim.mcjax.step >= sim.config.maxSteps) {
+            sim.mcjax.step = sim.config.maxSteps;
+            sim.mcjax.isFinished = true;
+            if (sim.mcjax.finishTimeSec === null) sim.mcjax.finishTimeSec = sim.elapsedSec;
+          }
+        }
+      }
+
+      const currentMcjaxG = calcGoodput(sim.mcjax.forwardProgressMs, sim.mcjax.unproductiveMs);
+      sim.mcjax.history.timeSec.push(sim.elapsedSec);
+      sim.mcjax.history.loss.push(sim.mcjax.loss);
+      sim.mcjax.history.goodput.push(currentMcjaxG);
+      sim.mcjax.history.step.push(sim.mcjax.step);
+
+      const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
+      if (allFinished) {
+        sim.running = false;
+        clearInterval(sim.timerId);
+        clearTimeout(sim.scenarioTimer);
+      }
+
+      updateUI();
+      renderCharts();
+    }
+
+    // Fault Injection: Interruption on a targeted logical Workload Slice (0 or 1)
+    function interruptWorkloadSlice(workloadIndex) {
+      const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
+      if (allFinished) return;
+      if (sim.isDisrupted || sim.isReconnecting || sim.isInitializing || sim.isScalingUp || sim.isScalingDown) return;
+      if (workloadIndex !== 0 && workloadIndex !== 1) return;
+
+      const targetTpuIndex = sim.workloadMapping[workloadIndex];
+      sim.isDisrupted = true;
+      sim.disruptedWorkloadIndex = workloadIndex;
+      sim.disruptedTpuIndex = targetTpuIndex;
+      sim.sliceStates[targetTpuIndex] = "disrupted";
+
+      // Strategy A (Snapshot Replica Resize): Post-interrupt initialization
+      if (sim.config.postInterruptInitSec > 0) {
+        sim.isScalingDown = true;
+        sim.scaleDownRemainingMs = sim.config.postInterruptInitSec * 1000;
+        sim.resize.inRecovery = true;
+      } else {
+        sim.isScalingDown = false;
+        sim.scaleDownRemainingMs = 0;
+        sim.resize.inRecovery = false;
+      }
+
+      // Strategy B (Snapshot Pause Resume): Enters indefinite pause wait
+      sim.pause.isPaused = true;
+
+      // Strategy C (McJAX): Enters indefinite pause wait
+      sim.mcjax.isPaused = true;
+      updateUI();
+    }
+
+    // Hardware Reconnect: Allocates a random inactive TPU slice to become the interrupted workload slice
+    function reconnectHardware() {
+      if (!sim.isDisrupted || sim.isScalingUp || sim.isScalingDown) return;
+      clearTimeout(sim.resize.recoveryTimer);
+
+      const interruptedWorkload = sim.disruptedWorkloadIndex !== null ? sim.disruptedWorkloadIndex : 0;
+      const survivingWorkload = 1 - interruptedWorkload;
+      const survivingTpu = sim.workloadMapping[survivingWorkload];
+      const prevDisruptedTpu = sim.disruptedTpuIndex;
+
+      // Find all inactive TPU slices (i.e. those not currently running the surviving workload)
+      // Prefer spare/standby slices in the pool; fallback to previously disrupted slice if no other spares
+      const availableInactive = [0, 1, 2, 3].filter(idx => idx !== survivingTpu && idx !== prevDisruptedTpu);
+      const candidatePool = availableInactive.length > 0 ? availableInactive : (prevDisruptedTpu !== null ? [prevDisruptedTpu] : [0, 1, 2, 3].filter(idx => idx !== survivingTpu));
+
+      // Randomly pick an inactive TPU slice from candidatePool
+      const chosenTpu = candidatePool[Math.floor(Math.random() * candidatePool.length)];
+
+      if (prevDisruptedTpu !== null && prevDisruptedTpu !== chosenTpu) {
+        sim.sliceStates[prevDisruptedTpu] = "standby";
+      }
+      sim.sliceStates[chosenTpu] = "active";
+      sim.workloadMapping[interruptedWorkload] = chosenTpu;
+      sim.disruptedWorkloadIndex = null;
+      sim.disruptedTpuIndex = null;
+      sim.isDisrupted = false;
+
+      // Strategy A: Snapshot Replica Resize enters scale-up re-init
+      if (sim.config.scaleUpInitSec > 0) {
+        sim.isScalingUp = true;
+        sim.scaleUpRemainingMs = sim.config.scaleUpInitSec * 1000;
+        sim.isReconnecting = true;
+        sim.resize.inRecovery = true;
+      } else {
+        sim.isScalingUp = false;
+        sim.scaleUpRemainingMs = 0;
+        sim.isReconnecting = false;
+        sim.resize.inRecovery = false;
+      }
+
+      // Strategy B: Snapshot Pause Resume resumes immediately with 0s re-init
+      sim.pause.isPaused = false;
+      sim.pause.inReload = false;
+
+      // Strategy C: McJAX undoes to most recent checkpoint step and enters reinitialization
+      sim.mcjax.isPaused = false;
+      if (sim.config.coldStartInitSec > 0) {
+        sim.mcjax.isReinitializing = true;
+        sim.mcjax.reinitRemainingMs = sim.config.coldStartInitSec * 1000;
+      } else {
+        sim.mcjax.isReinitializing = false;
+        sim.mcjax.reinitRemainingMs = 0;
+      }
+      const ckptInterval = Math.max(1, sim.config.mcjaxCkptInterval);
+      const rollbackStep = Math.floor(sim.mcjax.step / ckptInterval) * ckptInterval;
+      const lostSteps = sim.mcjax.step - rollbackStep;
+      sim.mcjax.step = rollbackStep;
+      if (sim.mcjax.lastCheckpointLoss != null && sim.mcjax.lastCheckpointStep === rollbackStep) {
+        sim.mcjax.loss = sim.mcjax.lastCheckpointLoss;
+      } else {
+        sim.mcjax.loss = calcExponentialLoss(rollbackStep, 0);
+      }
+      const lostComputeMs = lostSteps * sim.stepIntervalMs;
+      sim.mcjax.forwardProgressMs = Math.max(0, sim.mcjax.forwardProgressMs - lostComputeMs);
+      sim.mcjax.unproductiveMs += lostComputeMs;
+
+      updateUI();
+    }
+
+    // Button Handlers
+    btnToggleRun.addEventListener("click", () => {
+      const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
+      if (allFinished) {
+        resetSimulation();
+      }
+      sim.running = !sim.running;
+      if (sim.running) {
+        syncParamsFromInputs();
+        if (sim.elapsedSec === 0 && !sim.isInitializing && sim.config.coldStartInitSec > 0) {
+          sim.isInitializing = true;
+          sim.initRemainingMs = sim.config.coldStartInitSec * 1000;
+        }
+        sim.timerId = setInterval(executeTick, sim.stepIntervalMs);
+      } else {
+        clearInterval(sim.timerId);
+      }
+      updateUI();
+    });
+
+    btnInterruptSlice0.addEventListener("click", () => {
+      interruptWorkloadSlice(0);
+    });
+
+    btnInterruptSlice1.addEventListener("click", () => {
+      interruptWorkloadSlice(1);
+    });
+
+    btnRestoreSlice1.addEventListener("click", () => {
+      reconnectHardware();
+    });
+
+    // Run Interruption Benchmark Scenario (Automated 1-Click Demonstration)
+    btnScenario.addEventListener("click", () => {
+      resetSimulation();
+      syncParamsFromInputs();
+      sim.running = true;
+      if (sim.config.coldStartInitSec > 0) {
+        sim.isInitializing = true;
+        sim.initRemainingMs = sim.config.coldStartInitSec * 1000;
+      }
+      sim.timerId = setInterval(executeTick, sim.stepIntervalMs);
+      updateUI();
+
+      // Automatically inject interruption at 10.0s (healthy dual-slice training baseline)
+      clearTimeout(sim.scenarioTimer);
+      sim.scenarioTimer = setTimeout(() => {
+        if (!sim.running) return;
+        interruptWorkloadSlice(1);
+
+        // Automatically reconnect a slice after faultDurationSec
+        sim.scenarioTimer = setTimeout(() => {
+          if (!sim.running) return;
+          reconnectHardware();
+        }, sim.config.faultDurationSec * 1000);
+      }, 10000);
+    });
+
+    function resetSimulation() {
+      clearInterval(sim.timerId);
+      clearTimeout(sim.scenarioTimer);
+      clearTimeout(sim.resize.recoveryTimer);
+
+      sim.running = false;
+      sim.elapsedSec = 0;
+      sim.isInitializing = false;
+      sim.initRemainingMs = 0;
+      sim.isScalingDown = false;
+      sim.scaleDownRemainingMs = 0;
+      sim.isScalingUp = false;
+      sim.scaleUpRemainingMs = 0;
+
+      sim.workloadMapping = [0, 1];
+      sim.sliceStates = ["active", "active", "standby", "standby"];
+      sim.disruptedWorkloadIndex = null;
+      sim.disruptedTpuIndex = null;
+      sim.isDisrupted = false;
+      sim.isReconnecting = false;
+
+      const baseL = sim.config.baseLoss || 6.85;
+
+      sim.resize.step = 0;
+      sim.resize.effectiveSteps = 0;
+      sim.resize.loss = baseL;
+      sim.resize.forwardProgressMs = 0;
+      sim.resize.unproductiveMs = 0;
+      sim.resize.isFinished = false;
+      sim.resize.finishTimeSec = null;
+      sim.resize.inRecovery = false;
+      sim.resize.history = {
+        timeSec: [0],
+        loss: [baseL],
+        goodput: [0.0],
+        step: [0]
+      };
+
+      sim.pause.step = 0;
+      sim.pause.loss = baseL;
+      sim.pause.forwardProgressMs = 0;
+      sim.pause.unproductiveMs = 0;
+      sim.pause.isPaused = false;
+      sim.pause.inReload = false;
+      sim.pause.isFinished = false;
+      sim.pause.finishTimeSec = null;
+      sim.pause.downtimeMs = 0;
+      sim.pause.history = {
+        timeSec: [0],
+        loss: [baseL],
+        goodput: [0.0],
+        step: [0]
+      };
+
+      sim.mcjax.step = 0;
+      sim.mcjax.loss = baseL;
+      sim.mcjax.forwardProgressMs = 0;
+      sim.mcjax.unproductiveMs = 0;
+      sim.mcjax.isPaused = false;
+      sim.mcjax.isReinitializing = false;
+      sim.mcjax.reinitRemainingMs = 0;
+      sim.mcjax.isFinished = false;
+      sim.mcjax.finishTimeSec = null;
+      sim.mcjax.downtimeMs = 0;
+      sim.mcjax.lastCheckpointStep = 0;
+      sim.mcjax.lastCheckpointLoss = baseL;
+      sim.mcjax.lastCheckpointForwardMs = 0;
+      sim.mcjax.history = {
+        timeSec: [0],
+        loss: [baseL],
+        goodput: [0.0],
+        step: [0]
+      };
+
+      updateUI();
+      renderCharts();
+    }
+
+    btnReset.addEventListener("click", resetSimulation);
+
+    // Initial Load
+    resizeCanvases();
+    syncParamsFromInputs();
+    updateUI();
+  </script>
+</body>
+</html>
