@@ -12,8 +12,7 @@ both an interactive browser-based simulation and a live Google Kubernetes Engine
 without requiring a live cluster.
 
 * [Hosted GitHub Pages Simulation](https://ai-hypercomputer.github.io/pathways-utils/pathwaysutils/extras/elastic/model_comparison.html)
-  provides a live interactive web application with simulation controls, or
-  [HTMLPreview Instant Mirror](https://htmlpreview.github.io/?https://github.com/AI-Hypercomputer/pathways-utils/blob/main/pathwaysutils/extras/elastic/model_comparison.html).
+  provides a live interactive web application with simulation controls.
 * Local browser viewing allows running `model_comparison.html` directly on your workstation by opening the file in Chrome, Firefox, or Safari, requiring zero installation or server dependencies.
 
 ### Recovery Paradigms Compared
