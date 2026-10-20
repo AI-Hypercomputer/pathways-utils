@@ -62,7 +62,8 @@ the demo page. Every command below runs from your workstation.
 
 * A GKE cluster with the [JobSet](https://jobset.sigs.k8s.io/) controller
   installed and TPU node pools for the slices you want to run (the base YAML
-  asks for two `tpuv5e` `4x8` slices plus two spares). Anything else about the
+  asks for two `tpuv5e` `4x8` slices; any additional idle pools of the same
+  shape are discovered automatically and shown as spares). Anything else about the
   cluster, such as Kueue, a dedicated CPU node pool for the head pod, custom
   tolerations, or a workload service account, is handled by editing the YAML
   in step 4.
@@ -97,7 +98,7 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
   --image=REGION-docker.pkg.dev/PROJECT/REPO/elastic-demo:latest \
   --render-only elastic_demo.yaml \
   --gcs-scratch=gs://BUCKET/elastic-demo/ \
-  --tpu-type=tpuv5e --topology=4x8 --num-slices=2 --standby-slices=2
+  --tpu-type=tpuv5e --topology=4x8 --num-slices=2
 ```
 
 This builds `pathwaysutils/extras/elastic/Dockerfile` with Cloud Build, pushes
@@ -176,7 +177,11 @@ monitor-only mode and attaches to the JobSet that is already running.
 * Step 3 detects the JobSet once the head pod is running, then lets you start
   or pause training, inject real node preemptions (`kubectl cordon` +
   `drain`) or in-workload fault signals, and watch step, loss, goodput, and
-  slice topology update live from the head pod logs.
+  slice topology update live from the head pod logs. The Physical Cluster
+  panel lists the TPU node pools that match your slice shape by name, read
+  from `cloud.google.com/gke-nodepool`, and shows which pool each workload
+  slice is actually running on, which pools are idle spares, and which are
+  busy with another workload.
 
 The head pod waits for the Start button (`--wait_for_start_signal=true`), so
 nothing trains until you click it.
@@ -202,7 +207,7 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
   --build-image \
   --image=REGION-docker.pkg.dev/PROJECT/REPO/elastic-demo:latest \
   --gcs-scratch=gs://BUCKET/elastic-demo/ \
-  --tpu-type=tpuv5e --topology=4x8 --num-slices=2 --standby-slices=2
+  --tpu-type=tpuv5e --topology=4x8 --num-slices=2
 ```
 
 #### Useful flags
@@ -213,7 +218,7 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
 | `--image`, `--build-image`, `--builder`, `--project` | Workload image and how to build it. |
 | `--server-image`, `--proxy-image` | Pathways server and proxy images (default to the public `cloud-tpu-v2-images/pathways` images). |
 | `--gcs-scratch` | Pathways GCS scratch location (required to render a deployable YAML). |
-| `--tpu-type`, `--topology`, `--num-slices`, `--standby-slices` | Slice shape and counts in the rendered YAML. |
+| `--tpu-type`, `--topology`, `--num-slices` | Slice shape and count in the rendered YAML. Spare node pools are not configured; the bridge discovers every pool with matching accelerator and topology labels and marks each as active (yours), spare, busy (hosting another workload's TPU pods), or cordoned. |
 | `--total-steps`, `--elasticity-mode` | Workload length and recovery strategy in the rendered YAML. |
 | `--orbax-ref` | Git ref of `google/orbax` installed in the head pod (default `main`; the demo needs an unreleased snapshot feature). |
 | `--kueue-queue`, `--cpu-nodepool` | Convenience flags that add the Kueue queue label or head pod `nodeSelector` to the rendered YAML, equivalent to the manual edits above. |

@@ -507,10 +507,10 @@
             </div>
 
             <div class="space-y-1">
-              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Active Slices (N) &amp; Spare (M)</label>
+              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Active Slices (N)</label>
               <div class="flex gap-1.5 items-center">
                 <input id="cfgNumSlices" type="number" min="1" max="16" value="2" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" title="Active JobSet Worker Slices" />
-                <input id="cfgStandbySlices" type="number" min="0" max="16" value="2" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" title="Spare TPU Slices in Cluster" />
+                <span id="cfgSparePoolsLabel" class="w-1/2 text-[10px] text-[var(--muted-foreground)] font-mono" title="Idle TPU node pools matching this type and topology, discovered from the cluster">spare pools: discovering...</span>
               </div>
             </div>
 
@@ -881,14 +881,15 @@
       namespace: "default",
       jobsetName: "elastic-demo",
       numSlices: 2,
-      standbySlices: 2,
+      tpuPools: [],
       tpuType: "tpuv5e",
       topology: "4x8",
       chipsPerSlice: 32,
       vmsPerSlice: 8,
       mode: "step_snapshot_replica_resize",
-      sliceStates: ["active", "active", "standby", "standby"],
+      sliceStates: ["active", "active"],
       slotRacks: [0, 1],
+      renderedRackKey: "",
       slotActive: [true, true],
       disruptedSlot: null,
       disruptedRack: null,
@@ -998,7 +999,7 @@
     const cfgKueueQueue = document.getElementById("cfgKueueQueue");
     const cfgCpuNodepool = document.getElementById("cfgCpuNodepool");
     const cfgNumSlices = document.getElementById("cfgNumSlices");
-    const cfgStandbySlices = document.getElementById("cfgStandbySlices");
+    const cfgSparePoolsLabel = document.getElementById("cfgSparePoolsLabel");
     const cfgTpuType = document.getElementById("cfgTpuType");
     const cfgTopology = document.getElementById("cfgTopology");
     const cfgTopologyComputed = document.getElementById("cfgTopologyComputed");
@@ -1243,7 +1244,6 @@
       cfgKueueQueue,
       cfgCpuNodepool,
       cfgNumSlices,
-      cfgStandbySlices,
       cfgTpuType,
       cfgTopology,
       cfgTotalSteps,
@@ -1273,7 +1273,6 @@
       const p = cfgPresetSelector.value;
       if (p === "replica_resize_default") {
         cfgNumSlices.value = 2;
-        cfgStandbySlices.value = 2;
         cfgTpuType.value = "tpuv5e";
         cfgTopology.value = "4x8";
         cfgElasticityMode.value = "step_snapshot_replica_resize";
@@ -1281,7 +1280,6 @@
         updateTopologyPreview();
       } else if (p === "pause_resume_default") {
         cfgNumSlices.value = 2;
-        cfgStandbySlices.value = 2;
         cfgTpuType.value = "tpuv5e";
         cfgTopology.value = "4x8";
         cfgElasticityMode.value = "step_snapshot_pause_resume";
@@ -1289,7 +1287,6 @@
         updateTopologyPreview();
       } else if (p === "checkpoint_resize_default") {
         cfgNumSlices.value = 2;
-        cfgStandbySlices.value = 2;
         cfgTpuType.value = "tpuv5e";
         cfgTopology.value = "4x8";
         cfgElasticityMode.value = "step_checkpoint_replica_resize";
@@ -1425,7 +1422,6 @@
       cfgKueueQueue.value = cfg.kueue_queue_name !== undefined ? cfg.kueue_queue_name : "";
       cfgCpuNodepool.value = cfg.cpu_nodepool !== undefined ? cfg.cpu_nodepool : "";
       cfgNumSlices.value = cfg.num_slices || 2;
-      cfgStandbySlices.value = cfg.standby_slices !== undefined ? cfg.standby_slices : 2;
       cfgTpuType.value = cfg.tpu_type || "tpuv5e";
       cfgTopology.value = cfg.topology || "4x8";
       cfgElasticityMode.value = cfg.elasticity_mode || "step_snapshot_replica_resize";
@@ -1463,7 +1459,6 @@
         kueue_queue_name: cfgKueueQueue.value.trim(),
         cpu_nodepool: cfgCpuNodepool.value.trim(),
         num_slices: parseInt(cfgNumSlices.value, 10) || 2,
-        standby_slices: parseInt(cfgStandbySlices.value, 10) >= 0 ? parseInt(cfgStandbySlices.value, 10) : 2,
         tpu_type: cfgTpuType.value.trim() || "tpuv5e",
         topology: cfgTopology.value.trim() || "4x8",
         elasticity_mode: cfgElasticityMode.value.trim(),
@@ -1482,15 +1477,12 @@
     function applyConfigToState(cfg) {
       if (!cfg) return;
       const newNumSlices = parseInt(cfg.num_slices, 10) || 2;
-      const newStandbySlices = cfg.standby_slices !== undefined ? parseInt(cfg.standby_slices, 10) : 2;
-      const topologyChanged =
-        newNumSlices !== state.numSlices || newStandbySlices !== state.standbySlices;
+      const topologyChanged = newNumSlices !== state.numSlices;
 
       state.clusterContext = cfg.cluster_context || state.clusterContext;
       state.namespace = cfg.namespace || "default";
       state.jobsetName = cfg.jobset_name || "elastic-demo";
       state.numSlices = newNumSlices;
-      state.standbySlices = newStandbySlices;
       state.tpuType = cfg.tpu_type || "tpuv5e";
       state.topology = cfg.topology || "4x8";
       state.chipsPerSlice = cfg.chips_per_slice || computeChipsFromTopo(state.topology).chips;
@@ -1507,10 +1499,38 @@
       }
     }
 
+    function totalRackCount() {
+      return Math.max(state.numSlices, state.tpuPools.length);
+    }
+
+    function rackLabel(i) {
+      const pool = state.tpuPools[i];
+      return pool ? pool.name : `TPU SLICE ${i}`;
+    }
+
+    // Maps each workload slice to the node pool that currently hosts its
+    // worker pods, using the pool occupancy reported by the bridge.
+    function syncRacksFromPools(pools) {
+      state.tpuPools = Array.isArray(pools) ? pools : [];
+      const spare = state.tpuPools.filter(p => p.state === "standby").length;
+      const busy = state.tpuPools.filter(p => p.state === "busy").length;
+      if (cfgSparePoolsLabel) {
+        cfgSparePoolsLabel.textContent = state.tpuPools.length
+          ? `spare pools: ${spare}${busy ? ` (${busy} busy)` : ""}`
+          : "spare pools: none found";
+      }
+      state.tpuPools.forEach((pool, idx) => {
+        if (pool.state === "active" && Number.isInteger(pool.slice) && pool.slice < state.numSlices) {
+          state.slotRacks[pool.slice] = idx;
+        }
+      });
+      ensureDynamicDomBuilt();
+      syncRackStates();
+    }
+
     function initDynamicSliceTopology() {
       const n = state.numSlices;
-      const m = state.standbySlices;
-      const totalRacks = Math.max(n, n + m);
+      const totalRacks = totalRackCount();
       state.slotRacks = Array.from({ length: n }, (_, i) => i);
       state.slotActive = Array.from({ length: n }, () => true);
       state.activeIndices = [...state.slotRacks];
@@ -1524,13 +1544,14 @@
 
     function ensureDynamicDomBuilt() {
       const n = state.numSlices;
-      const m = state.standbySlices;
-      const totalRacks = Math.max(n, n + m);
-      if (state.renderedNumSlices === n && state.renderedTotalRacks === totalRacks) {
+      const totalRacks = totalRackCount();
+      const rackKey = state.tpuPools.map(p => p.name).join("|");
+      if (state.renderedNumSlices === n && state.renderedTotalRacks === totalRacks && state.renderedRackKey === rackKey) {
         return;
       }
       state.renderedNumSlices = n;
       state.renderedTotalRacks = totalRacks;
+      state.renderedRackKey = rackKey;
       logicalSlicesHeaderLabel.textContent = `Logical Workload Slices (${n}-Slice Mesh)`;
 
       // Build Interrupt Workload Slice buttons
@@ -1575,7 +1596,7 @@
           <div class="flex items-center justify-between gap-1 h-5 shrink-0">
             <div id="rackSlice${i}Badge" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0">
               <span id="rackSlice${i}Dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span id="rackSlice${i}Text">TPU SLICE ${i}</span>
+              <span id="rackSlice${i}Text">${rackLabel(i)}</span>
             </div>
             <span id="rackSlice${i}RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">${i < n ? "Active Slice" : "Spare Slice"}</span>
           </div>
@@ -1809,8 +1830,12 @@
 
     function syncRackStates() {
       const n = state.numSlices;
-      const totalRacks = Math.max(n, n + state.standbySlices);
-      const nextStates = Array.from({ length: totalRacks }, () => "standby");
+      const totalRacks = totalRackCount();
+      const nextStates = Array.from({ length: totalRacks }, (_, i) => {
+        const pool = state.tpuPools[i];
+        if (pool && (pool.state === "busy" || pool.state === "cordoned")) return pool.state;
+        return "standby";
+      });
       for (let s = 0; s < n; s++) {
         const r = state.slotRacks[s] ?? s;
         if (state.slotActive[s]) {
@@ -1941,7 +1966,7 @@
           rackEl.className = "slice-card tpu-slice-card active flex flex-col justify-between";
           if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0";
           if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse";
-          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (textEl) textEl.textContent = rackLabel(i);
           if (roleBadgeEl) {
             roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold";
             roleBadgeEl.textContent = "Active Slice";
@@ -1954,7 +1979,7 @@
           rackEl.className = "slice-card tpu-slice-card disrupted flex flex-col justify-between";
           if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-rose-400 shrink-0";
           if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping";
-          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (textEl) textEl.textContent = rackLabel(i);
           if (roleBadgeEl) {
             roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold";
             roleBadgeEl.textContent = "Interrupted Slice";
@@ -1963,11 +1988,26 @@
             footerEl.className = "tpu-footer text-[10px] text-rose-300 font-semibold";
             footerEl.textContent = state.disruptedSlot !== null ? `Interrupted (Workload Slice ${state.disruptedSlot})` : "Interrupted Slice";
           }
+        } else if (st === "busy" || st === "cordoned") {
+          const pool = state.tpuPools[i] || {};
+          const isBusy = st === "busy";
+          rackEl.className = "slice-card tpu-slice-card inactive flex flex-col justify-between opacity-70";
+          if (badgeEl) badgeEl.className = `flex items-center gap-1.5 text-xs font-bold ${isBusy ? "text-amber-400" : "text-zinc-400"} shrink-0`;
+          if (dotEl) dotEl.className = `w-1.5 h-1.5 rounded-full ${isBusy ? "bg-amber-400" : "bg-zinc-500"}`;
+          if (textEl) textEl.textContent = rackLabel(i);
+          if (roleBadgeEl) {
+            roleBadgeEl.className = `tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded ${isBusy ? "bg-amber-500/10 text-amber-400" : "bg-zinc-500/10 text-zinc-400"} font-semibold`;
+            roleBadgeEl.textContent = isBusy ? "Busy" : "Cordoned";
+          }
+          if (footerEl) {
+            footerEl.className = `tpu-footer text-[10px] ${isBusy ? "text-amber-300" : "text-zinc-400"} font-medium`;
+            footerEl.textContent = isBusy ? `In use by ${pool.owner || "another workload"}` : "All nodes cordoned";
+          }
         } else {
           rackEl.className = "slice-card tpu-slice-card inactive flex flex-col justify-between";
           if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-zinc-400 shrink-0";
           if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-zinc-500";
-          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (textEl) textEl.textContent = rackLabel(i);
           if (roleBadgeEl) {
             roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-400 font-semibold";
             roleBadgeEl.textContent = "Spare Slice";
@@ -2226,6 +2266,7 @@
       state.goodput = snap.current_goodput || 0.0;
       state.headPodName = snap.head_pod_name || "";
       state.workerPods = snap.worker_pods || [];
+      if (Array.isArray(snap.tpu_pools)) syncRacksFromPools(snap.tpu_pools);
 
       const n = state.numSlices;
       if (snap.active_slices && snap.active_slices.length < n) {
@@ -2405,24 +2446,7 @@
       if (slotIdx === null || state.activeSliceCount >= state.numSlices || state.isReconnecting || state.slotActive[slotIdx]) return;
 
       const mechanism = mechanismSelector.value;
-      const previousDisruptedRack = state.disruptedRack !== null ? state.disruptedRack : state.slotRacks[slotIdx];
-      const otherActiveRacks = new Set(state.slotRacks.filter((_, i) => i !== slotIdx && state.slotActive[i]));
-      let newSelectedRack = previousDisruptedRack;
-
-      if (mechanism === "k8s" && state.standbySlices > 0) {
-        const totalRacks = state.numSlices + state.standbySlices;
-        const candidates = [];
-        for (let cand = 0; cand < totalRacks; cand++) {
-          if (cand !== previousDisruptedRack && !otherActiveRacks.has(cand)) {
-            candidates.push(cand);
-          }
-        }
-        if (candidates.length > 0) {
-          newSelectedRack = candidates[Math.floor(Math.random() * candidates.length)];
-        }
-      }
-
-      state.slotRacks[slotIdx] = newSelectedRack;
+      const newSelectedRack = state.disruptedRack !== null ? state.disruptedRack : state.slotRacks[slotIdx];
       state.slotActive[slotIdx] = true;
       state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
       state.disruptedSlot = null;
@@ -2437,7 +2461,7 @@
         "scaleup",
         mechanism === "k8s" ? "Allocating Replacement Slice" : `Reconnecting Workload Slice ${slotIdx}`,
         mechanism === "k8s"
-          ? `Uncordoning GKE node & allocating TPU Slice ${newSelectedRack} from hardware pool for Workload Slice ${slotIdx}...`
+          ? `Uncordoning GKE node; Kubernetes will place Workload Slice ${slotIdx} on a free TPU node pool...`
           : `Sending reconnect signal via Port 8090 RPC to restore Workload Slice ${slotIdx} on TPU Slice ${newSelectedRack}...`
       );
       highlightStage(3);
@@ -2445,7 +2469,7 @@
         "INFO",
         mechanism === "k8s" ? "GKEBridge" : "FaultInjector",
         mechanism === "k8s"
-          ? `Uncordoning GKE node to schedule replacement worker pod on TPU Slice ${newSelectedRack} for Workload Slice ${slotIdx}...`
+          ? `Uncordoning GKE node to schedule replacement worker pods for Workload Slice ${slotIdx}; placement is read back from the cluster...`
           : `Sending in-workload reconnect signal via Port 8090 RPC for Workload Slice ${slotIdx} (TPU Slice ${newSelectedRack})...`
       );
       updateUI();
@@ -2489,6 +2513,9 @@
             applyConfigToState(data.config);
           }
           if (data.snapshot) applySnapshot(data.snapshot);
+        } else if (data.type === "tpu_pools") {
+          syncRacksFromPools(data.tpu_pools);
+          updateUI();
         } else if (data.type === "reset" || data.type === "deleted" || data.type === "launched") {
           if (data.type === "deleted") {
             logContainer.innerHTML = "";
@@ -2651,6 +2678,7 @@
         const snap = await res.json();
         state.headPodName = snap.head_pod_name || "";
         state.workerPods = snap.worker_pods || [];
+        if (Array.isArray(snap.tpu_pools)) syncRacksFromPools(snap.tpu_pools);
         if (snap.jobset_status === "IDLE" && state.jobsetStatus !== "IDLE") {
           state.jobsetStatus = "IDLE";
           state.running = false;

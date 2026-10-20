@@ -204,7 +204,6 @@ def default_config() -> dict[str, Any]:
       "jobset_name": DEFAULT_JOBSET_NAME,
       "kueue_queue_name": DEFAULT_KUEUE_QUEUE,
       "num_slices": 2,
-      "standby_slices": 2,
       "tpu_type": "tpuv5e",
       "topology": "4x8",
       "chips_per_slice": topo_specs["chips_per_slice"],
@@ -396,6 +395,111 @@ def _uncordon_all_tpu_nodes(
       )
 
 
+def _pod_requests_tpu(pod: dict[str, Any]) -> bool:
+  """Returns True if any container in the pod requests google.com/tpu."""
+  spec = pod.get("spec", {})
+  for container in spec.get("containers", []) + spec.get("initContainers", []):
+    limits = container.get("resources", {}).get("limits", {})
+    if "google.com/tpu" in limits:
+      return True
+  return False
+
+
+def _fetch_tpu_pools(
+    cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+  """Discovers TPU node pools matching the configured slice shape and who uses them.
+
+  Each entry is `{"name", "nodes", "state", "slice", "owner"}` where `state`
+  is one of `active` (hosts one of this JobSet's worker slices), `busy`
+  (hosts TPU pods from some other workload), `cordoned` (every node is
+  unschedulable), or `standby` (idle and schedulable).
+  """
+  ctx = cfg["cluster_context"]
+  ns = cfg["namespace"]
+  js_name = cfg["jobset_name"]
+  topo = compute_topology_specs(cfg["tpu_type"], cfg["topology"])
+  selector = (
+      f"cloud.google.com/gke-tpu-accelerator={topo['accelerator']},"
+      f"cloud.google.com/gke-tpu-topology={topo['topology']}"
+  )
+  nodes_proc = subprocess.run(
+      _kubectl_cmd(
+          "get", "nodes", "-l", selector, "-o", "json",
+          context=ctx, include_ns=False,
+      ),
+      capture_output=True,
+      text=True,
+      check=False,
+  )
+  if nodes_proc.returncode != 0:
+    return []
+  pools: dict[str, dict[str, Any]] = {}
+  node_to_pool: dict[str, str] = {}
+  for node in json.loads(nodes_proc.stdout).get("items", []):
+    meta = node.get("metadata", {})
+    pool_name = meta.get("labels", {}).get("cloud.google.com/gke-nodepool", "")
+    if not pool_name:
+      continue
+    pool = pools.setdefault(
+        pool_name,
+        {
+            "name": pool_name,
+            "nodes": 0,
+            "cordoned_nodes": 0,
+            "state": "standby",
+            "slice": None,
+            "owner": "",
+        },
+    )
+    pool["nodes"] += 1
+    if node.get("spec", {}).get("unschedulable"):
+      pool["cordoned_nodes"] += 1
+    node_to_pool[meta.get("name", "")] = pool_name
+  if not pools:
+    return []
+
+  pods_proc = subprocess.run(
+      _kubectl_cmd(
+          "get",
+          "pods",
+          "--all-namespaces",
+          "--field-selector=status.phase!=Succeeded,status.phase!=Failed",
+          "-o",
+          "json",
+          context=ctx,
+          include_ns=False,
+      ),
+      capture_output=True,
+      text=True,
+      check=False,
+  )
+  if pods_proc.returncode == 0:
+    for pod in json.loads(pods_proc.stdout).get("items", []):
+      node_name = pod.get("spec", {}).get("nodeName", "")
+      pool_name = node_to_pool.get(node_name, "")
+      if not pool_name or not _pod_requests_tpu(pod):
+        continue
+      meta = pod.get("metadata", {})
+      labels = meta.get("labels", {})
+      pod_ns = meta.get("namespace", "")
+      pod_jobset = labels.get("jobset.sigs.k8s.io/jobset-name", "")
+      pool = pools[pool_name]
+      if pod_ns == ns and pod_jobset == js_name:
+        job_idx = labels.get("jobset.sigs.k8s.io/job-index", "")
+        pool["state"] = "active"
+        pool["slice"] = int(job_idx) if job_idx.isdigit() else None
+        pool["owner"] = f"{ns}/{js_name}"
+      elif pool["state"] != "active":
+        pool["state"] = "busy"
+        pool["owner"] = f"{pod_ns}/{pod_jobset or meta.get('name', '')}"
+
+  for pool in pools.values():
+    if pool["state"] == "standby" and pool["cordoned_nodes"] == pool["nodes"]:
+      pool["state"] = "cordoned"
+  return sorted(pools.values(), key=lambda p: p["name"])
+
+
 def _merge_config_dict(
     base_cfg: dict[str, Any], updates: dict[str, Any]
 ) -> dict[str, Any]:
@@ -423,7 +527,6 @@ def _merge_config_dict(
 
   for int_key, min_val, max_val in (
       ("num_slices", 1, 16),
-      ("standby_slices", 0, 16),
       ("total_steps", 1, 1000000),
   ):
     if int_key in updates and updates[int_key] is not None:
@@ -479,7 +582,7 @@ class BridgeState:
     self.current_step: int = 0
     self.total_steps: int = self.config["total_steps"]
     self.total_slices: int = self.config["num_slices"]
-    self.standby_slices: int = self.config["standby_slices"]
+    self.tpu_pools: list[dict[str, Any]] = []
     self.active_slices: list[int] = list(range(self.total_slices))
     self.inactive_slices: list[int] = []
 
@@ -503,7 +606,6 @@ class BridgeState:
       self.config = _merge_config_dict(self.config, updates)
       self.total_steps = self.config["total_steps"]
       self.total_slices = self.config["num_slices"]
-      self.standby_slices = self.config["standby_slices"]
       if not self.training_running and self.jobset_status in (
           "IDLE",
           "READY",
@@ -555,7 +657,6 @@ class BridgeState:
       self.log_buffer.clear()
       self.current_step = 0
       self.total_slices = self.config["num_slices"]
-      self.standby_slices = self.config["standby_slices"]
       self.total_steps = self.config["total_steps"]
       self.active_slices = list(range(self.total_slices))
       self.inactive_slices = []
@@ -585,7 +686,6 @@ class BridgeState:
       self.log_buffer.clear()
       self.current_step = 0
       self.total_slices = self.config["num_slices"]
-      self.standby_slices = self.config["standby_slices"]
       self.active_slices = list(range(self.total_slices))
       self.inactive_slices = []
       self.start_wall_time = None
@@ -614,7 +714,6 @@ class BridgeState:
       self.goodput_history.clear()
       self.current_step = 0
       self.total_slices = self.config["num_slices"]
-      self.standby_slices = self.config["standby_slices"]
       self.active_slices = list(range(self.total_slices))
       self.inactive_slices = []
       self.start_wall_time = None
@@ -651,7 +750,10 @@ class BridgeState:
           "active_slices": list(self.active_slices),
           "inactive_slices": list(self.inactive_slices),
           "total_slices": self.total_slices,
-          "standby_slices": self.standby_slices,
+          "standby_slices": sum(
+              1 for p in self.tpu_pools if p["state"] == "standby"
+          ),
+          "tpu_pools": json.loads(json.dumps(self.tpu_pools)),
           "current_goodput": round(self.current_goodput, 2),
           "last_loss": self.last_loss,
           "current_event": self.current_event,
@@ -670,16 +772,33 @@ class ClusterPoller(threading.Thread):
   def __init__(self, bridge_state: BridgeState):
     super().__init__(daemon=True)
     self.bridge_state = bridge_state
+    self._cycle = 0
 
   def run(self) -> None:
     _logger.info("Cluster poller started.")
     while not self.bridge_state.stopped:
       try:
         self._poll_cluster()
+        if self._cycle % 4 == 0:
+          self._poll_tpu_pools()
         self._tick_recovery_goodput()
       except (OSError, subprocess.SubprocessError, ValueError, KeyError) as e:
         _logger.debug("Cluster poll error: %s", e)
+      self._cycle += 1
       time.sleep(1.5)
+
+  def _poll_tpu_pools(self) -> None:
+    """Refreshes TPU node pool occupancy and broadcasts it when it changes."""
+    pools = _fetch_tpu_pools(self.bridge_state.get_config())
+    with self.bridge_state.lock:
+      changed = pools != self.bridge_state.tpu_pools
+      self.bridge_state.tpu_pools = pools
+    if changed:
+      self.bridge_state.broadcast({
+          "type": "tpu_pools",
+          "tpu_pools": pools,
+          "snapshot": self.bridge_state.get_snapshot(),
+      })
 
   def _tick_recovery_goodput(self) -> None:
     """Updates declining goodput during fault disruption or recovery pauses."""
@@ -2455,6 +2574,9 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
         topologies.add(topo)
 
     cpu_nodes = total_nodes - tpu_nodes
+    pools = _fetch_tpu_pools(updated_cfg)
+    with state.lock:
+      state.tpu_pools = pools
     _, _, bundle = _write_workload_yaml_bundle(updated_cfg)
     state.broadcast({
         "type": "config_updated",
@@ -2472,6 +2594,7 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
         "accelerators": sorted(accelerators),
         "topologies": sorted(topologies),
         "nodepools": sorted(nodepools),
+        "tpu_pools": pools,
         "available_contexts": _get_kubeconfig_contexts(),
         "config": updated_cfg,
         "yaml_preview": _build_yaml_preview(updated_cfg),
@@ -3048,9 +3171,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       "--num-slices", type=int, default=None, help="Number of training slices."
   )
   workload.add_argument(
-      "--standby-slices", type=int, default=None, help="Number of spare slices."
-  )
-  workload.add_argument(
       "--total-steps", type=int, default=None, help="Total training steps."
   )
   workload.add_argument(
@@ -3127,7 +3247,6 @@ def _startup_config_updates(args: argparse.Namespace) -> dict[str, Any]:
       ("kueue_queue", "kueue_queue_name"),
       ("cpu_nodepool", "cpu_nodepool"),
       ("num_slices", "num_slices"),
-      ("standby_slices", "standby_slices"),
       ("total_steps", "total_steps"),
   ):
     value = flag_values[flag]
