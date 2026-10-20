@@ -82,9 +82,14 @@ the demo page. Every command below runs from your workstation.
 ```bash
 git clone -b elastic-demo https://github.com/AI-Hypercomputer/pathways-utils.git
 cd pathways-utils
-python3 -m venv .venv && source .venv/bin/activate
+python3.12 -m venv .venv && source .venv/bin/activate   # any Python >= 3.11
+pip install --upgrade pip
 pip install -e ".[elastic-demo]"
 ```
+
+Check `python --version` inside the venv before installing. If an older
+interpreter such as 3.10 is first on your `PATH`, pip cannot find NumPy or JAX
+wheels for it and falls back to a source build that fails.
 
 #### 2. Point kubectl at your cluster
 
