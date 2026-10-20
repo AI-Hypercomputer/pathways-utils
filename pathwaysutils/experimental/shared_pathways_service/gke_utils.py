@@ -8,7 +8,7 @@ import re
 import socket
 import subprocess
 import time
-from typing import Any
+from typing import Any, NamedTuple
 import urllib.parse
 
 from kubernetes import client
@@ -22,6 +22,22 @@ _logger = logging.getLogger(__name__)
 
 # Default size of the time window covered by Cloud Logging links.
 LOG_LINK_WINDOW = datetime.timedelta(minutes=10)
+
+# Default time in seconds to wait for a pod to become ready. This has to cover
+# scheduling the pod, which can include a cluster autoscaler scale up when no
+# node has room for it, as well as pulling its image and starting it.
+DEFAULT_POD_READY_TIMEOUT_S = 60
+
+# Time in seconds between checks of a pod's status while waiting for it.
+_POD_READY_POLL_INTERVAL_S = 5
+
+# Container waiting reasons that do not resolve without user intervention.
+_FATAL_CONTAINER_WAITING_REASONS = frozenset({
+    "CrashLoopBackOff",
+    "CreateContainerConfigError",
+    "ImagePullBackOff",
+    "InvalidImageName",
+})
 
 # TODO(b/456189271): Evaluate and replace the subprocess calls with Kubernetes
 # Python API for kubectl calls.
@@ -208,42 +224,123 @@ def get_pod_from_job(job_name: str) -> str:
   return pod_name
 
 
-def check_pod_ready(pod_name: str, timeout: int = 30) -> str:
-  """Checks if the given pod is ready.
+class _PodNotReadyReason(NamedTuple):
+  """Describes why a pod is not ready.
+
+  Attributes:
+    message: A human-readable description of why the pod is not ready.
+    is_fatal: Whether the pod cannot become ready without user intervention.
+    is_unscheduled: Whether the pod is waiting to be scheduled onto a node, for
+      example while the cluster autoscaler adds a node for it.
+  """
+
+  message: str
+  is_fatal: bool = False
+  is_unscheduled: bool = False
+
+
+def _join_reason(reason: str | None, message: str | None) -> str:
+  """Joins a Kubernetes status reason and message into one string."""
+  return ": ".join(part for part in (reason, message) if part) or "no details"
+
+
+def _get_pod_not_ready_reason(pod: client.V1Pod) -> _PodNotReadyReason:
+  """Returns why the given pod is not ready."""
+  status = pod.status
+  if not status:
+    return _PodNotReadyReason("Pod has no status yet.")
+
+  if status.phase in ("Failed", "Succeeded"):
+    return _PodNotReadyReason(
+        f"Pod has terminated with phase {status.phase}"
+        f" ({_join_reason(status.reason, status.message)}).",
+        is_fatal=True,
+    )
+
+  for condition in status.conditions or []:
+    if condition.type == "PodScheduled" and condition.status == "False":
+      return _PodNotReadyReason(
+          "Pod is not scheduled onto a node yet"
+          f" ({_join_reason(condition.reason, condition.message)}). If the"
+          " cluster autoscaler is adding a node for the pod, this can take a"
+          " few minutes.",
+          is_unscheduled=True,
+      )
+
+  for container_status in status.container_statuses or []:
+    waiting = container_status.state.waiting if container_status.state else None
+    if waiting and waiting.reason:
+      return _PodNotReadyReason(
+          f"Container '{container_status.name}' is waiting"
+          f" ({_join_reason(waiting.reason, waiting.message)}).",
+          is_fatal=waiting.reason in _FATAL_CONTAINER_WAITING_REASONS,
+      )
+
+  return _PodNotReadyReason(f"Pod phase is {status.phase}.")
+
+
+def check_pod_ready(
+    pod_name: str,
+    timeout: int = DEFAULT_POD_READY_TIMEOUT_S,
+    namespace: str = "default",
+) -> str:
+  """Waits for the given pod to become ready.
+
+  Polls the pod until it is ready, the timeout expires, or the pod reaches a
+  state that it cannot recover from on its own (e.g. an image pull failure).
+  Changes in why the pod is not ready yet are logged, e.g. that the pod waits
+  for the cluster autoscaler to add a node.
 
   Args:
     pod_name: The name of the pod.
     timeout: The maximum time in seconds to wait for the pod to be ready.
+    namespace: The namespace of the pod.
 
   Returns:
     The name of the pod.
 
   Raises:
-    RuntimeError: If the pod fails to become ready within the timeout.
+    RuntimeError: If the pod fails to become ready within the timeout, cannot
+      become ready, or its status cannot be read.
   """
   _validate_k8s_name(pod_name)
-  wait_command = [
-      "kubectl",
-      "wait",
-      "--for=condition=Ready",
-      f"--timeout={timeout}s",
-      "--",
-      f"pod/{pod_name}",
-  ]
-  try:
-    subprocess.run(wait_command, check=True, capture_output=True, text=True)
-  except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-    _logger.exception("Pod failed to become ready: %r", e)
+  _validate_k8s_name(namespace)
+  core_api = _get_k8s_core_api()
+  deadline = time.monotonic() + timeout
+  last_message = None
+  while True:
+    try:
+      pod = core_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+    except client.rest.ApiException as e:
+      _logger.exception("Failed to get the status of pod %s: %r", pod_name, e)
+      raise RuntimeError(
+          f"Failed to get the status of pod {pod_name}: {e}"
+      ) from e
 
-    raise RuntimeError(
-        f"Pod did not become ready: {e.stderr}."
-    ) from e
-  except Exception as e:
-    _logger.exception("Error setting up the pod: %r", e)
-    raise
+    if _is_pod_ready(pod):
+      _logger.info("Pod is ready: %s.", pod_name)
+      return pod_name
 
-  _logger.info("Pod is ready: %s.", pod_name)
-  return pod_name
+    reason = _get_pod_not_ready_reason(pod)
+    if reason.is_fatal:
+      raise RuntimeError(
+          f"Pod did not become ready: pod/{pod_name}. {reason.message}"
+      )
+
+    if reason.message != last_message:
+      # Use a warning for a pod waiting for a node: this is the slow path, and
+      # INFO logs are not shown by default when using the Python API.
+      log = _logger.warning if reason.is_unscheduled else _logger.info
+      log("Waiting for pod %s to become ready: %s", pod_name, reason.message)
+      last_message = reason.message
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+      raise RuntimeError(
+          f"Pod did not become ready within {timeout} seconds: pod/{pod_name}."
+          f" Last status: {reason.message}"
+      )
+    time.sleep(min(_POD_READY_POLL_INTERVAL_S, remaining))
 
 
 def _format_log_timestamp(timestamp: str | datetime.datetime) -> str:
@@ -444,11 +541,14 @@ def get_current_cluster_and_project() -> tuple[str | None, str | None]:
   return cluster, project
 
 
-def wait_for_pod(job_name: str) -> str:
+def wait_for_pod(
+    job_name: str, timeout: int = DEFAULT_POD_READY_TIMEOUT_S
+) -> str:
   """Waits for the given job's pod to be ready.
 
   Args:
     job_name: The name of the job.
+    timeout: The maximum time in seconds to wait for the pod to be ready.
   Returns:
     The name of the pod.
   Raises:
@@ -462,7 +562,7 @@ def wait_for_pod(job_name: str) -> str:
       "Pod created: %s. Waiting for it to be ready...", pod_name
   )
 
-  return check_pod_ready(pod_name)
+  return check_pod_ready(pod_name, timeout=timeout)
 
 
 def _test_remote_connection(port: int) -> None:

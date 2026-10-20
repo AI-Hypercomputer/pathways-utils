@@ -3,8 +3,10 @@
 
 import datetime
 import io
+import itertools
 import socket
 import subprocess
+import time
 from typing import Any
 from unittest import mock
 import urllib.parse
@@ -289,53 +291,168 @@ class GKEUtilsTest(absltest.TestCase):
     with self.assertRaises(subprocess.CalledProcessError):
       gke_utils.get_pod_from_job("test-proxy-job")
 
-  def test_check_pod_ready_success(self):
-    """Tests that check_pod_ready returns the pod name on success."""
-    mock_run = self.enter_context(
+  def _mock_core_api(self) -> mock.MagicMock:
+    """Patches the Kubernetes CoreV1Api client and returns the mock."""
+    mock_core_api = mock.MagicMock(spec=client.CoreV1Api)
+    self.enter_context(
         mock.patch.object(
-            subprocess,
-            "run",
-            autospec=True,
+            gke_utils, "_get_k8s_core_api", return_value=mock_core_api
         )
     )
-    mock_wait_success_result = subprocess.CompletedProcess(
-        args=["kubectl", "wait"],
-        returncode=0,
+    return mock_core_api
+
+  def _make_proxy_pod(
+      self,
+      *,
+      phase: str = "Running",
+      ready: bool = True,
+      unschedulable_message: str | None = None,
+      waiting_reason: str | None = None,
+  ) -> client.V1Pod:
+    """Returns a proxy pod with the given status."""
+    conditions = [
+        client.V1PodCondition(
+            type="Ready", status="True" if ready else "False"
+        )
+    ]
+    if unschedulable_message is not None:
+      conditions.append(
+          client.V1PodCondition(
+              type="PodScheduled",
+              status="False",
+              reason="Unschedulable",
+              message=unschedulable_message,
+          )
+      )
+    container_statuses = None
+    if waiting_reason is not None:
+      container_statuses = [
+          client.V1ContainerStatus(
+              name="pathways-proxy",
+              image="test-image",
+              image_id="",
+              ready=False,
+              restart_count=0,
+              state=client.V1ContainerState(
+                  waiting=client.V1ContainerStateWaiting(reason=waiting_reason)
+              ),
+          )
+      ]
+    return client.V1Pod(
+        metadata=client.V1ObjectMeta(name="test-pod-123"),
+        status=client.V1PodStatus(
+            phase=phase,
+            conditions=conditions,
+            container_statuses=container_statuses,
+        ),
     )
-    mock_run.return_value = mock_wait_success_result
+
+  def test_check_pod_ready_success(self):
+    """Tests that check_pod_ready returns the pod name on success."""
+    mock_core_api = self._mock_core_api()
+    mock_core_api.read_namespaced_pod.return_value = self._make_proxy_pod()
 
     pod_name = gke_utils.check_pod_ready("test-pod-123")
 
     self.assertEqual(pod_name, "test-pod-123")
-    mock_run.assert_called_once_with(
-        [
-            "kubectl",
-            "wait",
-            "--for=condition=Ready",
-            "--timeout=30s",
-            "--",
-            "pod/test-pod-123",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    mock_core_api.read_namespaced_pod.assert_called_once_with(
+        name="test-pod-123", namespace="default"
     )
 
-  def test_check_pod_ready_failure(self):
-    """Tests that check_pod_ready raises a RuntimeError if kubectl wait fails."""
-    mock_run = self.enter_context(
+  def test_check_pod_ready_waits_for_node_scale_up(self):
+    """Tests that check_pod_ready waits for an unschedulable pod."""
+    mock_sleep = self.enter_context(
+        mock.patch.object(time, "sleep", autospec=True)
+    )
+    mock_core_api = self._mock_core_api()
+    mock_core_api.read_namespaced_pod.side_effect = [
+        self._make_proxy_pod(
+            phase="Pending",
+            ready=False,
+            unschedulable_message=(
+                "0/2 nodes are available: 1 node(s) didn't have free ports for"
+                " the requested pod ports."
+            ),
+        ),
+        self._make_proxy_pod(
+            phase="Pending", ready=False, waiting_reason="ContainerCreating"
+        ),
+        self._make_proxy_pod(),
+    ]
+
+    with self.assertLogs(gke_utils._logger, level="WARNING") as logs:
+      pod_name = gke_utils.check_pod_ready("test-pod-123")
+
+    self.assertEqual(pod_name, "test-pod-123")
+    self.assertEqual(mock_core_api.read_namespaced_pod.call_count, 3)
+    self.assertEqual(mock_sleep.call_count, 2)
+    # Only the wait for a node is logged as a warning.
+    self.assertLen(logs.output, 1)
+    self.assertIn("didn't have free ports", logs.output[0])
+    self.assertIn("cluster autoscaler", logs.output[0])
+
+  def test_check_pod_ready_fails_fast_if_pod_cannot_become_ready(self):
+    """Tests that check_pod_ready fails fast for a pod that cannot recover."""
+    mock_sleep = self.enter_context(
+        mock.patch.object(time, "sleep", autospec=True)
+    )
+    mock_core_api = self._mock_core_api()
+    test_cases = [
+        (
+            "image_pull_backoff",
+            self._make_proxy_pod(
+                phase="Pending", ready=False, waiting_reason="ImagePullBackOff"
+            ),
+            "ImagePullBackOff",
+        ),
+        (
+            "failed_phase",
+            self._make_proxy_pod(phase="Failed", ready=False),
+            "terminated with phase Failed",
+        ),
+    ]
+    for case_name, pod, expected_message in test_cases:
+      with self.subTest(case=case_name):
+        mock_core_api.read_namespaced_pod.return_value = pod
+        with self.assertRaisesRegex(RuntimeError, expected_message):
+          gke_utils.check_pod_ready("test-pod-123")
+
+    mock_sleep.assert_not_called()
+
+  def test_check_pod_ready_timeout(self):
+    """Tests that check_pod_ready raises if the pod is not ready in time."""
+    self.enter_context(mock.patch.object(time, "sleep", autospec=True))
+    # Each call advances the clock by 5 seconds.
+    self.enter_context(
         mock.patch.object(
-            subprocess,
-            "run",
-            autospec=True,
+            time, "monotonic", side_effect=itertools.count(step=5)
         )
     )
-    mock_run.side_effect = subprocess.CalledProcessError(
-        returncode=1, cmd="kubectl wait", stderr="error"
+    mock_core_api = self._mock_core_api()
+    mock_core_api.read_namespaced_pod.return_value = self._make_proxy_pod(
+        phase="Pending",
+        ready=False,
+        unschedulable_message="0/1 nodes are available.",
     )
 
     with self.assertRaisesRegex(
-        RuntimeError, "Pod did not become ready: error."
+        RuntimeError,
+        r"Pod did not become ready within 10 seconds: pod/test-pod-123\..*"
+        r"Unschedulable: 0/1 nodes are available\.",
+    ):
+      gke_utils.check_pod_ready("test-pod-123", timeout=10)
+
+    self.assertEqual(mock_core_api.read_namespaced_pod.call_count, 2)
+
+  def test_check_pod_ready_api_error(self):
+    """Tests that check_pod_ready raises if the pod status cannot be read."""
+    mock_core_api = self._mock_core_api()
+    mock_core_api.read_namespaced_pod.side_effect = client.rest.ApiException(
+        status=404, reason="Not Found"
+    )
+
+    with self.assertRaisesRegex(
+        RuntimeError, "Failed to get the status of pod test-pod-123"
     ):
       gke_utils.check_pod_ready("test-pod-123")
 
@@ -725,23 +842,22 @@ class GKEUtilsTest(absltest.TestCase):
             autospec=True,
         )
     )
-    mock_get_pods_result = subprocess.CompletedProcess(
+    mock_run.return_value = subprocess.CompletedProcess(
         args=["kubectl", "get", "pods"],
         returncode=0,
         stdout="pod/test-pod-123\n",
     )
-    mock_wait_success_result = subprocess.CompletedProcess(
-        args=["kubectl", "wait"],
-        returncode=0,
-    )
-    mock_run.side_effect = [mock_get_pods_result, mock_wait_success_result]
+    mock_core_api = self._mock_core_api()
+    mock_core_api.read_namespaced_pod.return_value = self._make_proxy_pod()
 
     pod_name = gke_utils.wait_for_pod("test-proxy-job")
 
     self.assertEqual(pod_name, "test-pod-123")
-    self.assertEqual(mock_run.call_count, 2)
-    self.assertIn("get", mock_run.call_args_list[0].args[0])
-    self.assertIn("wait", mock_run.call_args_list[1].args[0])
+    mock_run.assert_called_once()
+    self.assertIn("get", mock_run.call_args.args[0])
+    mock_core_api.read_namespaced_pod.assert_called_once_with(
+        name="test-pod-123", namespace="default"
+    )
 
   def test_wait_for_pod_get_pods_fails(self):
     """Tests that wait_for_pod raises an error if 'get pods' fails."""
@@ -761,7 +877,7 @@ class GKEUtilsTest(absltest.TestCase):
     self.assertEqual(mock_run.call_count, 1)
 
   def test_wait_for_pod_wait_fails(self):
-    """Tests that wait_for_pod raises a RuntimeError if 'wait' times out."""
+    """Tests that wait_for_pod raises if the pod does not become ready."""
     mock_run = self.enter_context(
         mock.patch.object(
             subprocess,
@@ -769,19 +885,23 @@ class GKEUtilsTest(absltest.TestCase):
             autospec=True,
         )
     )
-    mock_get_pods_result = subprocess.CompletedProcess(
+    mock_run.return_value = subprocess.CompletedProcess(
         args=["kubectl", "get", "pods"],
         returncode=0,
         stdout="pod/test-pod-123\n",
     )
-    mock_run.side_effect = [
-        mock_get_pods_result,
-        subprocess.TimeoutExpired(cmd="kubectl wait", timeout=30),
-    ]
+    mock_check_pod_ready = self.enter_context(
+        mock.patch.object(
+            gke_utils,
+            "check_pod_ready",
+            autospec=True,
+            side_effect=RuntimeError("Pod did not become ready"),
+        )
+    )
 
     with self.assertRaises(RuntimeError):
-      gke_utils.wait_for_pod("test-proxy-job")
-    self.assertEqual(mock_run.call_count, 2)
+      gke_utils.wait_for_pod("test-proxy-job", timeout=42)
+    mock_check_pod_ready.assert_called_once_with("test-pod-123", timeout=42)
 
   def test_enable_port_forwarding_success(self):
     """Tests successful port forwarding."""

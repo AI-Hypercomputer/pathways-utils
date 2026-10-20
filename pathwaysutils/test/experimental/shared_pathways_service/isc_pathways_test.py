@@ -359,8 +359,18 @@ class ISCPathwaysTest(parameterized.TestCase):
     self.enter_context(
         mock.patch("urllib.parse.quote", return_value="encoded_filter")
     )
-    # Simulate 'kubectl get' returning a pod, 'kubectl wait' timing out,
-    # then 'kubectl delete' succeeding.
+    mock_check_pod_ready = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "check_pod_ready",
+            autospec=True,
+            side_effect=RuntimeError(
+                "Pod did not become ready within 60 seconds: pod/test-pod-123."
+            ),
+        )
+    )
+    # Simulate 'kubectl get' returning a pod, the pod not becoming ready, then
+    # 'kubectl delete' succeeding.
     mock_get_pods_result = subprocess.CompletedProcess(
         args=["kubectl", "get", "pods"],
         returncode=0,
@@ -373,9 +383,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_run.side_effect = [
         # First call for 'get'
         mock_get_pods_result,
-        # Second call for 'wait'
-        subprocess.TimeoutExpired(cmd="kubectl wait", timeout=30),
-        # Third call for 'delete'
+        # Second call for 'delete'
         mock_delete_result,
     ]
 
@@ -398,12 +406,15 @@ class ISCPathwaysTest(parameterized.TestCase):
 
     self.assertIn("Pod did not become ready", str(context.exception))
     mock_deploy.assert_called_once()
+    mock_check_pod_ready.assert_called_once_with(
+        "test-pod-123",
+        timeout=isc_pathways.gke_utils.DEFAULT_POD_READY_TIMEOUT_S,
+    )
 
-    # Check that subprocess.run was called for get, wait, and delete.
-    self.assertEqual(mock_run.call_count, 3)
+    # Check that subprocess.run was called for get and delete.
+    self.assertEqual(mock_run.call_count, 2)
     self.assertIn("get", mock_run.call_args_list[0][0][0])
-    self.assertIn("wait", mock_run.call_args_list[1][0][0])
-    self.assertIn("delete", mock_run.call_args_list[2][0][0])
+    self.assertIn("delete", mock_run.call_args_list[1][0][0])
 
   def test_isc_pathways(self):
     """Tests the full lifecycle of ISCPathways."""
@@ -481,7 +492,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_random.choices.return_value = list("abcde")
     mock_random.randint.return_value = 29005
 
-    # Mock for 'kubectl wait' and 'kubectl delete'
+    # Mock for 'kubectl delete'
     mock_success_result = subprocess.CompletedProcess(
         args=["kubectl"],
         returncode=0,
@@ -497,9 +508,16 @@ class ISCPathwaysTest(parameterized.TestCase):
 
     mock_run.side_effect = [
         mock_get_pods_result,  # For 'get_pod_from_job'
-        mock_success_result,  # For 'check_pod_ready'
         mock_success_result,  # For 'kubectl delete job' in __exit__
     ]
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils,
+            "check_pod_ready",
+            autospec=True,
+            return_value="test-pod-123",
+        )
+    )
 
     mock_pick_unused_port.return_value = 29007
 
@@ -632,6 +650,47 @@ class ISCPathwaysTest(parameterized.TestCase):
     )
     mock_fetch_creds.assert_not_called()
 
+  def test_connect_passes_proxy_ready_timeout(self):
+    """Tests that connect passes the proxy readiness timeout to the manager."""
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "fetch_cluster_credentials", autospec=True
+        )
+    )
+    mock_get_images = self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "get_pathways_service_images", autospec=True
+        )
+    )
+    mock_get_images.return_value = (
+        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        None,
+    )
+    mock_isc_pathways = self.enter_context(
+        mock.patch.object(isc_pathways, "_ISCPathways", autospec=True)
+    )
+    self.enter_context(mock.patch("threading.Thread", autospec=True))
+    mock_manager_instance = (
+        mock_isc_pathways.return_value.__enter__.return_value
+    )
+    mock_manager_instance.proxy_pod_name = "test-pod-123"
+    mock_manager_instance.expected_tpu_instances = {"tpuv6e:2x2": 1}
+
+    with isc_pathways.connect(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service-pathways-head:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_ready_timeout=900,
+    ):
+      pass
+
+    self.assertEqual(
+        mock_isc_pathways.call_args.kwargs["proxy_ready_timeout"], 900
+    )
+
   def test_connect_success(self):
     """Tests that connect calls the dependencies and yields the manager."""
     # Arrange
@@ -710,6 +769,9 @@ class ISCPathwaysTest(parameterized.TestCase):
           proxy_server_image=isc_pathways.DEFAULT_PROXY_IMAGE,
           proxy_options=isc_pathways.ProxyOptions(),
           collect_service_metrics=False,
+          proxy_ready_timeout=(
+              isc_pathways.gke_utils.DEFAULT_POD_READY_TIMEOUT_S
+          ),
       )
       self.assertIs(tm, mock_manager_instance)
 
