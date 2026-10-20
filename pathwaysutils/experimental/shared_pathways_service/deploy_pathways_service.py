@@ -194,8 +194,10 @@ def deploy_jobset(jobset_yaml: dict[str, Any]) -> None:
     )
   except client.rest.ApiException:
     _logger.exception("Error creating JobSet")
+    raise
   except config.ConfigException:
     _logger.exception("Error loading Kubernetes configuration")
+    raise
 
 
 def _add_sidecar(pw_jobset: jobset.PathwaysJobSet, sidecar_image: str) -> None:
@@ -315,6 +317,7 @@ def main(argv: Sequence[str]) -> None:
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
+    raise
 
 
 if __name__ == "__main__":

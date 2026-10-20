@@ -4,6 +4,7 @@ import datetime
 from unittest import mock
 from absl import flags
 from absl.testing import absltest
+from absl.testing import flagsaver
 from absl.testing import parameterized
 from pathwaysutils.experimental.shared_pathways_service import deploy_pathways_service
 from pathwaysutils.experimental.shared_pathways_service import gke_utils
@@ -377,6 +378,41 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
 
     mock_get_log_link.assert_not_called()
     mock_deploy.assert_not_called()
+
+  @mock.patch.object(deploy_pathways_service.config, "load_kube_config")
+  def test_deploy_jobset_raises_on_config_exception(self, mock_load_kube):
+    mock_load_kube.side_effect = deploy_pathways_service.config.ConfigException(
+        "No local config"
+    )
+    dummy_yaml = {"metadata": {"name": "test-jobset", "namespace": "default"}}
+    with self.assertRaises(deploy_pathways_service.config.ConfigException):
+      deploy_pathways_service.deploy_jobset(dummy_yaml)
+
+  @mock.patch.object(deploy_pathways_service.client, "CustomObjectsApi")
+  @mock.patch.object(deploy_pathways_service.config, "load_kube_config")
+  def test_deploy_jobset_raises_on_api_exception(
+      self, mock_load_kube, mock_api_cls
+  ):
+    del mock_load_kube
+    mock_api_cls.return_value.create_namespaced_custom_object.side_effect = (
+        deploy_pathways_service.client.rest.ApiException(
+            status=500, reason="Internal Server Error"
+        )
+    )
+    dummy_yaml = {"metadata": {"name": "test-jobset", "namespace": "default"}}
+    with self.assertRaises(deploy_pathways_service.client.rest.ApiException):
+      deploy_pathways_service.deploy_jobset(dummy_yaml)
+
+  @mock.patch.object(deploy_pathways_service, "run_deployment")
+  def test_main_flag_conflict_raises_value_error(self, mock_run):
+    with flagsaver.as_parsed(
+        jax_version="0.9.0", server_image="custom-image"
+    ):
+      with self.assertRaisesRegex(
+          ValueError, "Cannot provide both --jax_version and --server_image"
+      ):
+        deploy_pathways_service.main([])
+    mock_run.assert_not_called()
 
 
 if __name__ == "__main__":
