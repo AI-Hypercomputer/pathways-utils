@@ -419,6 +419,16 @@
             </div>
           </div>
 
+          <!-- Pause/Resume Re-init -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Reinitialization latency for Snapshot Pause Resume when replacement slices become healthy (typically shorter than a scale-up mesh reconfiguration)">
+            <label for="inputPauseResumeInit" class="text-[var(--muted-foreground)]">Pause/Resume Reinitialization Time:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputPauseResumeInit" type="number" min="0" max="60" step="0.5" value="0.5"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">s</span>
+            </div>
+          </div>
+
           <!-- Interruption Duration for Scenario -->
           <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Duration of hardware outage during interruption scenario before slice reconnection">
             <label for="inputFaultDuration" class="text-[var(--muted-foreground)]">Interruption Duration for Scenario:</label>
@@ -462,6 +472,16 @@
             </div>
           </div>
 
+          <!-- Snapshot Cadence -->
+          <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Snapshot frequency (steps) for Snapshot Replica Resize and Snapshot Pause Resume; on interruption progress rolls back to floor(step/cadence)*cadence">
+            <label for="inputSnapshotInterval" class="text-[var(--muted-foreground)]">Snapshot Interval:</label>
+            <div class="flex items-center gap-1">
+              <input id="inputSnapshotInterval" type="number" min="1" max="500" step="1" value="10"
+                class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left">st</span>
+            </div>
+          </div>
+
           <!-- Degraded Scaling Factor -->
           <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Throughput ratio sustained by Snapshot Replica Resize during outage (default 0.50x for (N-1)/N)">
             <label for="inputDegradedFactor" class="text-[var(--muted-foreground)]">Degraded Scaling Factor:</label>
@@ -486,7 +506,7 @@
           <div class="flex items-center justify-between gap-2 py-0.5 border-b border-[var(--border)]/40" title="Exponential loss decay rate alpha in L = L0 * exp(-alpha * step)">
             <label for="inputLossAlpha" class="text-[var(--muted-foreground)]">Loss Decay Rate (α):</label>
             <div class="flex items-center gap-1">
-              <input id="inputLossAlpha" type="number" min="0.0001" max="0.01" step="0.0001" value="0.0012"
+              <input id="inputLossAlpha" type="number" min="0.0001" max="0.01" step="0.0001" value="0.005"
                 class="w-16 px-1.5 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-center font-mono text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
               <span class="text-[10px] text-[var(--muted-foreground)] w-4 text-left"></span>
             </div>
@@ -793,13 +813,15 @@
         coldStartInitSec: 3.0,
         scaleUpInitSec: 1.0,
         postInterruptInitSec: 2.0,
+        pauseResumeInitSec: 0.5,
+        snapshotInterval: 10,
         faultDurationSec: 9.0,
         stepIntervalMs: 120,
         maxSteps: 500,
         mcjaxCkptInterval: 50,
         degradedFactor: 0.50,
         baseLoss: 6.85,
-        lossAlpha: 0.0012
+        lossAlpha: 0.005
       },
 
       // Phase tracking
@@ -846,6 +868,7 @@
         unproductiveMs: 0,
         isPaused: false,
         inReload: false,
+        reinitRemainingMs: 0,
         isFinished: false,
         finishTimeSec: null,
         downtimeMs: 0,
@@ -908,6 +931,8 @@
     const inputColdStartInit = document.getElementById("inputColdStartInit");
     const inputPostInterruptInit = document.getElementById("inputPostInterruptInit");
     const inputScaleUpInit = document.getElementById("inputScaleUpInit");
+    const inputPauseResumeInit = document.getElementById("inputPauseResumeInit");
+    const inputSnapshotInterval = document.getElementById("inputSnapshotInterval");
     const inputFaultDuration = document.getElementById("inputFaultDuration");
     const inputStepInterval = document.getElementById("inputStepInterval");
     const inputMaxSteps = document.getElementById("inputMaxSteps");
@@ -964,6 +989,8 @@
       sim.config.coldStartInitSec = Math.max(0, parseFloat(inputColdStartInit.value) || 0);
       sim.config.postInterruptInitSec = Math.max(0, parseFloat(inputPostInterruptInit.value) || 0);
       sim.config.scaleUpInitSec = Math.max(0, parseFloat(inputScaleUpInit.value) || 0);
+      sim.config.pauseResumeInitSec = Math.max(0, parseFloat(inputPauseResumeInit.value) || 0);
+      sim.config.snapshotInterval = Math.max(1, parseInt(inputSnapshotInterval.value, 10) || 10);
       sim.config.faultDurationSec = Math.max(0.5, parseFloat(inputFaultDuration.value) || 9.0);
       sim.config.stepIntervalMs = Math.max(20, parseInt(inputStepInterval.value, 10) || 120);
       sim.stepIntervalMs = sim.config.stepIntervalMs;
@@ -972,7 +999,7 @@
       sim.config.mcjaxCkptInterval = Math.max(1, parseInt(inputMcjaxCkpt.value, 10) || 50);
       sim.config.degradedFactor = Math.max(0, Math.min(1.0, parseFloat(inputDegradedFactor.value) || 0));
       sim.config.baseLoss = Math.max(1.0, parseFloat(inputBaseLoss.value) || 6.85);
-      sim.config.lossAlpha = Math.max(0.0001, parseFloat(inputLossAlpha.value) || 0.0012);
+      sim.config.lossAlpha = Math.max(0.0001, parseFloat(inputLossAlpha.value) || 0.005);
 
       if (sim.elapsedSec === 0 && !sim.running && !sim.isInitializing) {
         sim.resize.loss = sim.config.baseLoss;
@@ -986,7 +1013,7 @@
       updateUI();
     }
 
-    [inputColdStartInit, inputPostInterruptInit, inputScaleUpInit, inputFaultDuration, inputStepInterval, inputMaxSteps, inputMcjaxCkpt, inputDegradedFactor, inputBaseLoss, inputLossAlpha].forEach(input => {
+    [inputColdStartInit, inputPostInterruptInit, inputScaleUpInit, inputPauseResumeInit, inputSnapshotInterval, inputFaultDuration, inputStepInterval, inputMaxSteps, inputMcjaxCkpt, inputDegradedFactor, inputBaseLoss, inputLossAlpha].forEach(input => {
       input.addEventListener("input", syncParamsFromInputs);
       input.addEventListener("change", syncParamsFromInputs);
     });
@@ -995,13 +1022,15 @@
       inputColdStartInit.value = "3.0";
       inputPostInterruptInit.value = "2.0";
       inputScaleUpInit.value = "1.0";
+      inputPauseResumeInit.value = "0.5";
+      inputSnapshotInterval.value = "10";
       inputFaultDuration.value = "9.0";
       inputStepInterval.value = "120";
       inputMaxSteps.value = "500";
       inputMcjaxCkpt.value = "50";
       inputDegradedFactor.value = "0.50";
       inputBaseLoss.value = "6.85";
-      inputLossAlpha.value = "0.0012";
+      inputLossAlpha.value = "0.005";
       syncParamsFromInputs();
     });
 
@@ -1109,9 +1138,9 @@
 
     function calcExponentialLoss(effectiveSteps, noise = 0) {
       const L0 = sim.config.baseLoss || 6.85;
-      const alpha = sim.config.lossAlpha || 0.0012;
+      const alpha = sim.config.lossAlpha || 0.005;
       const rawLoss = L0 * Math.exp(-alpha * effectiveSteps);
-      return Math.max(1.0, rawLoss + noise);
+      return Math.max(0.0, rawLoss + noise);
     }
 
     function updateUI() {
@@ -1175,21 +1204,16 @@
         badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
         descPauseStatus.textContent = `Initial cluster startup (${(sim.initRemainingMs/1000).toFixed(1)}s)`;
         descPauseStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
-      } else if (sim.isScalingUp) {
-        badgePauseState.textContent = "RESUMED (0s RE-INIT)";
-        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold";
-        descPauseStatus.textContent = "Active dual-slice execution";
-        descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
+      } else if (sim.pause.inReload) {
+        badgePauseState.textContent = `RE-INIT (${(sim.pause.reinitRemainingMs/1000).toFixed(1)}s)`;
+        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold animate-pulse";
+        descPauseStatus.textContent = `Restoring snapshot on replacement slice (${(sim.pause.reinitRemainingMs/1000).toFixed(1)}s)`;
+        descPauseStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
       } else if (sim.pause.isPaused) {
         badgePauseState.textContent = "BLOCKED (WAITING)";
         badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold animate-pulse";
         descPauseStatus.textContent = "Waiting for slices to reconnect";
         descPauseStatus.className = "strategy-desc text-[10px] text-rose-600 font-medium truncate";
-      } else if (sim.pause.inReload) {
-        badgePauseState.textContent = "RELOADING SNAPSHOT";
-        badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-600 font-semibold";
-        descPauseStatus.textContent = "Restoring parameters from snapshot";
-        descPauseStatus.className = "strategy-desc text-[10px] text-amber-600 font-medium truncate";
       } else {
         badgePauseState.textContent = "DUAL-SLICE";
         badgePauseState.className = "strategy-state-badge text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-600 font-semibold";
@@ -1326,7 +1350,7 @@
       const plotH = hLoss - padTop - padBottom;
 
       const maxTimeSec = Math.max(35, Math.ceil((sim.elapsedSec + 5) / 5) * 5);
-      const minLoss = 1.0;
+      const minLoss = 0.0;
       const maxLoss = Math.max(7.0, Math.ceil((sim.config.baseLoss || 6.85) * 10) / 10);
 
       // Draw Chart 1: Training Loss
@@ -1666,7 +1690,6 @@
           sim.scaleUpRemainingMs = 0;
           sim.isReconnecting = false;
           sim.resize.inRecovery = false;
-          sim.pause.inReload = false;
         }
 
         const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
@@ -1731,8 +1754,13 @@
             sim.pause.unproductiveMs += dt;
             sim.pause.downtimeMs += dt;
           } else if (sim.pause.inReload) {
+            sim.pause.reinitRemainingMs -= dt;
             sim.pause.unproductiveMs += dt;
             sim.pause.downtimeMs += dt;
+            if (sim.pause.reinitRemainingMs <= 0) {
+              sim.pause.inReload = false;
+              sim.pause.reinitRemainingMs = 0;
+            }
           } else {
             sim.pause.step++;
             sim.pause.forwardProgressMs += dt * 1.0;
@@ -1804,6 +1832,28 @@
       renderCharts();
     }
 
+    // Rolls a snapshot-based workload back to its most recent snapshot step and
+    // accounts the discarded steps as unproductive time. Replica Resize only
+    // pays this on scale-down (the surviving slices restore the snapshot and
+    // continue); a later scale-up re-shards live state and loses nothing.
+    function rollbackToSnapshot(workload) {
+      const interval = Math.max(1, sim.config.snapshotInterval);
+      const rollbackStep = Math.floor(workload.step / interval) * interval;
+      const lostSteps = workload.step - rollbackStep;
+      if (lostSteps <= 0) return 0;
+      workload.step = rollbackStep;
+      if (workload.effectiveSteps !== undefined) {
+        workload.effectiveSteps = Math.max(0, workload.effectiveSteps - lostSteps);
+        workload.loss = calcExponentialLoss(workload.effectiveSteps, 0);
+      } else {
+        workload.loss = calcExponentialLoss(rollbackStep, 0);
+      }
+      const lostComputeMs = lostSteps * sim.stepIntervalMs;
+      workload.forwardProgressMs = Math.max(0, workload.forwardProgressMs - lostComputeMs);
+      workload.unproductiveMs += lostComputeMs;
+      return lostSteps;
+    }
+
     // Fault Injection: Interruption on a targeted logical Workload Slice (0 or 1)
     function interruptWorkloadSlice(workloadIndex) {
       const allFinished = sim.config.maxSteps > 0 && sim.resize.isFinished && sim.pause.isFinished && sim.mcjax.isFinished;
@@ -1817,7 +1867,9 @@
       sim.disruptedTpuIndex = targetTpuIndex;
       sim.sliceStates[targetTpuIndex] = "disrupted";
 
-      // Strategy A (Snapshot Replica Resize): Post-interrupt initialization
+      // Strategy A (Snapshot Replica Resize): restore the last snapshot on the
+      // surviving slices, then pay the scale-down initialization
+      rollbackToSnapshot(sim.resize);
       if (sim.config.postInterruptInitSec > 0) {
         sim.isScalingDown = true;
         sim.scaleDownRemainingMs = sim.config.postInterruptInitSec * 1000;
@@ -1828,7 +1880,9 @@
         sim.resize.inRecovery = false;
       }
 
-      // Strategy B (Snapshot Pause Resume): Enters indefinite pause wait
+      // Strategy B (Snapshot Pause Resume): rewinds to the last snapshot and
+      // waits for replacement slices
+      rollbackToSnapshot(sim.pause);
       sim.pause.isPaused = true;
 
       // Strategy C (McJAX): Enters indefinite pause wait
@@ -1876,9 +1930,15 @@
         sim.resize.inRecovery = false;
       }
 
-      // Strategy B: Snapshot Pause Resume resumes immediately with 0s re-init
+      // Strategy B: Snapshot Pause Resume reinitializes on the replacement slice
       sim.pause.isPaused = false;
-      sim.pause.inReload = false;
+      if (sim.config.pauseResumeInitSec > 0) {
+        sim.pause.inReload = true;
+        sim.pause.reinitRemainingMs = sim.config.pauseResumeInitSec * 1000;
+      } else {
+        sim.pause.inReload = false;
+        sim.pause.reinitRemainingMs = 0;
+      }
 
       // Strategy C: McJAX undoes to most recent checkpoint step and enters reinitialization
       sim.mcjax.isPaused = false;
@@ -2007,6 +2067,7 @@
       sim.pause.unproductiveMs = 0;
       sim.pause.isPaused = false;
       sim.pause.inReload = false;
+      sim.pause.reinitRemainingMs = 0;
       sim.pause.isFinished = false;
       sim.pause.finishTimeSec = null;
       sim.pause.downtimeMs = 0;

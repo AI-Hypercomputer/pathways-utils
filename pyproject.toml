@@ -46,7 +46,9 @@ gke = [
 elastic-demo = [
     "flax",
     "grain",
+    "kubernetes",
     "numpy",
+    "pyyaml",
 ]
 sps = [
     "portpicker",

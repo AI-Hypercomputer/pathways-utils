@@ -17,9 +17,9 @@ without requiring a live cluster.
 
 ### Recovery Paradigms Compared
 
-* Traditional Checkpoint Rollback (McJAX) halts cluster computation upon slice preemption, incurs a reinitialization latency, and rewinds training state to the most recent periodic checkpoint or snapshot, resulting in lost forward progress.
+* Traditional Checkpoint Rollback (McJAX) halts training upon interruption, incurs a reinitialization latency, and rewinds training state to the most recent checkpoint, resulting in lost forward progress.
 * Snapshot Replica Resize dynamically adjusts the mesh to continue training on surviving healthy slices with a smaller reinitialization latency than a cold start, maintaining forward progress at a degraded throughput factor (depending on your recovery implementation) with no time spent waiting for slices to rejoin.
-* Snapshot Pause Resume pauses execution during slice preemption, rewinds to the last snapshot, and resumes with negligible reinitialization once replacement slices become healthy.
+* Snapshot Pause Resume pauses training during interruptions, rewinds to the last snapshot, and resumes with reinitialization once replacement slices become healthy.
 
 ### Interactive Parameter Controls
 
@@ -28,10 +28,12 @@ The simulation toolbar allows tuning key workload and infrastructure characteris
 * Cold Start Initialization Time (seconds) configures the initial cluster startup delay prior to the first training step and is reused as the reinitialization latency for McJAX.
 * Scale-Down Initialization Time (seconds) sets the reconfiguration overhead when transitioning into degraded execution.
 * Scale-Up Initialization Time (seconds) governs the mesh reconfiguration latency when a replacement slice joins the workload.
+* Pause/Resume Reinitialization Time (seconds) is the latency Snapshot Pause Resume pays to restore its snapshot on the replacement slice; it defaults to less than the scale-up time since no mesh reconfiguration is involved.
 * Degraded Scaling Factor (multiplier) sets the relative step throughput while executing on a reduced slice topology.
-* Initial Base Loss (L₀) sets the initial loss baseline at step 0 in the exponential decay function L = L₀ * exp(-α * step).
-* Loss Decay Rate (α) dictates the per-step exponential decay rate, multiplied by the degraded scaling factor during degraded execution so training loss decays slower per step.
-* Checkpoint Interval (steps) dictates the rollback penalty for checkpoint-based training.
+* Initial Base Loss (L₀) sets the initial loss baseline at step 0 in the exponential decay function L = L₀ * exp(-α * step), which decays toward zero.
+* Loss Decay Rate (α, default 0.005) dictates the per-step exponential decay rate, multiplied by the degraded scaling factor during degraded execution so training loss decays slower per step.
+* Checkpoint Interval (steps) dictates the rollback penalty for McJAX, which rewinds to the last checkpoint on every interruption.
+* Snapshot Interval (steps) dictates the rollback penalty for the snapshot strategies: Snapshot Pause Resume rewinds to the last snapshot on every interruption, and Snapshot Replica Resize rewinds on scale-down only, since a later scale-up re-shards live state without losing progress.
 * Interruption Duration for Scenario (seconds) configures hardware disruption length during automated scenario runs.
 
 ## Live GKE Elasticity Demo
@@ -46,7 +48,7 @@ drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
   driver telemetry over Server-Sent Events (SSE), writes a combined ConfigMap
   and JobSet manifest bundle to `/tmp/gke_elastic_workload.yaml`, and triggers
   disruptions via Kubernetes `kubectl cordon` and `drain` or in-workload HTTP
-  signaling.
+  signaling, avoiding the need to actually interrupt the nodes.
 * `gke_elasticity_demo.html` renders live training step, loss, step time,
   cumulative goodput, logical workload slices, physical cluster TPU slices, and
   a real-time JAX driver log stream.
@@ -60,12 +62,14 @@ the demo page. Every command below runs from your workstation.
 #### What you need
 
 * A GKE cluster with the [JobSet](https://jobset.sigs.k8s.io/) controller
-  installed and TPU node pools for the slices you want to run (the base YAML
-  asks for two `tpuv5e` `4x8` slices; any additional idle pools of the same
-  shape are discovered automatically and shown as spares). Anything else about the
+  installed and TPU node pools for the slices you want to run. You pass the TPU
+  type, topology, and slice count as flags and
+  `pathwaysutils.experimental.gke.jobset.PathwaysJobSet` generates the worker
+  templates for that shape; any additional idle pools of the same shape are
+  discovered automatically and shown as spares. Anything else about the
   cluster, such as Kueue, a dedicated CPU node pool for the head pod, custom
   tolerations, or a workload service account, is handled by editing the YAML
-  in step 4.
+  in step 4 below.
 * A GCS bucket the cluster's node service account can read and write, used as
   the Pathways scratch location.
 * An Artifact Registry repository you can push the workload image to, plus
@@ -111,9 +115,10 @@ and this checkout of `pathwaysutils`.
 `elastic_demo.yaml` contains two documents: a `ConfigMap` named
 `elastic-workload-code` holding `elastic_workload.py`, the `simple_model`
 package, `elastic/manager.py`, and `test/mock_fault_injection.py` from your
-checkout, followed by the `JobSet`. The JobSet has one `pathways-head`
-replicated job (the JAX driver plus the Pathways resource manager and proxy as
-init containers) and one `worker` replicated job per slice. Open the file and
+checkout, followed by the `JobSet` produced by `PathwaysJobSet`. The JobSet
+has one `pathways-head` replicated job (the JAX driver plus the Pathways
+resource manager and proxy as init containers) and one `pathways-worker`
+replicated job per slice. Open the file and
 change whatever your cluster requires. Common edits:
 
 * Kueue: if your cluster admits workloads through Kueue, add the queue label
@@ -134,11 +139,11 @@ change whatever your cluster requires. Common edits:
   nodeSelector:
     cloud.google.com/gke-nodepool: YOUR-CPU-NODEPOOL
   ```
-* TPU workers: the `worker` pod template selects nodes with
-  `cloud.google.com/gke-tpu-accelerator` and `cloud.google.com/gke-tpu-topology`.
-  Edit these, the `google.com/tpu` limit, and `parallelism`/`completions` if
-  your slices differ from the flags you rendered with, and add `tolerations`
-  if your TPU node pools are tainted.
+* TPU workers: the `pathways-worker` template (node selectors, `google.com/tpu`
+  limits, `parallelism`/`completions`) is generated by `PathwaysJobSet` from
+  `--tpu-type`, `--topology`, and `--num-slices`, so re-render rather than
+  hand-editing those; add `tolerations` to the worker pod `spec` if your TPU
+  node pools are tainted.
 * Namespace, service account, image pull secrets, or anything else your
   cluster policy requires can be added to the pod `spec`s directly.
 * The training flags live in the head container `command`; `--total_steps`,

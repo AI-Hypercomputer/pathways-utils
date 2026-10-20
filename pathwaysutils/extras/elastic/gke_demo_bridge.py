@@ -52,6 +52,11 @@ from typing import Any
 import urllib.parse
 import webbrowser
 
+from kubernetes import client as k8s_client
+import yaml
+
+from pathwaysutils.experimental.gke import jobset as pw_jobset
+
 _logger = logging.getLogger("gke_demo_bridge")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -137,6 +142,8 @@ TPU_ACCELERATOR_MAP = {
     "tpuv7x": "tpu7x",
     "tpu7x": "tpu7x",
     "v7x": "tpu7x",
+    "tpuv4": "tpu-v4-podslice",
+    "v4": "tpu-v4-podslice",
 }
 
 TPU_INSTANCE_PREFIX_MAP = {
@@ -149,6 +156,8 @@ TPU_INSTANCE_PREFIX_MAP = {
     "tpuv7x": "tpuv7x",
     "tpu7x": "tpuv7x",
     "v7x": "tpuv7x",
+    "tpuv4": "tpuv4",
+    "v4": "tpuv4",
 }
 
 
@@ -883,7 +892,7 @@ class ClusterPoller(threading.Thread):
       if rep_job == "pathways-head":
         head_name = pname
         head_phase = phase
-      elif rep_job == "worker":
+      elif rep_job == pw_jobset.PATHWAYS_WORKER_JOB_NAME:
         slice_idx = int(job_idx) if job_idx.isdigit() else 0
         container_statuses = status.get("containerStatuses", [])
         ready = False
@@ -1570,468 +1579,146 @@ def _build_head_startup_script(cfg: dict[str, Any], instance_type: str) -> str:
   return "\n".join(lines) + "\n"
 
 
+GENERATOR_TPU_TYPE_MAP = {
+    "tpuv5e": "v5e",
+    "v5e": "v5e",
+    "tpuv6e": "v6e",
+    "v6e": "v6e",
+    "tpuv5p": "v5p",
+    "v5p": "v5p",
+    "tpuv7x": "tpu7x",
+    "tpu7x": "tpu7x",
+    "v7x": "tpu7x",
+    "tpuv4": "v4",
+    "v4": "v4",
+}
+
+
 def _build_jobset_manifest(
     cfg: dict[str, Any], has_configmap: bool
 ) -> dict[str, Any]:
-  """Builds the Kubernetes JobSet manifest dict from the current configuration."""
-  topo_specs = compute_topology_specs(cfg["tpu_type"], cfg["topology"])
-  instance_type = topo_specs["instance_type"]
-  accelerator = topo_specs["accelerator"]
-  topology = topo_specs["topology"]
-  vms_per_slice = topo_specs["vms_per_slice"]
-  chips_per_vm = topo_specs["chips_per_vm"]
-  num_slices = int(cfg["num_slices"])
-  gcs_scratch = cfg["gcs_scratch_location"]
-  server_image = cfg["server_image"]
-  proxy_image = cfg["proxy_image"]
-  container_image = cfg["container_image"]
+  """Builds the JobSet manifest with `PathwaysJobSet` from the current configuration.
 
-  head_volume_mounts = [{"mountPath": "/tmp", "name": "shared-tmp"}]
-  head_volumes: list[dict[str, Any]] = [{
-      "hostPath": {"path": "/tmp", "type": "DirectoryOrCreate"},
-      "name": "shared-tmp",
-  }]
+  The generator owns the Pathways resource manager, proxy, and TPU worker
+  templates (accelerator and topology selectors, chips per VM, parallelism);
+  this function only adds the demo's head container, its ConfigMap volume, and
+  the host networking the demo relies on.
+  """
+  topo_specs = compute_topology_specs(cfg["tpu_type"], cfg["topology"])
+  num_slices = int(cfg["num_slices"])
+  generator_tpu_type = GENERATOR_TPU_TYPE_MAP[cfg["tpu_type"].strip().lower()]
+
+  head_volumes = [
+      k8s_client.V1Volume(
+          name="shared-tmp",
+          host_path=k8s_client.V1HostPathVolumeSource(
+              path="/tmp", type="DirectoryOrCreate"
+          ),
+      )
+  ]
+  head_mounts = [k8s_client.V1VolumeMount(name="shared-tmp", mount_path="/tmp")]
   if has_configmap:
-    head_volume_mounts.insert(
-        0, {"mountPath": "/app/workload", "name": "workload-code"}
-    )
     head_volumes.insert(
         0,
-        {
-            "name": "workload-code",
-            "configMap": {"name": CONFIGMAP_NAME},
-        },
+        k8s_client.V1Volume(
+            name="workload-code",
+            config_map=k8s_client.V1ConfigMapVolumeSource(name=CONFIGMAP_NAME),
+        ),
+    )
+    head_mounts.insert(
+        0,
+        k8s_client.V1VolumeMount(
+            name="workload-code", mount_path="/app/workload"
+        ),
     )
 
-  head_node_selector: dict[str, str] = {}
-  if cfg.get("cpu_nodepool"):
-    head_node_selector["cloud.google.com/gke-nodepool"] = cfg["cpu_nodepool"]
-
-  head_pod_spec: dict[str, Any] = {
-      "containers": [{
-          "command": [
-              "bash",
-              "-c",
-              _build_head_startup_script(cfg, instance_type),
-          ],
-          "env": [
-              {
-                  "name": "PATHWAYS_HEAD",
-                  "valueFrom": {
-                      "fieldRef": {
-                          "fieldPath": (
-                              "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                          )
-                      }
-                  },
-              },
-              {"name": "JAX_PLATFORMS", "value": "proxy"},
-              {"name": "XCLOUD_ENVIRONMENT", "value": "GCP"},
-              {"name": "TPU_VMODULE", "value": "real_program_continuator=1"},
-              {"name": "ENABLE_PATHWAYS_PERSISTENCE", "value": "1"},
-              {"name": "ENABLE_PERSISTENCE_API", "value": "1"},
-              {"name": "ENABLE_PJRT_COMPATIBILITY", "value": "true"},
-              {
-                  "name": "JAX_BACKEND_TARGET",
-                  "value": "grpc://$(PATHWAYS_HEAD):29000",
-              },
-          ],
-          "image": container_image,
-          "imagePullPolicy": "Always",
-          "name": "jax-tpu",
-          "ports": [{"containerPort": 8090, "protocol": "TCP"}],
-          "resources": {"limits": {"cpu": "24", "memory": "100G"}},
-          "securityContext": {"privileged": True},
-          "volumeMounts": head_volume_mounts,
-      }],
-      "dnsPolicy": "ClusterFirstWithHostNet",
-      "hostNetwork": True,
-      "initContainers": [
-          {
-              "args": [
-                  "--server_port=29001",
-                  f"--gcs_scratch_location={gcs_scratch}",
-                  "--node_type=resource_manager",
-                  f"--instance_count={num_slices}",
-                  f"--instance_type={instance_type}",
-                  "--xla_tpu_use_enhanced_launch_barrier=true",
-              ],
-              "env": [
-                  {
-                      "name": "REPLICATED_JOB_NAME",
-                      "valueFrom": {
-                          "fieldRef": {
-                              "fieldPath": (
-                                  "metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']"
-                              )
-                          }
-                      },
-                  },
-                  {
-                      "name": "JOBSET_NAME",
-                      "valueFrom": {
-                          "fieldRef": {
-                              "fieldPath": (
-                                  "metadata.annotations['jobset.sigs.k8s.io/jobset-name']"
-                              )
-                          }
-                      },
-                  },
-                  {
-                      "name": "HOST_ADDRESS",
-                      "valueFrom": {
-                          "fieldRef": {
-                              "fieldPath": (
-                                  "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                              )
-                          }
-                      },
-                  },
-                  {"name": "TPU_SKIP_MDS_QUERY", "value": "true"},
-              ],
-              "image": server_image,
-              "imagePullPolicy": "Always",
-              "name": "pathways-rm",
-              "ports": [
-                  {"containerPort": 29001, "protocol": "TCP"},
-                  {"containerPort": 29002, "protocol": "TCP"},
-              ],
-              "resources": {"limits": {"cpu": "8", "memory": "32G"}},
-              "restartPolicy": "Always",
-          },
-          {
-              "args": [
-                  "--server_port=29000",
-                  "--resource_manager_address=$(PATHWAYS_HEAD):29001",
-                  f"--gcs_scratch_location={gcs_scratch}",
-                  f"--num_elastic_slices={num_slices}",
-                  "--xla_tpu_use_enhanced_launch_barrier=true",
-              ],
-              "env": [{
-                  "name": "PATHWAYS_HEAD",
-                  "valueFrom": {
-                      "fieldRef": {
-                          "fieldPath": (
-                              "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                          )
-                      }
-                  },
-              }],
-              "image": proxy_image,
-              "imagePullPolicy": "Always",
-              "name": "pathways-proxy",
-              "ports": [{"containerPort": 29000, "protocol": "TCP"}],
-              "resources": {"limits": {"cpu": "16", "memory": "100G"}},
-              "restartPolicy": "Always",
-          },
-      ],
-      "restartPolicy": "Never",
+  head_pod_spec_kwargs: dict[str, Any] = {
+      "host_network": True,
+      "dns_policy": "ClusterFirstWithHostNet",
       "volumes": head_volumes,
+      "node_selector": (
+          {pw_jobset.GKE_NODEPOOL_KEY: cfg["cpu_nodepool"]}
+          if cfg.get("cpu_nodepool")
+          else {}
+      ),
   }
-  if head_node_selector:
-    head_pod_spec["nodeSelector"] = head_node_selector
+  labels = (
+      {"kueue.x-k8s.io/queue-name": cfg["kueue_queue_name"]}
+      if cfg.get("kueue_queue_name")
+      else None
+  )
 
-  metadata: dict[str, Any] = {
-      "name": cfg["jobset_name"],
-      "namespace": cfg["namespace"],
-  }
-  if cfg.get("kueue_queue_name"):
-    metadata["labels"] = {"kueue.x-k8s.io/queue-name": cfg["kueue_queue_name"]}
-
-  return {
-      "apiVersion": "jobset.x-k8s.io/v1alpha2",
-      "kind": "JobSet",
-      "metadata": metadata,
-      "spec": {
-          "coordinator": {"replicatedJob": "pathways-head"},
-          "failurePolicy": {"restartStrategy": "Recreate"},
-          "network": {
-              "enableDNSHostnames": True,
-              "publishNotReadyAddresses": True,
-          },
-          "replicatedJobs": [
-              {
-                  "name": "pathways-head",
-                  "replicas": 1,
-                  "template": {
-                      "metadata": {
-                          "annotations": {
-                              "alpha.jobset.sigs.k8s.io/exclusive-topology": (
-                                  "kubernetes.io/hostname"
-                              )
-                          }
-                      },
-                      "spec": {
-                          "backoffLimit": 0,
-                          "completionMode": "Indexed",
-                          "completions": 1,
-                          "parallelism": 1,
-                          "template": {
-                              "metadata": {
-                                  "annotations": {
-                                      "alpha.jobset.sigs.k8s.io/exclusive-topology": (
-                                          "kubernetes.io/hostname"
-                                      )
-                                  },
-                                  "labels": {
-                                      "kueue.x-k8s.io/podset": "pathways-head"
-                                  },
-                              },
-                              "spec": head_pod_spec,
-                          },
-                      },
-                  },
-              },
-              {
-                  "name": "worker",
-                  "replicas": num_slices,
-                  "template": {
-                      "metadata": {},
-                      "spec": {
-                          "backoffLimit": 32000000,
-                          "completionMode": "Indexed",
-                          "completions": vms_per_slice,
-                          "parallelism": vms_per_slice,
-                          "template": {
-                              "metadata": {
-                                  "annotations": {
-                                      "alpha.jobset.sigs.k8s.io/exclusive-topology": (
-                                          "cloud.google.com/gke-nodepool"
-                                      )
-                                  },
-                                  "labels": {"kueue.x-k8s.io/podset": "worker"},
-                              },
-                              "spec": {
-                                  "containers": [{
-                                      "args": [
-                                          "--resource_manager_address=$(PATHWAYS_HEAD):29001",
-                                          "--server_port=29005",
-                                          f"--gcs_scratch_location={gcs_scratch}",
-                                          "--xla_tpu_use_enhanced_launch_barrier=true",
-                                      ],
-                                      "env": [
-                                          {
-                                              "name": "TPU_MIN_LOG_LEVEL",
-                                              "value": "0",
-                                          },
-                                          {
-                                              "name": "TF_CPP_MIN_LOG_LEVEL",
-                                              "value": "0",
-                                          },
-                                          {
-                                              "name": "XCLOUD_ENVIRONMENT",
-                                              "value": "GCP",
-                                          },
-                                          {
-                                              "name": (
-                                                  "MEGASCALE_GRPC_ENABLE_XOR_TRACER"
-                                              ),
-                                              "value": "false",
-                                          },
-                                          {
-                                              "name": "MEGASCALE_NUM_SLICES",
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.labels['jobset.sigs.k8s.io/replicatedjob-replicas']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                          {
-                                              "name": "JOBSET_NAME",
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.annotations['jobset.sigs.k8s.io/jobset-name']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                          {
-                                              "name": "REPLICATED_JOB_NAME",
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                          {
-                                              "name": "MEGASCALE_SLICE_ID",
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.labels['jobset.sigs.k8s.io/job-index']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                          {
-                                              "name": "PATHWAYS_HEAD",
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                          {
-                                              "name": (
-                                                  "MEGASCALE_COORDINATOR_ADDRESS"
-                                              ),
-                                              "valueFrom": {
-                                                  "fieldRef": {
-                                                      "fieldPath": (
-                                                          "metadata.labels['jobset.sigs.k8s.io/coordinator']"
-                                                      )
-                                                  }
-                                              },
-                                          },
-                                      ],
-                                      "image": server_image,
-                                      "imagePullPolicy": "Always",
-                                      "name": "pathways-worker",
-                                      "ports": [
-                                          {
-                                              "containerPort": 29005,
-                                              "protocol": "TCP",
-                                          },
-                                          {
-                                              "containerPort": 29006,
-                                              "protocol": "TCP",
-                                          },
-                                          {
-                                              "containerPort": 8471,
-                                              "protocol": "TCP",
-                                          },
-                                          {
-                                              "containerPort": 8080,
-                                              "protocol": "TCP",
-                                          },
-                                      ],
-                                      "resources": {
-                                          "limits": {
-                                              "google.com/tpu": str(
-                                                  chips_per_vm
-                                              )
-                                          }
-                                      },
-                                      "volumeMounts": [{
-                                          "mountPath": "/tmp",
-                                          "name": "shared-tmp",
-                                      }],
-                                  }],
-                                  "dnsPolicy": "ClusterFirstWithHostNet",
-                                  "hostNetwork": True,
-                                  "nodeSelector": {
-                                      "cloud.google.com/gke-tpu-accelerator": (
-                                          accelerator
-                                      ),
-                                      "cloud.google.com/gke-tpu-topology": (
-                                          topology
-                                      ),
-                                  },
-                                  "restartPolicy": "OnFailure",
-                                  "volumes": [{
-                                      "hostPath": {
-                                          "path": "/tmp",
-                                          "type": "DirectoryOrCreate",
-                                      },
-                                      "name": "shared-tmp",
-                                  }],
-                              },
-                          },
-                      },
-                  },
-              },
-          ],
-          "startupPolicy": {"startupPolicyOrder": "InOrder"},
-          "successPolicy": {
-              "operator": "All",
-              "targetReplicatedJobs": ["pathways-head"],
-          },
+  js = pw_jobset.PathwaysJobSet(
+      name=cfg["jobset_name"],
+      namespace=cfg["namespace"],
+      pathways_dir=cfg["gcs_scratch_location"],
+      tpu_type=generator_tpu_type,
+      topology=topo_specs["topology"],
+      num_slices=num_slices,
+      elastic_slices=num_slices,
+      labels=labels,
+      pathways_rm_and_worker_image=cfg["server_image"],
+      pathways_proxy_image=cfg["proxy_image"],
+      head_pod_spec_kwargs=head_pod_spec_kwargs,
+      worker_pod_spec_kwargs={
+          "host_network": True,
+          "dns_policy": "ClusterFirstWithHostNet",
       },
-  }
+      proxy_container_kwargs={
+          "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
+      },
+      rm_container_kwargs={
+          "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
+      },
+      worker_container_kwargs={
+          "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
+      },
+  )
+  js.add_user_workload(
+      image=cfg["container_image"],
+      command=[
+          "bash",
+          "-c",
+          _build_head_startup_script(cfg, topo_specs["instance_type"]),
+      ],
+      name="jax-tpu",
+      env={
+          "XCLOUD_ENVIRONMENT": "GCP",
+          "TPU_VMODULE": "real_program_continuator=1",
+          "ENABLE_PATHWAYS_PERSISTENCE": "1",
+          "ENABLE_PERSISTENCE_API": "1",
+          "ENABLE_PJRT_COMPATIBILITY": "true",
+      },
+      ports=[k8s_client.V1ContainerPort(container_port=8090, protocol="TCP")],
+      resources=k8s_client.V1ResourceRequirements(
+          limits={"cpu": "24", "memory": "100G"}
+      ),
+      security_context=k8s_client.V1SecurityContext(privileged=True),
+      volume_mounts=head_mounts,
+  )
+  return js.to_dict()
 
 
-_YAML_SAFE_STR_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_./-]*$")
-_YAML_RESERVED = frozenset(
-    {"true", "false", "null", "yes", "no", "on", "off", "~"}
-)
+class _LiteralDumper(yaml.SafeDumper):
+  """YAML dumper that renders multi-line strings as literal blocks."""
 
 
-def _yaml_scalar(value: Any) -> str:
-  """Formats a scalar value as valid Kubernetes YAML 1.2."""
-  if value is None:
-    return "null"
-  if isinstance(value, bool):
-    return "true" if value else "false"
-  if isinstance(value, (int, float)):
-    return str(value)
-  s = str(value)
-  if not s or s.lower() in _YAML_RESERVED or not _YAML_SAFE_STR_RE.match(s):
-    return json.dumps(s)
-  return s
+def _represent_multiline_str(dumper: yaml.SafeDumper, data: str) -> Any:
+  if "\n" in data:
+    return dumper.represent_scalar(
+        "tag:yaml.org,2002:str", data, style="|"
+    )
+  return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
 
-def _manifest_to_yaml(obj: Any, indent: int = 0) -> str:
-  """Serializes a nested manifest dict or list into clean Kubernetes YAML."""
-  spaces = " " * indent
-  if isinstance(obj, dict):
-    if not obj:
-      return f"{spaces}{{}}"
-    lines: list[str] = []
-    for k, v in obj.items():
-      key_str = _yaml_scalar(str(k))
-      if isinstance(v, dict):
-        if not v:
-          lines.append(f"{spaces}{key_str}: {{}}")
-        else:
-          lines.append(f"{spaces}{key_str}:")
-          lines.append(_manifest_to_yaml(v, indent + 2))
-      elif isinstance(v, list):
-        if not v:
-          lines.append(f"{spaces}{key_str}: []")
-        else:
-          lines.append(f"{spaces}{key_str}:")
-          lines.append(_manifest_to_yaml(v, indent + 2))
-      elif isinstance(v, str) and "\n" in v:
-        lines.append(f"{spaces}{key_str}: |-")
-        for subline in v.rstrip("\n").split("\n"):
-          lines.append(f"{' ' * (indent + 2)}{subline}")
-      else:
-        lines.append(f"{spaces}{key_str}: {_yaml_scalar(v)}")
-    return "\n".join(lines)
+_LiteralDumper.add_representer(str, _represent_multiline_str)
 
-  if isinstance(obj, list):
-    if not obj:
-      return f"{spaces}[]"
-    lines = []
-    for item in obj:
-      if isinstance(item, dict) and item:
-        rendered = _manifest_to_yaml(item, indent + 2)
-        first_nl = rendered.find("\n")
-        if first_nl == -1:
-          lines.append(f"{spaces}- {rendered.lstrip()}")
-        else:
-          first_line = rendered[:first_nl].lstrip()
-          rest = rendered[first_nl + 1 :]
-          lines.append(f"{spaces}- {first_line}\n{rest}")
-      elif isinstance(item, list):
-        lines.append(f"{spaces}-")
-        lines.append(_manifest_to_yaml(item, indent + 2))
-      elif isinstance(item, str) and "\n" in item:
-        lines.append(f"{spaces}- |-")
-        for subline in item.rstrip("\n").split("\n"):
-          lines.append(f"{' ' * (indent + 2)}{subline}")
-      else:
-        lines.append(f"{spaces}- {_yaml_scalar(item)}")
-    return "\n".join(lines)
 
-  return f"{spaces}{_yaml_scalar(obj)}"
+def _manifest_to_yaml(obj: Any) -> str:
+  """Serializes a manifest dict to YAML, keeping key order."""
+  return yaml.dump(
+      obj, Dumper=_LiteralDumper, sort_keys=False, default_flow_style=False
+  ).rstrip("\n")
 
 
 def _resolve_allowed_configmap_files(
@@ -2128,6 +1815,14 @@ def _build_yaml_bundle(
     cfg: dict[str, Any], jobset_yaml_override: str | None = None
 ) -> tuple[bool, str, str]:
   """Builds the full deployable YAML bundle (ConfigMap + JobSet)."""
+  tpu_key = cfg["tpu_type"].strip().lower()
+  if tpu_key not in GENERATOR_TPU_TYPE_MAP:
+    return (
+        False,
+        f"Unsupported TPU type {cfg['tpu_type']!r}; use one of"
+        f" {sorted(set(GENERATOR_TPU_TYPE_MAP.values()))}.",
+        "",
+    )
   resolved_files, err = _resolve_allowed_configmap_files(cfg)
   if err is not None:
     return False, err, ""
@@ -2772,7 +2467,7 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
 
     if mechanism == "k8s":
       worker_pod = ""
-      leader_prefix = f"{js_name}-worker-{slice_idx}-0-"
+      leader_prefix = f"{js_name}-{pw_jobset.PATHWAYS_WORKER_JOB_NAME}-{slice_idx}-0-"
       for w in state.worker_pods:
         wname = w.get("name", "")
         if (
@@ -3261,6 +2956,7 @@ def main(argv: list[str] | None = None) -> None:
   logging.basicConfig(
       level=logging.INFO,
       format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+      force=True,
   )
   _logger.info("Initializing GKE Demo Bridge Server...")
 
