@@ -122,17 +122,94 @@ class GKEUtilsTest(absltest.TestCase):
     self.assertIsInstance(api1, client.CustomObjectsApi)
     mock_load.assert_called_once()
 
+  def _describe_result(self, stdout: str) -> subprocess.CompletedProcess[str]:
+    """Returns a `gcloud container clusters describe` result."""
+    return subprocess.CompletedProcess(
+        args=["gcloud", "container", "clusters", "describe"],
+        returncode=0,
+        stdout=stdout,
+    )
+
   def test_fetch_cluster_credentials_success(self):
     """Tests that fetch_cluster_credentials calls gcloud with the correct arguments."""
     mock_run = self.enter_context(
         mock.patch.object(subprocess, "run", autospec=True)
     )
-    gke_utils.fetch_cluster_credentials(
-        cluster_name="test-cluster",
-        project_id="test-project",
-        location="test-zone",
+    mock_run.side_effect = [
+        # The DNS-based endpoint does not accept user traffic.
+        self._describe_result(
+            '{"controlPlaneEndpointsConfig": {"dnsEndpointConfig":'
+            ' {"allowExternalTraffic": false, "endpoint":'
+            ' "gke-123.test-zone.gke.goog"}}}'
+        ),
+        subprocess.CompletedProcess(args=["gcloud"], returncode=0),
+    ]
+
+    with self.assertLogs(gke_utils._logger, level="WARNING") as logs:
+      gke_utils.fetch_cluster_credentials(
+          cluster_name="test-cluster",
+          project_id="test-project",
+          location="test-zone",
+      )
+
+    self.assertEqual(mock_run.call_count, 2)
+    self.assertEqual(
+        mock_run.call_args_list[0].args[0],
+        [
+            "gcloud",
+            "container",
+            "clusters",
+            "describe",
+            "--location=test-zone",
+            "--project=test-project",
+            "--format=json(controlPlaneEndpointsConfig)",
+            "--",
+            "test-cluster",
+        ],
     )
-    mock_run.assert_called_once_with(
+    mock_run.assert_called_with(
+        [
+            "gcloud",
+            "container",
+            "clusters",
+            "get-credentials",
+            "--location=test-zone",
+            "--project=test-project",
+            "--",
+            "test-cluster",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    self.assertLen(logs.output, 1)
+    self.assertIn("Updated the kube config", logs.output[0])
+    self.assertIn("default endpoint", logs.output[0])
+
+  def test_fetch_cluster_credentials_with_dns_endpoint(self):
+    """Tests that fetch_cluster_credentials uses a reachable DNS endpoint."""
+    mock_run = self.enter_context(
+        mock.patch.object(subprocess, "run", autospec=True)
+    )
+    mock_run.side_effect = [
+        # The DNS-based endpoint accepts user traffic and IP access is off.
+        self._describe_result(
+            '{"controlPlaneEndpointsConfig": {"dnsEndpointConfig":'
+            ' {"allowExternalTraffic": true, "endpoint":'
+            ' "gke-123.test-zone.gke.goog"}, "ipEndpointsConfig":'
+            ' {"enabled": false}}}'
+        ),
+        subprocess.CompletedProcess(args=["gcloud"], returncode=0),
+    ]
+
+    with self.assertLogs(gke_utils._logger, level="WARNING") as logs:
+      gke_utils.fetch_cluster_credentials(
+          cluster_name="test-cluster",
+          project_id="test-project",
+          location="test-zone",
+      )
+
+    mock_run.assert_called_with(
         [
             "gcloud",
             "container",
@@ -148,6 +225,43 @@ class GKEUtilsTest(absltest.TestCase):
         capture_output=True,
         text=True,
     )
+    self.assertIn("DNS-based endpoint", logs.output[0])
+
+  def test_fetch_cluster_credentials_uses_default_endpoint_if_unknown(self):
+    """Tests the default endpoint fallback if endpoints cannot be read."""
+    mock_run = self.enter_context(
+        mock.patch.object(subprocess, "run", autospec=True)
+    )
+    mock_run.side_effect = [
+        subprocess.CalledProcessError(
+            returncode=1, cmd="gcloud", stderr="error"
+        ),
+        subprocess.CompletedProcess(args=["gcloud"], returncode=0),
+    ]
+
+    with self.assertLogs(gke_utils._logger, level="WARNING") as logs:
+      gke_utils.fetch_cluster_credentials(
+          cluster_name="test-cluster",
+          project_id="test-project",
+          location="test-zone",
+      )
+
+    mock_run.assert_called_with(
+        [
+            "gcloud",
+            "container",
+            "clusters",
+            "get-credentials",
+            "--location=test-zone",
+            "--project=test-project",
+            "--",
+            "test-cluster",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    self.assertIn("Failed to read the control plane endpoints", logs.output[0])
 
   def test_fetch_cluster_credentials_failure(self):
     """Tests that fetch_cluster_credentials raises an error when gcloud fails."""
@@ -163,6 +277,80 @@ class GKEUtilsTest(absltest.TestCase):
           project_id="test-project",
           location="test-zone",
       )
+
+  def test_should_use_dns_endpoint(self):
+    reachable_dns_config = {
+        "allowExternalTraffic": True,
+        "endpoint": "gke-123.us-central1.gke.goog",
+    }
+    open_ip_config = {"enabled": True, "enablePublicEndpoint": True}
+    test_cases = [
+        ("no_endpoints_config", {}, False),
+        (
+            "dns_endpoint_rejects_user_traffic",
+            {
+                "dnsEndpointConfig": {
+                    **reachable_dns_config,
+                    "allowExternalTraffic": False,
+                },
+                "ipEndpointsConfig": open_ip_config,
+            },
+            False,
+        ),
+        (
+            "open_public_ip_endpoint",
+            {
+                "dnsEndpointConfig": reachable_dns_config,
+                "ipEndpointsConfig": {
+                    **open_ip_config,
+                    "authorizedNetworksConfig": {
+                        "privateEndpointEnforcementEnabled": True
+                    },
+                },
+            },
+            False,
+        ),
+        (
+            "ip_access_disabled",
+            {
+                "dnsEndpointConfig": reachable_dns_config,
+                "ipEndpointsConfig": {"enabled": False},
+            },
+            True,
+        ),
+        (
+            "no_public_ip_endpoint",
+            {
+                "dnsEndpointConfig": reachable_dns_config,
+                "ipEndpointsConfig": {
+                    "enabled": True,
+                    "enablePublicEndpoint": False,
+                },
+            },
+            True,
+        ),
+        (
+            "authorized_networks_enabled",
+            {
+                "dnsEndpointConfig": reachable_dns_config,
+                "ipEndpointsConfig": {
+                    **open_ip_config,
+                    "authorizedNetworksConfig": {"enabled": True},
+                },
+            },
+            True,
+        ),
+        (
+            "no_ip_endpoints_config",
+            {"dnsEndpointConfig": reachable_dns_config},
+            True,
+        ),
+    ]
+    for case_name, endpoints_config, expected in test_cases:
+      with self.subTest(case=case_name):
+        self.assertEqual(
+            gke_utils._should_use_dns_endpoint(endpoints_config), expected
+        )
 
   def test_validate_k8s_name_valid(self):
     gke_utils._validate_k8s_name("valid-name-123")
