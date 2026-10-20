@@ -3071,6 +3071,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
   deploy = parser.add_argument_group("deploy")
   deploy.add_argument(
+      "--render-only",
+      type=str,
+      default="",
+      metavar="PATH",
+      help=(
+          "Write the generated ConfigMap + JobSet YAML to PATH and exit so you"
+          " can review or edit it before deploying with --yaml."
+      ),
+  )
+  deploy.add_argument(
       "--yaml",
       type=str,
       default="",
@@ -3166,6 +3176,25 @@ def main(argv: list[str] | None = None) -> None:
     if not _build_and_push_image(args.image, args.builder, args.project):
       raise SystemExit("Image build failed.")
     _logger.info("Built and pushed %s", args.image)
+
+  if args.render_only:
+    ok, err, bundle = _build_yaml_bundle(cfg)
+    if not ok:
+      raise SystemExit(err)
+    if not cfg["container_image"] or not cfg["gcs_scratch_location"]:
+      _logger.warning(
+          "container image or GCS scratch location is empty; fill in the"
+          " `image:` and `--gcs_scratch_location=` fields before deploying."
+      )
+    out_path = os.path.abspath(args.render_only)
+    with open(out_path, "w", encoding="utf-8") as f:
+      f.write(bundle)
+    _logger.info(
+        "Wrote %s. Review or edit it, then deploy with --yaml=%s",
+        out_path,
+        out_path,
+    )
+    raise SystemExit(0)
 
   deploy_requested = bool(args.yaml or args.image or args.build_image)
   if args.yaml:
