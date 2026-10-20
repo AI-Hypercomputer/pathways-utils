@@ -84,6 +84,9 @@ SNAPSHOTTER_PY_PATH = os.path.normpath(
 JOBSET_YAML_PATH = os.path.join(
     tempfile.gettempdir(), "gke_elastic_workload.yaml"
 )
+REPO_ROOT = os.path.normpath(os.path.join(PATHWAYSUTILS_DIR, ".."))
+DOCKERFILE_PATH = os.path.join(BASE_DIR, "Dockerfile")
+CONFIGMAP_NAME = "elastic-workload-code"
 PORT = 48259
 
 _SESSION_TOKEN = secrets.token_urlsafe(32)
@@ -99,20 +102,19 @@ _SAFE_CONTROL_PATH_RE = re.compile(
     r"^/(start|pause|reset|status|(disrupt|reconnect)\?slice=\d+)$"
 )
 
-DEFAULT_CLUSTER_CONTEXT = (
-    "gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32"
-)
 DEFAULT_NAMESPACE = "default"
-DEFAULT_JOBSET_NAME = "lb-elastic"
-DEFAULT_KUEUE_QUEUE = "multislice-queue"
-DEFAULT_CONTAINER_IMAGE = (
-    "gcr.io/cloud-tpu-multipod-dev/lukebaumann_model_lite_test"
+DEFAULT_JOBSET_NAME = "elastic-demo"
+DEFAULT_KUEUE_QUEUE = ""
+DEFAULT_CPU_NODEPOOL = ""
+DEFAULT_CONTAINER_IMAGE = ""
+DEFAULT_SERVER_IMAGE = (
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest"
 )
-DEFAULT_SERVER_IMAGE = "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/unsanitized_server@sha256:b155d72fe1bc17f1fb2aa692e4ea517e22401c775d50926d7b656b38c024acd6"
-DEFAULT_PROXY_IMAGE = "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/unsanitized_proxy_server@sha256:6dcf83cee6caf21ec019acea7fc9b91af32cb41bdde6e4cc889e5288b7ac03f2"
-DEFAULT_GCS_SCRATCH = (
-    "gs://sujinesh-cloud-tpu-multipod-dev-us/lukebaumann-model-lite-v5e/"
+DEFAULT_PROXY_IMAGE = (
+    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
 )
+DEFAULT_GCS_SCRATCH = ""
+DEFAULT_ORBAX_REF = "main"
 INIT_OVERHEAD_SEC = 2.5
 
 SIMPLE_MODEL_MODULES = (
@@ -170,6 +172,19 @@ def compute_topology_specs(tpu_type: str, topology: str) -> dict[str, Any]:
   }
 
 
+def _current_kubeconfig_context() -> str:
+  """Returns the active kubeconfig context, or an empty string if none is set."""
+  proc = subprocess.run(
+      ["kubectl", "config", "current-context"],
+      capture_output=True,
+      text=True,
+      check=False,
+  )
+  if proc.returncode != 0:
+    return ""
+  return proc.stdout.strip()
+
+
 def default_config() -> dict[str, Any]:
   """Returns the default workload and cluster configuration."""
   topo_specs = compute_topology_specs("tpuv5e", "4x8")
@@ -184,7 +199,7 @@ def default_config() -> dict[str, Any]:
     if os.path.isfile(hpath):
       default_cm_files.append({"filename": fname, "host_path": hpath})
   return {
-      "cluster_context": DEFAULT_CLUSTER_CONTEXT,
+      "cluster_context": _current_kubeconfig_context(),
       "namespace": DEFAULT_NAMESPACE,
       "jobset_name": DEFAULT_JOBSET_NAME,
       "kueue_queue_name": DEFAULT_KUEUE_QUEUE,
@@ -201,7 +216,8 @@ def default_config() -> dict[str, Any]:
       "container_image": DEFAULT_CONTAINER_IMAGE,
       "server_image": DEFAULT_SERVER_IMAGE,
       "proxy_image": DEFAULT_PROXY_IMAGE,
-      "cpu_nodepool": "cpu-np",
+      "cpu_nodepool": DEFAULT_CPU_NODEPOOL,
+      "orbax_ref": DEFAULT_ORBAX_REF,
       "workload_preset": "builtin_elastic_demo",
       "custom_command": (
           "python3 -m pathwaysutils.extras.elastic.elastic_workload \\\n"
@@ -290,9 +306,8 @@ def _get_kubeconfig_contexts() -> list[str]:
       check=False,
   )
   if proc.returncode != 0:
-    return [DEFAULT_CLUSTER_CONTEXT]
-  contexts = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-  return contexts if contexts else [DEFAULT_CLUSTER_CONTEXT]
+    return []
+  return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
 def _send_workload_control_rpc(
@@ -399,6 +414,7 @@ def _merge_config_dict(
       "server_image",
       "proxy_image",
       "cpu_nodepool",
+      "orbax_ref",
       "workload_preset",
       "custom_command",
   ):
@@ -1342,15 +1358,16 @@ def _build_head_startup_script(cfg: dict[str, Any], instance_type: str) -> str:
   ]
 
   if preset == "builtin_elastic_demo":
+    orbax_ref = cfg.get("orbax_ref", "") or DEFAULT_ORBAX_REF
     lines.extend([
         "pip install --no-cache-dir grain",
         'echo "Grain package installed successfully"',
         (
             "pip install --no-cache-dir --no-deps"
-            ' "git+https://github.com/google/orbax.git@test_996639160#subdirectory=checkpoint"'
+            f' "git+https://github.com/google/orbax.git@{orbax_ref}#subdirectory=checkpoint"'
         ),
         (
-            'echo "Orbax checkpoint installed from branch test_996639160'
+            f'echo "Orbax checkpoint installed from ref {orbax_ref}'
             ' successfully"'
         ),
     ])
@@ -1463,7 +1480,7 @@ def _build_jobset_manifest(
         0,
         {
             "name": "workload-code",
-            "configMap": {"name": "elastic-workload-code"},
+            "configMap": {"name": CONFIGMAP_NAME},
         },
     )
 
@@ -1955,7 +1972,7 @@ def _build_configmap_manifest(
       "apiVersion": "v1",
       "kind": "ConfigMap",
       "metadata": {
-          "name": "elastic-workload-code",
+          "name": CONFIGMAP_NAME,
           "namespace": cfg["namespace"],
       },
       "data": data,
@@ -2016,6 +2033,21 @@ def _write_workload_yaml_bundle(
     cfg: dict[str, Any], jobset_yaml_override: str | None = None
 ) -> tuple[bool, str, str]:
   """Writes the deployable YAML bundle to JOBSET_YAML_PATH with 0o600 permissions."""
+  if not jobset_yaml_override:
+    if not cfg.get("container_image"):
+      return (
+          False,
+          "No workload container image set. Pass --image=... or"
+          " --build-image, or fill in the image field in Step 2.",
+          "",
+      )
+    if not cfg.get("gcs_scratch_location"):
+      return (
+          False,
+          "No GCS scratch location set. Pass --gcs-scratch=gs://... or fill"
+          " in the field in Step 2.",
+          "",
+      )
   for key in ("cluster_context", "namespace", "jobset_name"):
     val = cfg.get(key, "")
     if val:
@@ -2047,6 +2079,87 @@ def _write_workload_yaml_bundle(
       " launch."
   )
   return True, msg, bundle
+
+
+def _run_logged(cmd: list[str], cwd: str | None = None) -> int:
+  """Runs a command with output streamed to the terminal and returns its exit code."""
+  _logger.info("$ %s", " ".join(cmd))
+  proc = subprocess.run(cmd, cwd=cwd, check=False)
+  return proc.returncode
+
+
+def _build_and_push_image(image: str, builder: str, project: str) -> bool:
+  """Builds the demo workload image from the repository root and pushes it.
+
+  The image bundles JAX, Flax, Grain, Orbax (from `--orbax-ref`), and this
+  checkout of pathwaysutils so the head pod can run `elastic_workload.py`
+  without any runtime pip installs.
+  """
+  dockerfile_rel = os.path.relpath(DOCKERFILE_PATH, REPO_ROOT)
+  if builder == "docker":
+    rc = _run_logged(
+        ["docker", "build", "-f", DOCKERFILE_PATH, "-t", image, REPO_ROOT]
+    )
+    if rc != 0:
+      return False
+    return _run_logged(["docker", "push", image]) == 0
+
+  cloudbuild = {
+      "steps": [{
+          "name": "gcr.io/cloud-builders/docker",
+          "args": ["build", "-f", dockerfile_rel, "-t", image, "."],
+      }],
+      "images": [image],
+  }
+  fd, cfg_path = tempfile.mkstemp(prefix="elastic_demo_cloudbuild_", suffix=".json")
+  with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(cloudbuild, f)
+  cmd = ["gcloud", "builds", "submit", REPO_ROOT, f"--config={cfg_path}"]
+  if project:
+    cmd.append(f"--project={project}")
+  rc = _run_logged(cmd)
+  os.unlink(cfg_path)
+  return rc == 0
+
+
+def _kubectl_apply(cfg: dict[str, Any], yaml_path: str) -> tuple[bool, str]:
+  """Applies the ConfigMap + JobSet bundle at yaml_path to the configured cluster."""
+  cmd = _kubectl_cmd(
+      "apply",
+      "-f",
+      yaml_path,
+      context=cfg.get("cluster_context", ""),
+      namespace=cfg.get("namespace", ""),
+      include_ns=True,
+  )
+  _logger.info("$ %s", " ".join(cmd))
+  proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+  output = (proc.stdout + proc.stderr).strip()
+  return proc.returncode == 0, output
+
+
+def _delete_workload(cfg: dict[str, Any]) -> tuple[bool, str]:
+  """Deletes the JobSet and its workload ConfigMap from the configured cluster."""
+  ctx = cfg.get("cluster_context", "")
+  ns = cfg.get("namespace", "")
+  safe_js = _validate_k8s_id(cfg["jobset_name"], "jobset_name")
+  outputs = []
+  ok = True
+  for kind, name in (("jobset", safe_js), ("configmap", CONFIGMAP_NAME)):
+    cmd = _kubectl_cmd(
+        "delete",
+        kind,
+        name,
+        "--ignore-not-found=true",
+        context=ctx,
+        namespace=ns,
+        include_ns=True,
+    )
+    _logger.info("$ %s", " ".join(cmd))
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    ok = ok and proc.returncode == 0
+    outputs.append((proc.stdout + proc.stderr).strip())
+  return ok, "\n".join(o for o in outputs if o)
 
 
 class DemoRequestHandler(server.SimpleHTTPRequestHandler):
@@ -2412,26 +2525,13 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
     if tailer_instance is not None:
       tailer_instance.stop_current_tail()
       tailer_instance.finished_pods.clear()
-    proc = subprocess.run(
-        _kubectl_cmd(
-            "delete",
-            "jobset",
-            safe_js,
-            "--ignore-not-found=true",
-            context=ctx,
-            namespace=ns,
-            include_ns=True,
-        ),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    _, output = _delete_workload(cfg)
     state.clear_for_delete()
     state.broadcast({"type": "deleted", "snapshot": state.get_snapshot()})
     self._send_json({
         "status": "ok",
         "message": f"JobSet '{safe_js}' deleted and state cleared",
-        "output": proc.stdout.strip(),
+        "output": output,
         "snapshot": state.get_snapshot(),
     })
 
@@ -2851,39 +2951,179 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   """Parses CLI flags for starting the GKE elasticity demo server."""
   parser = argparse.ArgumentParser(
       description=(
-          "Start the Pathways Elasticity GKE web server and open the demo UI."
-      )
+          "Deploy the Pathways elastic training demo to GKE, start the bridge"
+          " web server, and open the demo UI. Without --image, --build-image,"
+          " or --yaml, the server only monitors an existing JobSet."
+      ),
+      formatter_class=argparse.ArgumentDefaultsHelpFormatter,
   )
-  parser.add_argument(
-      "--port",
-      type=int,
-      default=PORT,
-      help=f"Port to run the HTTP server on (default: {PORT}).",
+  web = parser.add_argument_group("web server")
+  web.add_argument(
+      "--port", type=int, default=PORT, help="Port to run the HTTP server on."
   )
-  parser.add_argument(
+  web.add_argument(
       "--host",
       type=str,
       default="127.0.0.1",
-      help="Host interface to bind the HTTP server to (default: 127.0.0.1).",
+      help="Host interface to bind the HTTP server to.",
   )
-  parser.add_argument(
+  web.add_argument(
       "--no-browser",
       action="store_true",
       help="Do not automatically open the demo webpage in a browser.",
   )
-  parser.add_argument(
+
+  cluster = parser.add_argument_group("cluster")
+  cluster.add_argument(
       "--context",
       type=str,
       default="",
-      help="Optional GKE kubeconfig context to select on startup.",
+      help="kubeconfig context (defaults to `kubectl config current-context`).",
   )
-  parser.add_argument(
-      "--namespace",
+  cluster.add_argument(
+      "--namespace", type=str, default="", help="Kubernetes namespace."
+  )
+  cluster.add_argument(
+      "--jobset-name", type=str, default="", help="Name of the JobSet."
+  )
+  cluster.add_argument(
+      "--kueue-queue",
+      type=str,
+      default=None,
+      help="Kueue LocalQueue name (omit if Kueue is not installed).",
+  )
+  cluster.add_argument(
+      "--cpu-nodepool",
+      type=str,
+      default=None,
+      help="GKE nodepool for the head pod (omit to let GKE schedule it).",
+  )
+
+  workload = parser.add_argument_group("workload")
+  workload.add_argument(
+      "--image",
       type=str,
       default="",
-      help="Optional Kubernetes namespace to select on startup.",
+      help=(
+          "Workload container image for the head pod, e.g."
+          " REGION-docker.pkg.dev/PROJECT/REPO/elastic-demo:latest."
+      ),
+  )
+  workload.add_argument(
+      "--build-image",
+      action="store_true",
+      help="Build and push --image from this checkout before deploying.",
+  )
+  workload.add_argument(
+      "--builder",
+      choices=("gcloud", "docker"),
+      default="gcloud",
+      help="How to build --image: Cloud Build (gcloud) or local docker.",
+  )
+  workload.add_argument(
+      "--project",
+      type=str,
+      default="",
+      help="GCP project for `gcloud builds submit` (defaults to gcloud config).",
+  )
+  workload.add_argument(
+      "--gcs-scratch",
+      type=str,
+      default="",
+      help="GCS scratch location for Pathways, e.g. gs://BUCKET/elastic-demo/.",
+  )
+  workload.add_argument(
+      "--server-image", type=str, default="", help="Pathways server image."
+  )
+  workload.add_argument(
+      "--proxy-image", type=str, default="", help="Pathways proxy image."
+  )
+  workload.add_argument(
+      "--tpu-type", type=str, default="", help="TPU type, e.g. tpuv5e, v6e."
+  )
+  workload.add_argument(
+      "--topology", type=str, default="", help="Slice topology, e.g. 4x8."
+  )
+  workload.add_argument(
+      "--num-slices", type=int, default=None, help="Number of training slices."
+  )
+  workload.add_argument(
+      "--standby-slices", type=int, default=None, help="Number of spare slices."
+  )
+  workload.add_argument(
+      "--total-steps", type=int, default=None, help="Total training steps."
+  )
+  workload.add_argument(
+      "--elasticity-mode",
+      type=str,
+      default="",
+      help=(
+          "One of run_checkpoint_replica_resize, step_checkpoint_replica_resize,"
+          " step_snapshot_pause_resume, step_snapshot_replica_resize."
+      ),
+  )
+  workload.add_argument(
+      "--orbax-ref",
+      type=str,
+      default="",
+      help="Git ref of google/orbax to install in the head pod.",
+  )
+
+  deploy = parser.add_argument_group("deploy")
+  deploy.add_argument(
+      "--yaml",
+      type=str,
+      default="",
+      help=(
+          "Apply this ConfigMap + JobSet YAML instead of generating one."
+          " --jobset-name and --namespace must match the manifest."
+      ),
+  )
+  deploy.add_argument(
+      "--apply",
+      action=argparse.BooleanOptionalAction,
+      default=True,
+      help="Run `kubectl apply` on the generated or provided YAML.",
+  )
+  deploy.add_argument(
+      "--delete",
+      action="store_true",
+      help="Delete the JobSet and ConfigMap from the cluster and exit.",
   )
   return parser.parse_args(argv)
+
+
+def _startup_config_updates(args: argparse.Namespace) -> dict[str, Any]:
+  """Maps CLI flags onto bridge configuration keys, skipping unset flags."""
+  updates: dict[str, Any] = {}
+  flag_values = vars(args)
+  for flag, key in (
+      ("context", "cluster_context"),
+      ("namespace", "namespace"),
+      ("jobset_name", "jobset_name"),
+      ("image", "container_image"),
+      ("gcs_scratch", "gcs_scratch_location"),
+      ("server_image", "server_image"),
+      ("proxy_image", "proxy_image"),
+      ("tpu_type", "tpu_type"),
+      ("topology", "topology"),
+      ("elasticity_mode", "elasticity_mode"),
+      ("orbax_ref", "orbax_ref"),
+  ):
+    value = flag_values[flag]
+    if value:
+      updates[key] = value
+  for flag, key in (
+      ("kueue_queue", "kueue_queue_name"),
+      ("cpu_nodepool", "cpu_nodepool"),
+      ("num_slices", "num_slices"),
+      ("standby_slices", "standby_slices"),
+      ("total_steps", "total_steps"),
+  ):
+    value = flag_values[flag]
+    if value is not None:
+      updates[key] = value
+  return updates
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -2904,19 +3144,67 @@ def main(argv: list[str] | None = None) -> None:
   if args.host and args.host != "0.0.0.0":
     _ALLOWED_HOSTS.add(args.host.lower())
 
-  startup_updates: dict[str, Any] = {}
-  if args.context:
-    startup_updates["cluster_context"] = args.context
-  if args.namespace:
-    startup_updates["namespace"] = args.namespace
+  startup_updates = _startup_config_updates(args)
   if startup_updates:
     state.update_config(startup_updates)
+  cfg = state.get_config()
+  if not cfg["cluster_context"]:
+    raise SystemExit(
+        "No kubeconfig context found. Run `gcloud container clusters"
+        " get-credentials ...` or pass --context=..."
+    )
 
-  ok, msg, _ = _write_workload_yaml_bundle(state.get_config())
-  if ok:
-    _logger.info(msg)
+  if args.delete:
+    ok, output = _delete_workload(cfg)
+    if output:
+      _logger.info(output)
+    raise SystemExit(0 if ok else 1)
+
+  if args.build_image:
+    if not args.image:
+      raise SystemExit("--build-image requires --image=REGISTRY/REPO/NAME:TAG")
+    if not _build_and_push_image(args.image, args.builder, args.project):
+      raise SystemExit("Image build failed.")
+    _logger.info("Built and pushed %s", args.image)
+
+  deploy_requested = bool(args.yaml or args.image or args.build_image)
+  if args.yaml:
+    yaml_path = os.path.abspath(args.yaml)
+    if not os.path.isfile(yaml_path):
+      raise SystemExit(f"--yaml file not found: {yaml_path}")
+    _logger.info("Using workload manifest %s", yaml_path)
   else:
-    _logger.warning("Could not write initial YAML bundle: %s", msg)
+    yaml_path = JOBSET_YAML_PATH
+    ok, msg, _ = _write_workload_yaml_bundle(cfg)
+    if ok:
+      _logger.info(msg)
+    elif deploy_requested:
+      raise SystemExit(msg)
+    else:
+      _logger.warning("Could not write initial YAML bundle: %s", msg)
+
+  if deploy_requested and args.apply:
+    ok, output = _kubectl_apply(cfg, yaml_path)
+    if output:
+      _logger.info(output)
+    if not ok:
+      raise SystemExit("kubectl apply failed.")
+    _logger.info(
+        "Deployed JobSet %s/%s. The UI will show it in Step 3 once the head"
+        " pod is running.",
+        cfg["namespace"],
+        cfg["jobset_name"],
+    )
+  elif deploy_requested:
+    _logger.info(
+        "Skipping kubectl apply (--no-apply). Run: %s",
+        _build_kubectl_apply_cmd(cfg, yaml_path),
+    )
+  else:
+    _logger.info(
+        "Monitor-only mode: no --image, --build-image, or --yaml given, so"
+        " nothing was deployed."
+    )
 
   poller = ClusterPoller(state)
   poller.start()

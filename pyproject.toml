@@ -42,6 +42,12 @@ gke = [
     "kubernetes",
     "pyyaml",
 ]
+# Pathways elastic training demo (pathwaysutils/extras/elastic)
+elastic-demo = [
+    "flax",
+    "grain",
+    "numpy",
+]
 sps = [
     "portpicker",
     "google-cloud-monitoring",

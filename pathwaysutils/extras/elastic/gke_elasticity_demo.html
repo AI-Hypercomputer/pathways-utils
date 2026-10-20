@@ -360,7 +360,7 @@
           <h1 class="text-base md:text-lg font-bold tracking-tight">Live Elastic Training on GKE</h1>
         </div>
         <p class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-          Cluster <span id="headerClusterLabel" class="font-mono text-emerald-400">gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32</span> &bull; JobSet <span id="headerJobsetLabel" class="font-mono text-[var(--foreground)]">default/lb-elastic</span>
+          Cluster <span id="headerClusterLabel" class="font-mono text-emerald-400">(no context selected)</span> &bull; JobSet <span id="headerJobsetLabel" class="font-mono text-[var(--foreground)]">default/elastic-demo</span>
         </p>
       </div>
 
@@ -415,7 +415,7 @@
           <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">GKE Kubeconfig Context</label>
           <div class="flex flex-col sm:flex-row gap-1.5">
             <select id="cfgClusterSelect" class="sm:w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
-              <option value="gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32">gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32</option>
+              <option value="">(loading kubeconfig contexts...)</option>
             </select>
             <div class="sm:w-1/2 flex gap-1.5">
               <input id="cfgClusterContext" type="text" placeholder="Or enter kubeconfig context..." class="flex-1 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
@@ -433,12 +433,12 @@
 
         <div class="space-y-1">
           <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">CPU Nodepool (for Pathways Head Pod)</label>
-          <input id="cfgCpuNodepool" type="text" value="cpu-np" placeholder="cpu-np (leave blank for default)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          <input id="cfgCpuNodepool" type="text" value="" placeholder="e.g. cpu-np (leave blank to let GKE schedule)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
         </div>
 
         <div class="space-y-1">
           <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Kueue LocalQueue Name</label>
-          <input id="cfgKueueQueue" type="text" value="multislice-queue" placeholder="multislice-queue (optional)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          <input id="cfgKueueQueue" type="text" value="" placeholder="e.g. multislice-queue (leave blank without Kueue)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
         </div>
       </div>
 
@@ -498,7 +498,7 @@
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div class="space-y-1">
               <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">JobSet Name</label>
-              <input id="cfgJobsetName" type="text" value="lb-elastic" placeholder="lb-elastic" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              <input id="cfgJobsetName" type="text" value="elastic-demo" placeholder="elastic-demo" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
             </div>
 
             <div class="space-y-1">
@@ -610,7 +610,7 @@
               </button>
             </div>
             <div id="kubectlApplyCmdText" class="bg-[#060911] text-sky-300 text-[11px] font-mono px-2.5 py-1.5 rounded border border-[var(--border)] overflow-x-auto whitespace-nowrap">
-              kubectl --context=gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32 -n default apply -f /tmp/gke_elastic_workload.yaml
+              kubectl -n default apply -f /tmp/gke_elastic_workload.yaml
             </div>
             <p class="text-[10px] text-[var(--muted-foreground)]">
               Saving writes the <span class="font-mono">JobSet</span> and <span class="font-mono">elastic-workload-code</span> <span class="font-mono">ConfigMap</span> to <span id="yamlBundlePathLabel" class="font-mono text-[var(--foreground)]">/tmp/gke_elastic_workload.yaml</span>. Run this command yourself so no web process launches workloads automatically.
@@ -877,9 +877,9 @@
       loss: null,
       goodput: 0.0,
       elapsedTimeSec: 0.0,
-      clusterContext: "gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32",
+      clusterContext: "",
       namespace: "default",
-      jobsetName: "lb-elastic",
+      jobsetName: "elastic-demo",
       numSlices: 2,
       standbySlices: 2,
       tpuType: "tpuv5e",
@@ -1215,7 +1215,7 @@
     function updateTopologyPreview() {
       const { chips, vms } = computeChipsFromTopo(cfgTopology.value);
       cfgTopologyComputed.textContent = `${chips} chips/slice \u2022 ${vms} VMs/slice (${cfgTpuType.value}:${cfgTopology.value || '4x8'})`;
-      stepSub2.textContent = `${cfgNumSlices.value || 2}x ${cfgTpuType.value}:${cfgTopology.value || '4x8'} (${cfgJobsetName.value || 'lb-elastic'})`;
+      stepSub2.textContent = `${cfgNumSlices.value || 2}x ${cfgTpuType.value}:${cfgTopology.value || '4x8'} (${cfgJobsetName.value || 'elastic-demo'})`;
       const ctx = cfgClusterContext.value.trim();
       const ns = cfgNamespace.value.trim() || "default";
       const pathStr = yamlBundlePathLabel ? yamlBundlePathLabel.textContent : "/tmp/gke_elastic_workload.yaml";
@@ -1421,9 +1421,9 @@
         cfgClusterSelect.value = cfg.cluster_context;
       }
       cfgNamespace.value = cfg.namespace || "default";
-      cfgJobsetName.value = cfg.jobset_name || "lb-elastic";
-      cfgKueueQueue.value = cfg.kueue_queue_name !== undefined ? cfg.kueue_queue_name : "multislice-queue";
-      cfgCpuNodepool.value = cfg.cpu_nodepool !== undefined ? cfg.cpu_nodepool : "cpu-np";
+      cfgJobsetName.value = cfg.jobset_name || "elastic-demo";
+      cfgKueueQueue.value = cfg.kueue_queue_name !== undefined ? cfg.kueue_queue_name : "";
+      cfgCpuNodepool.value = cfg.cpu_nodepool !== undefined ? cfg.cpu_nodepool : "";
       cfgNumSlices.value = cfg.num_slices || 2;
       cfgStandbySlices.value = cfg.standby_slices !== undefined ? cfg.standby_slices : 2;
       cfgTpuType.value = cfg.tpu_type || "tpuv5e";
@@ -1459,7 +1459,7 @@
       return {
         cluster_context: cfgClusterContext.value.trim(),
         namespace: cfgNamespace.value.trim() || "default",
-        jobset_name: cfgJobsetName.value.trim() || "lb-elastic",
+        jobset_name: cfgJobsetName.value.trim() || "elastic-demo",
         kueue_queue_name: cfgKueueQueue.value.trim(),
         cpu_nodepool: cfgCpuNodepool.value.trim(),
         num_slices: parseInt(cfgNumSlices.value, 10) || 2,
@@ -1488,7 +1488,7 @@
 
       state.clusterContext = cfg.cluster_context || state.clusterContext;
       state.namespace = cfg.namespace || "default";
-      state.jobsetName = cfg.jobset_name || "lb-elastic";
+      state.jobsetName = cfg.jobset_name || "elastic-demo";
       state.numSlices = newNumSlices;
       state.standbySlices = newStandbySlices;
       state.tpuType = cfg.tpu_type || "tpuv5e";

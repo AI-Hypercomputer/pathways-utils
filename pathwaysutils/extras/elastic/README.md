@@ -54,26 +54,113 @@ drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
 
 ### Running the Live GKE Demo
 
-1. Authenticate `gcloud` and `kubectl` for your target GKE cluster.
-2. Start the bridge server and open the demo webpage in one command:
-   ```bash
-   python3 -m pathwaysutils.extras.elastic.gke_demo_bridge
-   ```
-   Optional flags let you pre-select a cluster context and namespace:
-   ```bash
-   python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
-     --context=gke_my-project_us-south1_my-cluster \
-     --namespace=default
-   ```
-   Pass `--port=48259` to choose a custom port, `--host=0.0.0.0` when serving
-   through a remote workstation proxy, or `--no-browser` on a remote host.
-3. Follow the three steps on the single-page UI:
-   - Step 1 selects your GKE kubeconfig context, namespace, and nodepool, and
-     checks cluster connectivity.
-   - Step 2 configures TPU topology and slice counts, writes the combined
-     ConfigMap and JobSet YAML bundle to `/tmp/gke_elastic_workload.yaml`, and
-     gives you the exact `kubectl apply -f /tmp/gke_elastic_workload.yaml`
-     command to run in your terminal.
-   - Step 3 detects the deployed JobSet automatically, starts or pauses
-     training, injects live GKE node preemptions or in-workload fault signals,
-     and monitors recovery telemetry.
+A single command builds (or reuses) the workload image, generates the
+ConfigMap + JobSet manifest, applies it to your cluster, starts the bridge
+server, and opens the demo page. Everything below runs from your workstation.
+
+#### Prerequisites
+
+* A GKE cluster with the [JobSet](https://jobset.sigs.k8s.io/) controller
+  installed and at least `num_slices + standby_slices` TPU node pools of the
+  same type and topology (the defaults need four `tpuv5e` `4x8` slices). Kueue
+  is optional; pass `--kueue-queue=NAME` only if your cluster uses it.
+* A node pool that can schedule the head pod (`24` CPU, `100G` memory limits).
+  Pass `--cpu-nodepool=NAME` to pin it, or leave unset to let GKE schedule it.
+* A GCS bucket that the cluster's node service account can read and write,
+  used as the Pathways scratch location (`--gcs-scratch=gs://BUCKET/PREFIX/`).
+* An Artifact Registry repository you can push to, plus either Cloud Build
+  permissions (`roles/cloudbuild.builds.editor`, the default) or a local
+  Docker daemon (`--builder=docker`).
+* Locally: Python 3.11+, `git`, `gcloud`, `kubectl`, and the
+  `gke-gcloud-auth-plugin` component.
+
+#### 1. Clone the branch and install
+
+```bash
+git clone -b elastic-demo https://github.com/AI-Hypercomputer/pathways-utils.git
+cd pathways-utils
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[elastic-demo]"
+```
+
+#### 2. Point kubectl at your cluster
+
+```bash
+gcloud container clusters get-credentials CLUSTER --region REGION --project PROJECT
+kubectl config current-context   # the demo uses this context unless --context is set
+```
+
+#### 3. Build the image, deploy, and open the UI
+
+```bash
+python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
+  --build-image \
+  --image=REGION-docker.pkg.dev/PROJECT/REPO/elastic-demo:latest \
+  --gcs-scratch=gs://BUCKET/elastic-demo/ \
+  --tpu-type=tpuv5e --topology=4x8 --num-slices=2 --standby-slices=2
+```
+
+This command, in order:
+
+1. Builds `pathwaysutils/extras/elastic/Dockerfile` with Cloud Build and pushes
+   it to `--image` (add `--builder=docker` to build locally instead, or drop
+   `--build-image` to reuse an image you already pushed).
+2. Writes the ConfigMap + JobSet bundle to `/tmp/gke_elastic_workload.yaml`.
+   The ConfigMap carries `elastic_workload.py`, the `simple_model` package,
+   `elastic/manager.py`, and `test/mock_fault_injection.py` from your checkout
+   so edits are picked up without rebuilding the image.
+3. Runs `kubectl apply -f /tmp/gke_elastic_workload.yaml` against the current
+   context (pass `--no-apply` to only render the YAML and print the command).
+4. Starts the bridge on `http://localhost:48259/` and opens it in your browser
+   (`--no-browser` to skip, `--host=0.0.0.0 --port=PORT` on a remote VM).
+
+To deploy a manifest you wrote or edited yourself, pass it instead of the
+image flags; `--jobset-name` and `--namespace` must match the manifest:
+
+```bash
+python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
+  --yaml=my_workload.yaml --jobset-name=my-jobset --namespace=default
+```
+
+Running the command with no deployment flags starts the bridge in
+monitor-only mode against an already running JobSet.
+
+#### 4. Drive the demo from the browser
+
+* Step 1 shows the selected kubeconfig context and namespace and checks
+  cluster connectivity.
+* Step 2 shows the generated YAML. Changing topology, slice counts, images, or
+  elasticity mode here rewrites `/tmp/gke_elastic_workload.yaml`; re-run the
+  command above (or `kubectl apply` the file) to redeploy.
+* Step 3 detects the JobSet once the head pod is running, then lets you start
+  or pause training, inject real node preemptions (`kubectl cordon` +
+  `drain`) or in-workload fault signals, and watch step, loss, goodput, and
+  slice topology update live from the head pod logs.
+
+The head pod waits for the Start button (`--wait_for_start_signal=true`), so
+nothing trains until you click it.
+
+#### 5. Clean up
+
+```bash
+python3 -m pathwaysutils.extras.elastic.gke_demo_bridge --delete
+```
+
+This deletes the JobSet and the `elastic-workload-code` ConfigMap from the
+configured context and namespace (pass the same `--context`, `--namespace`,
+and `--jobset-name` you deployed with). The Delete button in Step 3 does the
+same thing and also uncordons any nodes drained during the demo.
+
+#### Useful flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--context`, `--namespace`, `--jobset-name` | Where the JobSet lives (defaults: current context, `default`, `elastic-demo`). |
+| `--image`, `--build-image`, `--builder`, `--project` | Workload image and how to build it. |
+| `--server-image`, `--proxy-image` | Pathways server and proxy images (default to the public `cloud-tpu-v2-images/pathways` images). |
+| `--gcs-scratch` | Pathways GCS scratch location (required to deploy). |
+| `--tpu-type`, `--topology`, `--num-slices`, `--standby-slices` | Slice shape and counts. |
+| `--total-steps`, `--elasticity-mode` | Workload length and recovery strategy. |
+| `--orbax-ref` | Git ref of `google/orbax` installed in the head pod (default `main`; the demo needs an unreleased snapshot feature). |
+| `--kueue-queue`, `--cpu-nodepool` | Optional scheduling hints. |
+| `--yaml`, `--apply/--no-apply`, `--delete` | Bring your own manifest, skip applying, or tear down. |
