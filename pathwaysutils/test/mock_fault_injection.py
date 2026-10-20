@@ -20,6 +20,7 @@ without requiring physical pod/node cordoning or deletion.
 import functools
 from typing import Any, Mapping, Sequence, Set
 from unittest import mock
+import weakref
 import jax
 import jax.core
 import jax.extend.core
@@ -55,15 +56,29 @@ class DeviceLossSimulator:
     self._generation: int = 1
     self._device_lost_history: dict[int, list[int]] = {}
     self._array_generation: dict[int, int] = {}
+    self._tracked_refs: dict[int, weakref.ref[Any]] = {}
     self._active = False
     self._patchers: list[Any] = []
+
+  def _register_ref(self, arr: jax.Array) -> int:
+    arr_id = id(arr)
+    if arr_id not in self._tracked_refs:
+
+      def _cleanup(_ref, aid=arr_id):
+        self._tracked_refs.pop(aid, None)
+        self._array_devices.pop(aid, None)
+        self._array_generation.pop(aid, None)
+        self._corrupted_array_ids.discard(aid)
+
+      self._tracked_refs[arr_id] = weakref.ref(arr, _cleanup)
+    return arr_id
 
   def bind_array_to_devices(
       self, arr: jax.Array | jax.core.Tracer, devices: Sequence[jax.Device]
   ) -> None:
     """Explicitly binds a JAX array to mock or custom devices for OSS testing."""
     if isinstance(arr, jax.Array) and not isinstance(arr, jax.core.Tracer):
-      arr_id = id(arr)
+      arr_id = self._register_ref(arr)
       dev_ids = {dev.id for dev in devices}
       self._array_devices[arr_id] = dev_ids
       if arr_id not in self._array_generation:
@@ -72,7 +87,7 @@ class DeviceLossSimulator:
   def track_array(self, arr: Any) -> None:
     """Tracks a JAX array generation and device mapping."""
     if isinstance(arr, jax.Array) and not isinstance(arr, jax.core.Tracer):
-      arr_id = id(arr)
+      arr_id = self._register_ref(arr)
       if arr_id not in self._array_devices:
         dev_ids = {dev.id for dev in arr.devices()}
         self._array_devices[arr_id] = dev_ids
@@ -248,6 +263,7 @@ class DeviceLossSimulator:
           inputs = jax.tree_util.tree_leaves((call_args, call_kwargs))
           return sim.propagate_corruption(inputs, out)
 
+        inner.lower = jitted_fn.lower  # pyrefly: ignore[missing-attribute]
         return inner
 
       return wrapper

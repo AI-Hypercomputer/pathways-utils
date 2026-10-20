@@ -62,6 +62,10 @@ def _elastic_event_cleanup() -> None:
     _logger.exception("Error cleaning up ongoing traces")
     raise
 
+  jax.clear_caches()
+  for array in jax.live_arrays():
+    if array.sharding.memory_kind != "pinned_host":
+      array.delete()
 
 class ElasticRetryLimit:
   """A retry callback that limits the number of attempts."""
@@ -226,7 +230,8 @@ class Manager:
 
     jax.clear_caches()
     for array in jax.live_arrays():
-      array.delete()
+      if array.sharding.memory_kind != "pinned_host":
+        array.delete()
 
   def _check_inactive_slices(self) -> None:
     """Checks inactive slices and updates available_inactive_slices."""

@@ -1,0 +1,2671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pathways Elasticity Live GKE Demo</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes pulse-soft {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .animate-pulse-soft {
+      animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.15);
+      border-radius: 4px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.35);
+      border-radius: 4px;
+    }
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      height: 155px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .slice-card {
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.4);
+      border-radius: 0.5rem;
+      padding: 0.625rem;
+      transition: all 0.3s ease;
+    }
+    .slice-card.active {
+      border-color: rgba(16, 185, 129, 0.4);
+      background: rgba(16, 185, 129, 0.06);
+    }
+    .slice-card.inactive {
+      border-color: var(--border);
+      background: rgba(24, 24, 27, 0.3);
+      opacity: 0.7;
+    }
+    .slice-card.reconnecting {
+      border-color: rgba(245, 158, 11, 0.5);
+      background: rgba(245, 158, 11, 0.1);
+    }
+    .slice-card.disrupted {
+      border-color: rgba(239, 68, 68, 0.6);
+      background: rgba(239, 68, 68, 0.12);
+      animation: pulse-soft 1.5s infinite;
+    }
+
+    /* Precision fixed sizing to eliminate movement / jitter during live updates */
+    #headerClusterStatusPill {
+      width: 280px !important;
+      min-width: 280px !important;
+      max-width: 280px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #headerClusterStatusText {
+      display: block;
+      width: 245px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #topoClusterStatusPill {
+      width: 255px !important;
+      min-width: 255px !important;
+      max-width: 255px !important;
+      height: 24px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #topoClusterStatusText {
+      display: block;
+      width: 225px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #simTimePill {
+      width: 110px !important;
+      min-width: 110px !important;
+      max-width: 110px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      box-sizing: border-box !important;
+    }
+    #simTimeLabel {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    #btnToggleConfig {
+      width: 145px !important;
+      min-width: 145px !important;
+      max-width: 145px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnToggleRun {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnReset {
+      width: 95px !important;
+      min-width: 95px !important;
+      max-width: 95px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnLaunch {
+      width: 120px !important;
+      min-width: 120px !important;
+      max-width: 120px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnDelete {
+      width: 115px !important;
+      min-width: 115px !important;
+      max-width: 115px !important;
+      height: 30px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .btn-interrupt-slice {
+      width: 175px !important;
+      min-width: 175px !important;
+      max-width: 175px !important;
+      height: 28px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    #btnRestoreSlice {
+      width: 175px !important;
+      min-width: 175px !important;
+      max-width: 175px !important;
+      height: 28px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+
+    /* KPI Telemetry Cards */
+    .kpi-card {
+      height: 86px !important;
+      min-height: 86px !important;
+      max-height: 86px !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+      box-sizing: border-box !important;
+    }
+    .kpi-lbl {
+      height: 14px !important;
+      line-height: 14px !important;
+      font-size: 9px !important;
+      text-transform: uppercase !important;
+      letter-spacing: 0.05em !important;
+      color: var(--muted-foreground) !important;
+      font-weight: 600 !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    .kpi-val {
+      height: 24px !important;
+      line-height: 24px !important;
+      font-size: 1.25rem !important;
+      font-weight: 700 !important;
+      font-family: monospace !important;
+      font-variant-numeric: tabular-nums !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+    .kpi-sub {
+      height: 16px !important;
+      line-height: 16px !important;
+      font-size: 10px !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+    }
+
+    /* Workload Slice Cards */
+    .workload-card {
+      height: 56px !important;
+      min-height: 56px !important;
+      max-height: 56px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: space-between !important;
+    }
+    .workload-badge {
+      width: 115px !important;
+      min-width: 115px !important;
+      max-width: 115px !important;
+      height: 22px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .workload-mapping {
+      height: 16px !important;
+      line-height: 16px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      margin-top: 2px !important;
+    }
+
+    /* Physical Cluster TPU Slice Cards */
+    .tpu-slice-card {
+      height: 72px !important;
+      min-height: 72px !important;
+      max-height: 72px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: space-between !important;
+    }
+    .tpu-role-badge {
+      width: 105px !important;
+      min-width: 105px !important;
+      max-width: 105px !important;
+      height: 20px !important;
+      display: inline-flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      text-align: center !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+      box-sizing: border-box !important;
+    }
+    .tpu-footer {
+      height: 18px !important;
+      min-height: 18px !important;
+      max-height: 18px !important;
+      line-height: 18px !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+      margin-top: 4px !important;
+    }
+
+    /* Chart Legends & Announcement */
+    #lossChartLegend, #goodputChartLegend {
+      font-family: monospace !important;
+      font-variant-numeric: tabular-nums !important;
+      min-width: 240px !important;
+      text-align: right !important;
+      height: 16px !important;
+      line-height: 16px !important;
+      flex-shrink: 0 !important;
+      white-space: nowrap !important;
+    }
+    #announcementCallout {
+      height: 72px !important;
+      min-height: 72px !important;
+      max-height: 72px !important;
+      box-sizing: border-box !important;
+      overflow: hidden !important;
+    }
+
+    :root {
+      --background: #090d16;
+      --foreground: #f8fafc;
+      --card: #0f172a;
+      --card-foreground: #f8fafc;
+      --primary: #3b82f6;
+      --primary-foreground: #ffffff;
+      --secondary: #1e293b;
+      --secondary-foreground: #f8fafc;
+      --muted: #1e293b;
+      --muted-foreground: #94a3b8;
+      --accent: #1e293b;
+      --accent-foreground: #f8fafc;
+      --border: #334155;
+    }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased p-2.5 md:p-3.5 min-h-screen text-xs">
+  <div class="max-w-7xl mx-auto space-y-2.5">
+
+    <!-- Header Section -->
+    <header class="flex flex-col lg:flex-row lg:items-center justify-between pb-2 border-b border-[var(--border)] gap-2">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center justify-center px-2 py-0.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-mono font-bold text-xs tracking-wide">
+            JAX / Pathways &bull; GKE Live
+          </span>
+          <h1 class="text-base md:text-lg font-bold tracking-tight">Live Elastic Training on GKE</h1>
+        </div>
+        <p class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+          Cluster <span id="headerClusterLabel" class="font-mono text-emerald-400">gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32</span> &bull; JobSet <span id="headerJobsetLabel" class="font-mono text-[var(--foreground)]">default/lb-elastic</span>
+        </p>
+      </div>
+
+      <!-- Global Status Badges -->
+      <div class="flex items-center gap-1.5 flex-wrap">
+        <div id="headerClusterStatusPill" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--card)] text-xs font-medium">
+          <span id="headerClusterStatusDot" class="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+          <span id="headerClusterStatusText">Connecting to GKE Bridge...</span>
+        </div>
+        <div id="simTimePill" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full border border-[var(--border)] bg-[var(--card)] text-xs font-mono font-medium text-[var(--muted-foreground)]">
+          <span id="simTimeLabel">0.0s elapsed</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 3-Step Navigation Bar -->
+    <nav id="stepBar" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      <button id="stepTab1" type="button" class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-all cursor-pointer">
+        <span id="stepBadge1" class="w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0">1</span>
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-bold tracking-tight truncate">Connect Cluster</div>
+          <div id="stepSub1" class="text-[10px] opacity-80 truncate">Select GKE context &amp; verify nodes</div>
+        </div>
+      </button>
+      <button id="stepTab2" type="button" class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-all cursor-pointer">
+        <span id="stepBadge2" class="w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0">2</span>
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-bold tracking-tight truncate">Generate YAML</div>
+          <div id="stepSub2" class="text-[10px] opacity-80 truncate">Configure topology &amp; generate kubectl YAML</div>
+        </div>
+      </button>
+      <button id="stepTab3" type="button" class="flex items-center gap-2.5 p-2.5 rounded-lg border text-left transition-all cursor-pointer">
+        <span id="stepBadge3" class="w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0">3</span>
+        <div class="min-w-0 flex-1">
+          <div class="text-xs font-bold tracking-tight truncate">Monitor &amp; Interrupt</div>
+          <div id="stepSub3" class="text-[10px] opacity-80 truncate">Live telemetry &amp; fault injection</div>
+        </div>
+      </button>
+    </nav>
+
+    <!-- STEP 1 VIEW: Connect to GKE Cluster -->
+    <section id="step1View" class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3.5 shadow-sm space-y-3.5">
+      <div class="pb-2 border-b border-[var(--border)]">
+        <h2 class="text-sm font-bold tracking-tight text-[var(--foreground)]">Step 1: Connect to Your GKE Cluster</h2>
+        <p class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+          Choose a local <span class="font-mono">kubectl</span> cluster context, namespace, and nodepool settings, then verify connectivity before generating the JobSet YAML.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px]">
+        <div class="md:col-span-2 space-y-1">
+          <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">GKE Kubeconfig Context</label>
+          <div class="flex flex-col sm:flex-row gap-1.5">
+            <select id="cfgClusterSelect" class="sm:w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32">gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32</option>
+            </select>
+            <div class="sm:w-1/2 flex gap-1.5">
+              <input id="cfgClusterContext" type="text" placeholder="Or enter kubeconfig context..." class="flex-1 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              <button id="btnRefreshContexts" type="button" class="px-2.5 py-1.5 rounded text-[11px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer shrink-0">
+                Refresh
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-1">
+          <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Kubernetes Namespace</label>
+          <input id="cfgNamespace" type="text" value="default" placeholder="default" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+        </div>
+
+        <div class="space-y-1">
+          <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">CPU Nodepool (for Pathways Head Pod)</label>
+          <input id="cfgCpuNodepool" type="text" value="cpu-np" placeholder="cpu-np (leave blank for default)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+        </div>
+
+        <div class="space-y-1">
+          <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Kueue LocalQueue Name</label>
+          <input id="cfgKueueQueue" type="text" value="multislice-queue" placeholder="multislice-queue (optional)" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2.5 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+        </div>
+      </div>
+
+      <!-- Cluster Connectivity Readout -->
+      <div id="clusterVerifyCard" class="p-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/50 space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <span id="clusterVerifyDot" class="w-2 h-2 rounded-full bg-zinc-400 shrink-0"></span>
+            <span id="clusterVerifyTitle" class="text-xs font-bold text-[var(--foreground)]">Cluster Not Verified Yet</span>
+          </div>
+          <span id="clusterVerifyBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-500/15 text-zinc-300">Ready to test</span>
+        </div>
+        <p id="clusterVerifyDesc" class="text-[11px] text-[var(--muted-foreground)]">
+          Click "Test &amp; Connect Cluster" to check <span class="font-mono">kubectl</span> access and inspect available TPU slices and CPU nodepools.
+        </p>
+        <div id="clusterVerifyChips" class="hidden flex-wrap gap-1.5 pt-1 text-[10px] font-mono"></div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
+        <span id="step1StatusMsg" class="text-[11px] font-mono text-[var(--muted-foreground)]">
+          Using local <span class="font-mono">~/.kube/config</span> credentials via bridge server.
+        </span>
+        <div class="flex items-center gap-2">
+          <button id="btnVerifyCluster" type="button" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--secondary)] text-[var(--foreground)] hover:bg-[var(--accent)] border border-[var(--border)] active:scale-95 cursor-pointer">
+            Test &amp; Connect Cluster
+          </button>
+          <button id="btnStep1Next" type="button" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer">
+            Continue to Generate YAML &rarr;
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2 VIEW: Generate JobSet YAML -->
+    <section id="step2View" class="hidden bg-[var(--card)] border border-[var(--border)] rounded-lg p-3.5 shadow-sm space-y-3.5">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-[var(--border)]">
+        <div>
+          <h2 class="text-sm font-bold tracking-tight text-[var(--foreground)]">Step 2: Generate JobSet YAML for kubectl</h2>
+          <p class="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+            Adjust TPU topology, slice counts, and images on the left, review the generated Kubernetes JobSet YAML on the right, and run the <span class="font-mono">kubectl apply</span> command in your terminal.
+          </p>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <label for="cfgPresetSelector" class="text-[11px] font-medium text-[var(--muted-foreground)]">Quick Preset:</label>
+          <select id="cfgPresetSelector" class="bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-medium rounded px-2 py-1 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
+            <option value="replica_resize_default">Snapshot Replica Resize (2x v5e:4x8 + 2 Spare)</option>
+            <option value="pause_resume_default">Snapshot Pause Resume (2x v5e:4x8)</option>
+            <option value="checkpoint_resize_default">Checkpoint Replica Resize (2x v5e:4x8 + 2 Spare)</option>
+            <option value="custom_workload">Custom Workload / Command</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-3.5 text-[11px]">
+        <!-- Left Column: Form Fields -->
+        <div class="lg:col-span-5 space-y-2.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div class="space-y-1">
+              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">JobSet Name</label>
+              <input id="cfgJobsetName" type="text" value="lb-elastic" placeholder="lb-elastic" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+            </div>
+
+            <div class="space-y-1">
+              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Total Training Steps</label>
+              <input id="cfgTotalSteps" type="number" min="10" max="1000000" value="1000" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+            </div>
+
+            <div class="space-y-1">
+              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Active Slices (N) &amp; Spare (M)</label>
+              <div class="flex gap-1.5 items-center">
+                <input id="cfgNumSlices" type="number" min="1" max="16" value="2" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" title="Active JobSet Worker Slices" />
+                <input id="cfgStandbySlices" type="number" min="0" max="16" value="2" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" title="Spare TPU Slices in Cluster" />
+              </div>
+            </div>
+
+            <div class="space-y-1">
+              <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">TPU Type &amp; Topology</label>
+              <div class="flex gap-1.5">
+                <select id="cfgTpuType" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                  <option value="tpuv5e">tpuv5e</option>
+                  <option value="tpuv6e">tpuv6e</option>
+                  <option value="tpuv5p">tpuv5p</option>
+                  <option value="tpuv7x">tpuv7x</option>
+                </select>
+                <input id="cfgTopology" type="text" value="4x8" placeholder="4x8" class="w-1/2 bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div id="cfgTopologyComputed" class="text-[10px] font-mono text-emerald-400">32 chips/slice &bull; 8 VMs/slice</div>
+            </div>
+          </div>
+
+          <div class="space-y-1">
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Elasticity Mode</label>
+            <select id="cfgElasticityMode" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="step_snapshot_replica_resize">step_snapshot_replica_resize</option>
+              <option value="step_snapshot_pause_resume">step_snapshot_pause_resume</option>
+              <option value="step_checkpoint_replica_resize">step_checkpoint_replica_resize</option>
+              <option value="run_checkpoint_replica_resize">run_checkpoint_replica_resize</option>
+            </select>
+          </div>
+
+          <div class="space-y-1">
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">JAX Workload Container Image</label>
+            <input id="cfgContainerImage" type="text" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          </div>
+
+          <div class="space-y-1">
+            <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">GCS Scratch Location</label>
+            <input id="cfgGcsScratch" type="text" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          </div>
+
+          <details class="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/30 p-2.5">
+            <summary class="text-[11px] font-semibold text-indigo-300 cursor-pointer select-none">
+              Advanced Images, Entrypoint &amp; ConfigMap Mounts
+            </summary>
+            <div class="space-y-2.5 pt-2.5 mt-2 border-t border-[var(--border)]">
+              <div class="space-y-1">
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Pathways Server Image</label>
+                <input id="cfgServerImage" type="text" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[10px] font-mono rounded px-2 py-1 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div class="space-y-1">
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Pathways Proxy Image</label>
+                <input id="cfgProxyImage" type="text" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[10px] font-mono rounded px-2 py-1 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div class="space-y-1">
+                <div class="flex items-center justify-between">
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Workload Entrypoint Command</label>
+                  <select id="cfgWorkloadPreset" class="bg-[var(--secondary)] text-[var(--foreground)] text-[10px] font-mono rounded px-1.5 py-0.5 border border-[var(--border)]">
+                    <option value="builtin_elastic_demo">Built-in Elastic Demo</option>
+                    <option value="custom_command">Custom Command</option>
+                  </select>
+                </div>
+                <textarea id="cfgCustomCommand" rows="3" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[10px] font-mono rounded p-2 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 custom-scrollbar"></textarea>
+              </div>
+              <div class="space-y-1">
+                <label class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">ConfigMap Local Mounts (<span class="font-mono">filename=host_path</span>)</label>
+                <textarea id="cfgConfigmapFiles" rows="2" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[10px] font-mono rounded p-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 custom-scrollbar"></textarea>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <!-- Right Column: Editable JobSet YAML Preview & kubectl Command -->
+        <div class="lg:col-span-7 flex flex-col space-y-2">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">JobSet YAML Manifest</span>
+              <span id="yamlSyncBadge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400">Synced with form</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button id="btnResetYamlFromForm" type="button" class="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+                Reset from Form
+              </button>
+              <button id="btnCopyYaml" type="button" class="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+                Copy YAML
+              </button>
+              <button id="btnDownloadYaml" type="button" class="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+                Download .yaml
+              </button>
+            </div>
+          </div>
+          <textarea id="yamlEditor" spellcheck="false" rows="17" class="w-full flex-1 bg-[#060911] text-emerald-300 text-[11px] font-mono leading-relaxed rounded-lg p-3 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 custom-scrollbar"></textarea>
+
+          <!-- Terminal kubectl apply Card -->
+          <div id="kubectlApplyCard" class="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-2.5 space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] font-semibold uppercase tracking-wider text-indigo-300">Apply YAML in Your Terminal</span>
+              <button id="btnCopyKubectlCmd" type="button" class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-600 text-white hover:bg-indigo-500 cursor-pointer shrink-0">
+                Copy Command
+              </button>
+            </div>
+            <div id="kubectlApplyCmdText" class="bg-[#060911] text-sky-300 text-[11px] font-mono px-2.5 py-1.5 rounded border border-[var(--border)] overflow-x-auto whitespace-nowrap">
+              kubectl --context=gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32 -n default apply -f /tmp/gke_elastic_workload.yaml
+            </div>
+            <p class="text-[10px] text-[var(--muted-foreground)]">
+              Saving writes the <span class="font-mono">JobSet</span> and <span class="font-mono">elastic-workload-code</span> <span class="font-mono">ConfigMap</span> to <span id="yamlBundlePathLabel" class="font-mono text-[var(--foreground)]">/tmp/gke_elastic_workload.yaml</span>. Run this command yourself so no web process launches workloads automatically.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2 Action Footer -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-[var(--border)]">
+        <div class="flex items-center gap-2.5 min-w-0">
+          <button id="btnStep2Back" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer shrink-0">
+            &larr; Back to Cluster
+          </button>
+          <span id="cfgStatusMessage" class="text-[11px] font-mono text-[var(--muted-foreground)] truncate">
+            Save the YAML bundle, run the kubectl apply command in your terminal, then open Step 3.
+          </span>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <button id="btnResetConfigDefaults" type="button" class="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+            Reset Defaults
+          </button>
+          <button id="btnSaveConfig" type="button" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[var(--secondary)] text-[var(--foreground)] hover:bg-[var(--accent)] border border-[var(--border)] active:scale-95 cursor-pointer">
+            Save &amp; Write YAML
+          </button>
+          <button id="btnSaveAndDeploy" type="button" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer">
+            Save YAML &amp; Monitor &rarr;
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 3 VIEW: Monitor & Interrupt -->
+    <section id="step3View" class="hidden space-y-2.5">
+      <!-- Runtime Controls Bar -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm">
+        <div class="flex items-center gap-2">
+          <button id="btnStep3Back" type="button" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer">
+            &larr; Edit YAML / Config
+          </button>
+          <span class="text-[11px] text-[var(--muted-foreground)]">
+            Step 3: Control training, inject live GKE node preemptions, and monitor recovery telemetry.
+          </span>
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button id="btnToggleRun" class="px-3 py-1 rounded-lg font-semibold text-xs transition-all duration-150 bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer">
+            Start Training
+          </button>
+          <button id="btnReset" class="px-2.5 py-1 rounded-lg font-medium text-xs transition-all duration-150 bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--accent)] active:scale-95 border border-[var(--border)] cursor-pointer">
+            Reset Demo
+          </button>
+          <button id="btnLaunch" class="px-2.5 py-1 rounded-lg font-medium text-xs transition-all duration-150 bg-[var(--secondary)] text-[var(--secondary-foreground)] hover:bg-[var(--accent)] active:scale-95 border border-[var(--border)] cursor-pointer">
+            Generate / Apply YAML
+          </button>
+          <button id="btnDelete" class="px-2.5 py-1 rounded-lg font-medium text-xs transition-all duration-150 bg-rose-500/15 text-rose-400 hover:bg-rose-500/25 active:scale-95 border border-rose-500/30 cursor-pointer">
+            Delete Workload
+          </button>
+        </div>
+      </div>
+
+      <!-- Real-Time KPI Cards -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <!-- Global Step -->
+      <div class="kpi-card bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm">
+        <div class="kpi-lbl">Global Step</div>
+        <div class="flex items-baseline gap-1.5">
+          <span id="kpiStep" class="kpi-val text-[var(--foreground)]">0</span>
+          <span id="kpiTotalStepsLabel" class="text-[11px] font-mono text-[var(--muted-foreground)]">/ 1000</span>
+        </div>
+        <div class="w-full bg-[var(--secondary)] h-1.5 rounded-full overflow-hidden">
+          <div id="kpiStepProgress" class="bg-[var(--primary)] h-full transition-all duration-200" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Training Loss -->
+      <div class="kpi-card bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm">
+        <div class="kpi-lbl">Training Loss</div>
+        <div class="flex items-baseline gap-1.5">
+          <span id="kpiLoss" class="kpi-val text-indigo-400">---</span>
+        </div>
+        <div id="kpiLossDelta" class="kpi-sub text-[var(--muted-foreground)]">Waiting for first step</div>
+      </div>
+
+      <!-- Estimated Goodput -->
+      <div class="kpi-card bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm">
+        <div class="kpi-lbl">Estimated Goodput</div>
+        <div class="flex items-baseline gap-1">
+          <span id="kpiGoodput" class="kpi-val text-emerald-400">0.0%</span>
+        </div>
+        <div id="kpiGoodputEfficiency" class="kpi-sub text-emerald-500 font-medium">G = forward time / total time</div>
+      </div>
+
+      <!-- Active Topology -->
+      <div class="kpi-card bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm">
+        <div class="kpi-lbl">Active Topology</div>
+        <div class="flex items-baseline gap-1.5">
+          <span id="kpiSlices" class="kpi-val text-[var(--foreground)]">2</span>
+          <span id="kpiDevicesLabel" class="text-[11px] font-mono text-[var(--muted-foreground)] truncate">Slices (64 TPUV5E Chips)</span>
+        </div>
+        <div id="kpiModeName" class="kpi-sub font-mono text-indigo-300">step_snapshot_replica_resize</div>
+      </div>
+    </div>
+
+    <!-- Cluster Slice Topology & Interruption Injector -->
+    <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-2.5">
+      <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-2 pb-1.5 border-b border-[var(--border)]">
+        <div>
+          <div class="flex items-center gap-2">
+            <h2 class="text-xs font-bold tracking-tight">Cluster Slice Topology &amp; Interruption Injector</h2>
+            <div id="topoClusterStatusPill" class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono">
+              <span id="topoClusterStatusDot" class="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+              <span id="topoClusterStatusText" class="text-emerald-400 font-semibold">Cluster Healthy (2 Slices)</span>
+            </div>
+          </div>
+          <p class="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+            Inject live GKE preemption (<span class="font-mono">kubectl cordon + drain</span>) or in-workload fault signals on any Workload Slice and observe automatic recovery across physical TPU slices.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-1.5 flex-wrap shrink-0">
+          <select id="mechanismSelector" title="Fault injection mechanism" class="bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-medium rounded px-2 py-1 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 h-[28px]">
+            <option value="k8s">K8s Node Cordon + Drain</option>
+            <option value="workload">In-Workload Control RPC</option>
+          </select>
+          <div id="interruptButtonsContainer" class="flex items-center gap-1.5 flex-wrap"></div>
+          <button id="btnRestoreSlice" disabled class="px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed">
+            Reconnect a slice
+          </button>
+        </div>
+      </div>
+
+      <!-- Logical Workload Slices -->
+      <div class="space-y-1">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center justify-between">
+          <span id="logicalSlicesHeaderLabel">Logical Workload Slices (2-Slice Mesh)</span>
+          <span class="text-[9px] text-[var(--muted-foreground)] font-normal">Active execution mesh</span>
+        </div>
+        <div id="workloadSlicesGrid" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+      </div>
+
+      <!-- Physical Cluster TPU Slices -->
+      <div class="space-y-1 pt-1 border-t border-[var(--border)]/40">
+        <div class="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center justify-between">
+          <span>Physical Cluster TPU Slices (Hardware Pool)</span>
+          <span class="text-[9px] text-[var(--muted-foreground)] font-normal">Reconnecting allocates an inactive slice from the hardware pool to resume the workload</span>
+        </div>
+        <div id="physicalSlicesGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Charts (Loss & Cumulative Goodput) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+      <!-- Training Loss -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-1">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-indigo-500"></span>
+            <h3 class="text-xs font-bold tracking-tight">Training Loss</h3>
+          </div>
+          <span class="text-[10px] font-mono text-[var(--muted-foreground)]">Live GKE Telemetry</span>
+        </div>
+        <div class="canvas-container">
+          <canvas id="lossCanvas"></canvas>
+        </div>
+        <div class="flex items-center justify-between text-[10px] text-[var(--muted-foreground)] pt-0.5 border-t border-[var(--border)]">
+          <span id="lossAxisLabel">X: Global Step (0 to 1000) &bull; Y: Training Loss</span>
+          <span id="lossChartLegend" class="font-mono text-indigo-400">Step: 0 / 1000 | Loss: ---</span>
+        </div>
+      </div>
+
+      <!-- Estimated Goodput -->
+      <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-1">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <h3 class="text-xs font-bold tracking-tight">Estimated Goodput</h3>
+          </div>
+          <span class="text-[10px] font-mono text-emerald-400">Nominal Target: 100%</span>
+        </div>
+        <div class="canvas-container">
+          <canvas id="goodputCanvas"></canvas>
+        </div>
+        <div class="flex items-center justify-between text-[10px] text-[var(--muted-foreground)] pt-0.5 border-t border-[var(--border)]">
+          <span>X: Elapsed Time (s) &bull; Y: Cumulative Goodput (%)</span>
+          <span id="goodputChartLegend" class="font-mono text-emerald-400">Goodput: 0.0% (0.0s elapsed)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Recovery Lifecycle & Structured Log Stream -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-2">
+      <!-- Recovery Lifecycle -->
+      <div class="lg:col-span-1 bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm space-y-2">
+        <div class="flex items-center justify-between pb-1 border-b border-[var(--border)]">
+          <h3 class="text-xs font-bold tracking-tight">Recovery Lifecycle</h3>
+          <span class="text-[10px] text-[var(--muted-foreground)]">Automated transition stages</span>
+        </div>
+
+        <div id="announcementCallout" class="p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 transition-all duration-300 flex flex-col justify-center">
+          <div class="flex items-center gap-1.5">
+            <span id="announcementIcon" class="text-sm font-bold">&#9679;</span>
+            <span id="announcementTitle" class="font-bold text-xs tracking-tight truncate">Normal Execution</span>
+          </div>
+          <p id="announcementDesc" class="text-[10px] mt-1 opacity-90 leading-snug line-clamp-2">
+            All slices active. Pre-compiled train_step ready on GKE TPU pod slices.
+          </p>
+        </div>
+
+        <div class="space-y-1.5 text-[11px] font-medium">
+          <div id="stage1" class="flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all">
+            <div class="stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0">1</div>
+            <span class="truncate">Failure Detection (DATA_LOSS)</span>
+          </div>
+          <div id="stage2" class="flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all">
+            <div class="stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0">2</div>
+            <span class="truncate">JAX Caches &amp; Live Array Teardown</span>
+          </div>
+          <div id="stage3" class="flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all">
+            <div class="stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0">3</div>
+            <span class="truncate">Topology Probe &amp; Slice Discovery</span>
+          </div>
+          <div id="stage4" class="flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all">
+            <div class="stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0">4</div>
+            <span class="truncate">Pre-compiled Mesh Executable Switch</span>
+          </div>
+          <div id="stage5" class="flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all">
+            <div class="stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0">5</div>
+            <span class="truncate">In-Memory Snapshot Restore &amp; Resume</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Structured Logs Stream -->
+      <div class="lg:col-span-2 bg-[var(--card)] border border-[var(--border)] rounded-lg p-2.5 shadow-sm flex flex-col justify-between">
+        <div class="flex items-center justify-between pb-1.5 border-b border-[var(--border)]">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-sky-500 animate-pulse-soft"></span>
+            <h3 class="text-xs font-bold tracking-tight">Structured Elasticity Event Stream</h3>
+          </div>
+          <button id="btnClearLogs" class="px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)] cursor-pointer transition-colors">
+            Clear Logs
+          </button>
+        </div>
+
+        <div id="logContainer" class="custom-scrollbar mt-2 h-60 overflow-y-auto space-y-1 font-mono text-[11px] p-2 bg-[var(--secondary)]/40 rounded border border-[var(--border)]/60"></div>
+
+        <div class="flex items-center justify-between text-[10px] text-[var(--muted-foreground)] pt-1.5 border-t border-[var(--border)] mt-2">
+          <span>Log filter: GKE Bridge &bull; Manager &bull; ElasticWorkload &bull; Snapshotter</span>
+          <span id="logStats" class="font-mono">0 events recorded</span>
+        </div>
+      </div>
+    </div>
+    </section>
+
+  </div>
+
+  <script>
+    const state = {
+      running: false,
+      workloadReady: false,
+      jobsetStatus: "IDLE",
+      step: 0,
+      totalSteps: 1000,
+      loss: null,
+      goodput: 0.0,
+      elapsedTimeSec: 0.0,
+      clusterContext: "gke_cloud-tpu-multipod-dev_us-south1_lukebaumann-pw-v5e-32",
+      namespace: "default",
+      jobsetName: "lb-elastic",
+      numSlices: 2,
+      standbySlices: 2,
+      tpuType: "tpuv5e",
+      topology: "4x8",
+      chipsPerSlice: 32,
+      vmsPerSlice: 8,
+      mode: "step_snapshot_replica_resize",
+      sliceStates: ["active", "active", "standby", "standby"],
+      slotRacks: [0, 1],
+      slotActive: [true, true],
+      disruptedSlot: null,
+      disruptedRack: null,
+      reconnectingSlot: null,
+      activeIndices: [0, 1],
+      activeSliceCount: 2,
+      inRecovery: false,
+      pendingInterrupt: false,
+      isReconnecting: false,
+      headPodName: "",
+      workerPods: [],
+      renderedNumSlices: 0,
+      renderedTotalRacks: 0,
+      history: {
+        lossSteps: [],
+        lossValues: [],
+        goodputTimeSec: [0.0],
+        goodputValues: [0.0],
+      },
+    };
+
+    // DOM Elements
+    const headerClusterStatusDot = document.getElementById("headerClusterStatusDot");
+    const headerClusterStatusText = document.getElementById("headerClusterStatusText");
+    const topoClusterStatusDot = document.getElementById("topoClusterStatusDot");
+    const topoClusterStatusText = document.getElementById("topoClusterStatusText");
+    const simTimeLabel = document.getElementById("simTimeLabel");
+    const headerClusterLabel = document.getElementById("headerClusterLabel");
+    const headerJobsetLabel = document.getElementById("headerJobsetLabel");
+
+    // 3-Step Wizard Elements
+    const step1View = document.getElementById("step1View");
+    const step2View = document.getElementById("step2View");
+    const step3View = document.getElementById("step3View");
+    const stepTab1 = document.getElementById("stepTab1");
+    const stepTab2 = document.getElementById("stepTab2");
+    const stepTab3 = document.getElementById("stepTab3");
+    const stepBadge1 = document.getElementById("stepBadge1");
+    const stepBadge2 = document.getElementById("stepBadge2");
+    const stepBadge3 = document.getElementById("stepBadge3");
+    const stepSub1 = document.getElementById("stepSub1");
+    const stepSub2 = document.getElementById("stepSub2");
+    const stepSub3 = document.getElementById("stepSub3");
+
+    const btnRefreshContexts = document.getElementById("btnRefreshContexts");
+    const btnVerifyCluster = document.getElementById("btnVerifyCluster");
+    const btnStep1Next = document.getElementById("btnStep1Next");
+    const step1StatusMsg = document.getElementById("step1StatusMsg");
+    const clusterVerifyCard = document.getElementById("clusterVerifyCard");
+    const clusterVerifyDot = document.getElementById("clusterVerifyDot");
+    const clusterVerifyTitle = document.getElementById("clusterVerifyTitle");
+    const clusterVerifyBadge = document.getElementById("clusterVerifyBadge");
+    const clusterVerifyDesc = document.getElementById("clusterVerifyDesc");
+    const clusterVerifyChips = document.getElementById("clusterVerifyChips");
+
+    const yamlEditor = document.getElementById("yamlEditor");
+    const yamlSyncBadge = document.getElementById("yamlSyncBadge");
+    const btnResetYamlFromForm = document.getElementById("btnResetYamlFromForm");
+    const btnCopyYaml = document.getElementById("btnCopyYaml");
+    const btnDownloadYaml = document.getElementById("btnDownloadYaml");
+    const btnCopyKubectlCmd = document.getElementById("btnCopyKubectlCmd");
+    const kubectlApplyCmdText = document.getElementById("kubectlApplyCmdText");
+    const yamlBundlePathLabel = document.getElementById("yamlBundlePathLabel");
+    const btnStep2Back = document.getElementById("btnStep2Back");
+    const btnStep3Back = document.getElementById("btnStep3Back");
+
+    const btnToggleRun = document.getElementById("btnToggleRun");
+    const btnReset = document.getElementById("btnReset");
+    const btnLaunch = document.getElementById("btnLaunch");
+    const btnDelete = document.getElementById("btnDelete");
+    const mechanismSelector = document.getElementById("mechanismSelector");
+    const interruptButtonsContainer = document.getElementById("interruptButtonsContainer");
+    const btnRestoreSlice = document.getElementById("btnRestoreSlice");
+
+    const kpiStep = document.getElementById("kpiStep");
+    const kpiTotalStepsLabel = document.getElementById("kpiTotalStepsLabel");
+    const kpiStepProgress = document.getElementById("kpiStepProgress");
+    const kpiLoss = document.getElementById("kpiLoss");
+    const kpiLossDelta = document.getElementById("kpiLossDelta");
+    const kpiGoodput = document.getElementById("kpiGoodput");
+    const kpiGoodputEfficiency = document.getElementById("kpiGoodputEfficiency");
+    const kpiSlices = document.getElementById("kpiSlices");
+    const kpiDevicesLabel = document.getElementById("kpiDevicesLabel");
+    const kpiModeName = document.getElementById("kpiModeName");
+
+    const logicalSlicesHeaderLabel = document.getElementById("logicalSlicesHeaderLabel");
+    const workloadSlicesGrid = document.getElementById("workloadSlicesGrid");
+    const physicalSlicesGrid = document.getElementById("physicalSlicesGrid");
+
+    const lossAxisLabel = document.getElementById("lossAxisLabel");
+    const lossChartLegend = document.getElementById("lossChartLegend");
+    const goodputChartLegend = document.getElementById("goodputChartLegend");
+    const announcementCallout = document.getElementById("announcementCallout");
+    const announcementIcon = document.getElementById("announcementIcon");
+    const announcementTitle = document.getElementById("announcementTitle");
+    const announcementDesc = document.getElementById("announcementDesc");
+    const logContainer = document.getElementById("logContainer");
+    const logStats = document.getElementById("logStats");
+    const btnClearLogs = document.getElementById("btnClearLogs");
+
+    // Configuration Form Elements
+    const cfgPresetSelector = document.getElementById("cfgPresetSelector");
+    const cfgClusterSelect = document.getElementById("cfgClusterSelect");
+    const cfgClusterContext = document.getElementById("cfgClusterContext");
+    const cfgNamespace = document.getElementById("cfgNamespace");
+    const cfgJobsetName = document.getElementById("cfgJobsetName");
+    const cfgKueueQueue = document.getElementById("cfgKueueQueue");
+    const cfgCpuNodepool = document.getElementById("cfgCpuNodepool");
+    const cfgNumSlices = document.getElementById("cfgNumSlices");
+    const cfgStandbySlices = document.getElementById("cfgStandbySlices");
+    const cfgTpuType = document.getElementById("cfgTpuType");
+    const cfgTopology = document.getElementById("cfgTopology");
+    const cfgTopologyComputed = document.getElementById("cfgTopologyComputed");
+    const cfgElasticityMode = document.getElementById("cfgElasticityMode");
+    const cfgTotalSteps = document.getElementById("cfgTotalSteps");
+    const cfgContainerImage = document.getElementById("cfgContainerImage");
+    const cfgGcsScratch = document.getElementById("cfgGcsScratch");
+    const cfgServerImage = document.getElementById("cfgServerImage");
+    const cfgProxyImage = document.getElementById("cfgProxyImage");
+    const cfgWorkloadPreset = document.getElementById("cfgWorkloadPreset");
+    const cfgCustomCommand = document.getElementById("cfgCustomCommand");
+    const cfgConfigmapFiles = document.getElementById("cfgConfigmapFiles");
+    const cfgStatusMessage = document.getElementById("cfgStatusMessage");
+    const btnResetConfigDefaults = document.getElementById("btnResetConfigDefaults");
+    const btnSaveConfig = document.getElementById("btnSaveConfig");
+    const btnSaveAndDeploy = document.getElementById("btnSaveAndDeploy");
+
+    // Canvases
+    const lossCanvas = document.getElementById("lossCanvas");
+    const goodputCanvas = document.getElementById("goodputCanvas");
+    const lossCtx = lossCanvas.getContext("2d");
+    const goodputCtx = goodputCanvas.getContext("2d");
+
+    const DEMO_SESSION_TOKEN = window.__DEMO_SESSION_TOKEN__ || "";
+    let currentStep = 1;
+    let clusterVerified = false;
+    let yamlManuallyEdited = false;
+    let previewDebounceTimer = null;
+    let initialStepResolved = false;
+    let latestYamlBundle = "";
+    let latestKubectlApplyCmd = "kubectl apply -f /tmp/gke_elastic_workload.yaml";
+
+    function apiHeaders(includeJson = true) {
+      const headers = {};
+      if (includeJson) headers["Content-Type"] = "application/json";
+      if (DEMO_SESSION_TOKEN) headers["X-Demo-Token"] = DEMO_SESSION_TOKEN;
+      return headers;
+    }
+
+    function updateKubectlCmdDisplay(data) {
+      if (!data) return;
+      if (data.yaml_bundle) {
+        latestYamlBundle = data.yaml_bundle;
+      }
+      if (data.yaml_path && yamlBundlePathLabel) {
+        yamlBundlePathLabel.textContent = data.yaml_path;
+      }
+      if (data.kubectl_apply_cmd) {
+        latestKubectlApplyCmd = data.kubectl_apply_cmd;
+        if (kubectlApplyCmdText) {
+          kubectlApplyCmdText.textContent = data.kubectl_apply_cmd;
+        }
+      }
+    }
+
+    function setClusterStatus(text, dotColorClass, textColorClass) {
+      headerClusterStatusText.textContent = text;
+      headerClusterStatusDot.className = `w-2 h-2 rounded-full ${dotColorClass} shrink-0`;
+      topoClusterStatusText.textContent = text;
+      topoClusterStatusText.className = `text-[10px] font-mono font-semibold ${textColorClass}`;
+      topoClusterStatusDot.className = `w-1.5 h-1.5 rounded-full ${dotColorClass} shrink-0`;
+    }
+
+    function resizeCanvases() {
+      const dpr = window.devicePixelRatio || 1;
+      [lossCanvas, goodputCanvas].forEach(cv => {
+        const rect = cv.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          cv.width = rect.width * dpr;
+          cv.height = rect.height * dpr;
+        }
+      });
+      renderCharts();
+    }
+    window.addEventListener("resize", resizeCanvases);
+
+    function renderStepTabs() {
+      const stepTabs = [stepTab1, stepTab2, stepTab3];
+      const stepBadges = [stepBadge1, stepBadge2, stepBadge3];
+      const isStepDone = [
+        clusterVerified || currentStep > 1 || state.jobsetStatus !== "IDLE",
+        state.jobsetStatus !== "IDLE" || currentStep > 2,
+        state.jobsetStatus === "COMPLETED",
+      ];
+
+      stepTabs.forEach((tab, idx) => {
+        const sNum = idx + 1;
+        const badge = stepBadges[idx];
+        if (sNum === currentStep) {
+          tab.className = "flex items-center gap-2.5 p-2.5 rounded-lg border border-[var(--primary)] bg-blue-500/15 text-[var(--foreground)] text-left transition-all cursor-pointer shadow-sm";
+          badge.className = "w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0 bg-[var(--primary)] text-white";
+          badge.textContent = String(sNum);
+        } else if (isStepDone[idx]) {
+          tab.className = "flex items-center gap-2.5 p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-left transition-all cursor-pointer hover:bg-emerald-500/15";
+          badge.className = "w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0 bg-emerald-500 text-white";
+          badge.innerHTML = "&#10003;";
+        } else {
+          tab.className = "flex items-center gap-2.5 p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] text-left transition-all cursor-pointer hover:border-slate-500 hover:text-[var(--foreground)]";
+          badge.className = "w-6 h-6 rounded-full flex items-center justify-center font-mono text-xs font-bold shrink-0 bg-[var(--secondary)] text-[var(--muted-foreground)]";
+          badge.textContent = String(sNum);
+        }
+      });
+    }
+
+    function setActiveStep(stepNum) {
+      currentStep = stepNum;
+      step1View.classList.toggle("hidden", stepNum !== 1);
+      step2View.classList.toggle("hidden", stepNum !== 2);
+      step3View.classList.toggle("hidden", stepNum !== 3);
+      renderStepTabs();
+      if (stepNum === 2 && (!yamlEditor.value.trim() || !yamlManuallyEdited)) {
+        refreshYamlPreview(false);
+      }
+      if (stepNum === 3) {
+        requestAnimationFrame(() => resizeCanvases());
+      }
+    }
+
+    stepTab1.addEventListener("click", () => setActiveStep(1));
+    stepTab2.addEventListener("click", () => setActiveStep(2));
+    stepTab3.addEventListener("click", () => setActiveStep(3));
+    btnStep2Back.addEventListener("click", () => setActiveStep(1));
+    btnStep3Back.addEventListener("click", () => setActiveStep(2));
+
+    function setYamlSyncStatus(isManual) {
+      yamlManuallyEdited = isManual;
+      if (isManual) {
+        yamlSyncBadge.textContent = "Edited manually";
+        yamlSyncBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-400";
+      } else {
+        yamlSyncBadge.textContent = "Synced with form";
+        yamlSyncBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400";
+      }
+    }
+
+    async function refreshYamlPreview(force = false) {
+      if (yamlManuallyEdited && !force) return;
+      try {
+        const payload = gatherConfigPayload(false);
+        const res = await fetch("/api/jobset/preview", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        updateKubectlCmdDisplay(data);
+        if (data.yaml) {
+          yamlEditor.value = data.yaml;
+          setYamlSyncStatus(false);
+        }
+      } catch (e) {}
+    }
+
+    function scheduleYamlPreviewRefresh() {
+      if (yamlManuallyEdited) return;
+      if (previewDebounceTimer) clearTimeout(previewDebounceTimer);
+      previewDebounceTimer = setTimeout(() => refreshYamlPreview(false), 180);
+    }
+
+    yamlEditor.addEventListener("input", () => setYamlSyncStatus(true));
+    btnResetYamlFromForm.addEventListener("click", () => refreshYamlPreview(true));
+
+    btnCopyYaml.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(yamlEditor.value);
+        const prev = btnCopyYaml.textContent;
+        btnCopyYaml.textContent = "Copied!";
+        setTimeout(() => { btnCopyYaml.textContent = prev; }, 1400);
+      } catch (e) {}
+    });
+
+    btnCopyKubectlCmd.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(kubectlApplyCmdText.textContent.trim());
+        const prev = btnCopyKubectlCmd.textContent;
+        btnCopyKubectlCmd.textContent = "Copied!";
+        setTimeout(() => { btnCopyKubectlCmd.textContent = prev; }, 1400);
+      } catch (e) {}
+    });
+
+    btnDownloadYaml.addEventListener("click", async () => {
+      let content = latestYamlBundle || yamlEditor.value;
+      if (yamlManuallyEdited) {
+        try {
+          const payload = gatherConfigPayload(false);
+          payload.yaml_manifest = yamlEditor.value;
+          const res = await fetch("/api/jobset/preview", {
+            method: "POST",
+            headers: apiHeaders(),
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (data.yaml_bundle) content = data.yaml_bundle;
+        } catch (e) {}
+      }
+      const blob = new Blob([content], { type: "text/yaml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${cfgJobsetName.value.trim() || "pathways-jobset"}.yaml`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    function computeChipsFromTopo(topoStr) {
+      const dims = (topoStr || "4x8").split("x").map(x => parseInt(x.trim(), 10)).filter(n => !isNaN(n) && n > 0);
+      if (dims.length === 0) return { chips: 32, vms: 8 };
+      const chips = dims.reduce((a, b) => a * b, 1);
+      const chipsPerVm = Math.min(4, chips);
+      const vms = Math.max(1, Math.floor(chips / chipsPerVm));
+      return { chips, vms };
+    }
+
+    function updateTopologyPreview() {
+      const { chips, vms } = computeChipsFromTopo(cfgTopology.value);
+      cfgTopologyComputed.textContent = `${chips} chips/slice \u2022 ${vms} VMs/slice (${cfgTpuType.value}:${cfgTopology.value || '4x8'})`;
+      stepSub2.textContent = `${cfgNumSlices.value || 2}x ${cfgTpuType.value}:${cfgTopology.value || '4x8'} (${cfgJobsetName.value || 'lb-elastic'})`;
+      const ctx = cfgClusterContext.value.trim();
+      const ns = cfgNamespace.value.trim() || "default";
+      const pathStr = yamlBundlePathLabel ? yamlBundlePathLabel.textContent : "/tmp/gke_elastic_workload.yaml";
+      if (kubectlApplyCmdText) {
+        kubectlApplyCmdText.textContent = `kubectl --context=${ctx} -n ${ns} apply -f ${pathStr}`;
+      }
+      if (cfgWorkloadPreset.value === "builtin_elastic_demo") {
+        cfgCustomCommand.value =
+          `python3 -m pathwaysutils.extras.elastic.elastic_workload \\\n` +
+          `  --config_name=default \\\n` +
+          `  --total_steps=${cfgTotalSteps.value || 1000} \\\n` +
+          `  --elasticity_mode=${cfgElasticityMode.value} \\\n` +
+          `  --simulate_faults=true \\\n` +
+          `  --enable_control_server=true \\\n` +
+          `  --control_port=8090 \\\n` +
+          `  --wait_for_start_signal=true`;
+      }
+      scheduleYamlPreviewRefresh();
+    }
+
+    [
+      cfgClusterContext,
+      cfgNamespace,
+      cfgJobsetName,
+      cfgKueueQueue,
+      cfgCpuNodepool,
+      cfgNumSlices,
+      cfgStandbySlices,
+      cfgTpuType,
+      cfgTopology,
+      cfgTotalSteps,
+      cfgElasticityMode,
+      cfgContainerImage,
+      cfgGcsScratch,
+      cfgServerImage,
+      cfgProxyImage,
+      cfgWorkloadPreset,
+      cfgCustomCommand,
+      cfgConfigmapFiles,
+    ].forEach(el => {
+      el.addEventListener("input", updateTopologyPreview);
+      el.addEventListener("change", updateTopologyPreview);
+    });
+
+    cfgClusterSelect.addEventListener("change", () => {
+      if (cfgClusterSelect.value) {
+        cfgClusterContext.value = cfgClusterSelect.value;
+        clusterVerified = false;
+        renderStepTabs();
+        scheduleYamlPreviewRefresh();
+      }
+    });
+
+    cfgPresetSelector.addEventListener("change", () => {
+      const p = cfgPresetSelector.value;
+      if (p === "replica_resize_default") {
+        cfgNumSlices.value = 2;
+        cfgStandbySlices.value = 2;
+        cfgTpuType.value = "tpuv5e";
+        cfgTopology.value = "4x8";
+        cfgElasticityMode.value = "step_snapshot_replica_resize";
+        cfgWorkloadPreset.value = "builtin_elastic_demo";
+        updateTopologyPreview();
+      } else if (p === "pause_resume_default") {
+        cfgNumSlices.value = 2;
+        cfgStandbySlices.value = 2;
+        cfgTpuType.value = "tpuv5e";
+        cfgTopology.value = "4x8";
+        cfgElasticityMode.value = "step_snapshot_pause_resume";
+        cfgWorkloadPreset.value = "builtin_elastic_demo";
+        updateTopologyPreview();
+      } else if (p === "checkpoint_resize_default") {
+        cfgNumSlices.value = 2;
+        cfgStandbySlices.value = 2;
+        cfgTpuType.value = "tpuv5e";
+        cfgTopology.value = "4x8";
+        cfgElasticityMode.value = "step_checkpoint_replica_resize";
+        cfgWorkloadPreset.value = "builtin_elastic_demo";
+        updateTopologyPreview();
+      } else if (p === "custom_workload") {
+        cfgWorkloadPreset.value = "custom_command";
+        cfgCustomCommand.focus();
+      }
+    });
+
+    async function verifyClusterConnection() {
+      clusterVerifyDot.className = "w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0";
+      clusterVerifyTitle.textContent = "Checking GKE cluster connection...";
+      clusterVerifyBadge.textContent = "Connecting...";
+      clusterVerifyBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300";
+      clusterVerifyDesc.textContent = `Running kubectl get nodes on '${cfgClusterContext.value.trim()}'...`;
+
+      try {
+        const res = await fetch("/api/cluster/connect", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({
+            cluster_context: cfgClusterContext.value.trim(),
+            namespace: cfgNamespace.value.trim() || "default",
+            cpu_nodepool: cfgCpuNodepool.value.trim(),
+            kueue_queue_name: cfgKueueQueue.value.trim(),
+          }),
+        });
+        const data = await res.json();
+        updateKubectlCmdDisplay(data);
+        if (data.config) {
+          populateConfigForm(data.config, data.available_contexts);
+          applyConfigToState(data.config);
+        }
+        if (data.yaml_preview && !yamlManuallyEdited) {
+          yamlEditor.value = data.yaml_preview;
+          setYamlSyncStatus(false);
+        }
+        if (data.snapshot) applySnapshot(data.snapshot);
+
+        if (res.ok && data.connected) {
+          clusterVerified = true;
+          clusterVerifyCard.className = "p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 space-y-2";
+          clusterVerifyDot.className = "w-2 h-2 rounded-full bg-emerald-400 shrink-0";
+          clusterVerifyTitle.textContent = `Connected to ${data.cluster_context}`;
+          clusterVerifyBadge.textContent = `${data.total_nodes} nodes ready`;
+          clusterVerifyBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold";
+          clusterVerifyDesc.textContent = `Detected ${data.tpu_nodes} TPU node(s) and ${data.cpu_nodes} CPU node(s) in namespace '${data.namespace}'.`;
+          stepSub1.textContent = `Connected (${data.tpu_nodes} TPU nodes)`;
+
+          clusterVerifyChips.innerHTML = "";
+          const chips = [];
+          (data.accelerators || []).forEach(a => chips.push(`TPU: ${a}`));
+          (data.topologies || []).forEach(t => chips.push(`Topology: ${t}`));
+          (data.nodepools || []).forEach(np => chips.push(`Pool: ${np}`));
+          if (chips.length > 0) {
+            clusterVerifyChips.classList.remove("hidden");
+            clusterVerifyChips.classList.add("flex");
+            chips.forEach(txt => {
+              const span = document.createElement("span");
+              span.className = "px-2 py-0.5 rounded bg-[var(--card)] border border-emerald-500/30 text-emerald-300";
+              span.textContent = txt;
+              clusterVerifyChips.appendChild(span);
+            });
+          } else {
+            clusterVerifyChips.classList.add("hidden");
+          }
+          addLog("SUCCESS", "Cluster", data.message);
+        } else {
+          clusterVerified = false;
+          clusterVerifyCard.className = "p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 space-y-2";
+          clusterVerifyDot.className = "w-2 h-2 rounded-full bg-rose-500 shrink-0";
+          clusterVerifyTitle.textContent = "Cluster Connection Failed";
+          clusterVerifyBadge.textContent = "Error";
+          clusterVerifyBadge.className = "text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500/20 text-rose-300";
+          clusterVerifyDesc.textContent = data.message || "kubectl could not reach this cluster context.";
+          clusterVerifyChips.classList.add("hidden");
+          addLog("ERROR", "Cluster", data.message || "Cluster connection failed.");
+        }
+      } catch (err) {
+        clusterVerified = false;
+        clusterVerifyTitle.textContent = "Bridge Connection Error";
+        clusterVerifyDesc.textContent = String(err);
+      }
+      renderStepTabs();
+    }
+
+    btnVerifyCluster.addEventListener("click", verifyClusterConnection);
+    btnRefreshContexts.addEventListener("click", loadInitialConfig);
+
+    btnStep1Next.addEventListener("click", async () => {
+      step1StatusMsg.textContent = "Saving cluster settings...";
+      const payload = gatherConfigPayload(false);
+      try {
+        const res = await fetch("/api/config", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        updateKubectlCmdDisplay(data);
+        if (data.config) {
+          populateConfigForm(data.config);
+          applyConfigToState(data.config);
+        }
+        if (data.yaml_preview && !yamlManuallyEdited) {
+          yamlEditor.value = data.yaml_preview;
+          setYamlSyncStatus(false);
+        }
+        step1StatusMsg.textContent = "Cluster settings saved.";
+      } catch (e) {}
+      setActiveStep(2);
+    });
+
+    function populateConfigForm(cfg, availableContexts) {
+      if (!cfg) return;
+      if (Array.isArray(availableContexts) && availableContexts.length > 0) {
+        cfgClusterSelect.innerHTML = "";
+        availableContexts.forEach(ctx => {
+          const opt = document.createElement("option");
+          opt.value = ctx;
+          opt.textContent = ctx;
+          cfgClusterSelect.appendChild(opt);
+        });
+      }
+      cfgClusterContext.value = cfg.cluster_context || "";
+      if ([...cfgClusterSelect.options].some(o => o.value === cfg.cluster_context)) {
+        cfgClusterSelect.value = cfg.cluster_context;
+      }
+      cfgNamespace.value = cfg.namespace || "default";
+      cfgJobsetName.value = cfg.jobset_name || "lb-elastic";
+      cfgKueueQueue.value = cfg.kueue_queue_name !== undefined ? cfg.kueue_queue_name : "multislice-queue";
+      cfgCpuNodepool.value = cfg.cpu_nodepool !== undefined ? cfg.cpu_nodepool : "cpu-np";
+      cfgNumSlices.value = cfg.num_slices || 2;
+      cfgStandbySlices.value = cfg.standby_slices !== undefined ? cfg.standby_slices : 2;
+      cfgTpuType.value = cfg.tpu_type || "tpuv5e";
+      cfgTopology.value = cfg.topology || "4x8";
+      cfgElasticityMode.value = cfg.elasticity_mode || "step_snapshot_replica_resize";
+      cfgTotalSteps.value = cfg.total_steps || 1000;
+      cfgContainerImage.value = cfg.container_image || "";
+      cfgGcsScratch.value = cfg.gcs_scratch_location || "";
+      cfgServerImage.value = cfg.server_image || "";
+      cfgProxyImage.value = cfg.proxy_image || "";
+      cfgWorkloadPreset.value = cfg.workload_preset || "builtin_elastic_demo";
+      cfgCustomCommand.value = cfg.custom_command || "";
+      if (Array.isArray(cfg.configmap_files)) {
+        cfgConfigmapFiles.value = cfg.configmap_files
+          .map(f => `${f.filename}=${f.host_path}`)
+          .join("\n");
+      }
+      updateTopologyPreview();
+    }
+
+    function gatherConfigPayload(deploy = false) {
+      const cmLines = cfgConfigmapFiles.value.split("\n").map(l => l.trim()).filter(Boolean);
+      const cmFiles = [];
+      for (const line of cmLines) {
+        const eqIdx = line.indexOf("=");
+        if (eqIdx > 0) {
+          cmFiles.push({
+            filename: line.substring(0, eqIdx).trim(),
+            host_path: line.substring(eqIdx + 1).trim(),
+          });
+        }
+      }
+      return {
+        cluster_context: cfgClusterContext.value.trim(),
+        namespace: cfgNamespace.value.trim() || "default",
+        jobset_name: cfgJobsetName.value.trim() || "lb-elastic",
+        kueue_queue_name: cfgKueueQueue.value.trim(),
+        cpu_nodepool: cfgCpuNodepool.value.trim(),
+        num_slices: parseInt(cfgNumSlices.value, 10) || 2,
+        standby_slices: parseInt(cfgStandbySlices.value, 10) >= 0 ? parseInt(cfgStandbySlices.value, 10) : 2,
+        tpu_type: cfgTpuType.value.trim() || "tpuv5e",
+        topology: cfgTopology.value.trim() || "4x8",
+        elasticity_mode: cfgElasticityMode.value.trim(),
+        total_steps: parseInt(cfgTotalSteps.value, 10) || 1000,
+        container_image: cfgContainerImage.value.trim(),
+        gcs_scratch_location: cfgGcsScratch.value.trim(),
+        server_image: cfgServerImage.value.trim(),
+        proxy_image: cfgProxyImage.value.trim(),
+        workload_preset: cfgWorkloadPreset.value,
+        custom_command: cfgCustomCommand.value,
+        configmap_files: cmFiles,
+        deploy: deploy,
+      };
+    }
+
+    function applyConfigToState(cfg) {
+      if (!cfg) return;
+      const newNumSlices = parseInt(cfg.num_slices, 10) || 2;
+      const newStandbySlices = cfg.standby_slices !== undefined ? parseInt(cfg.standby_slices, 10) : 2;
+      const topologyChanged =
+        newNumSlices !== state.numSlices || newStandbySlices !== state.standbySlices;
+
+      state.clusterContext = cfg.cluster_context || state.clusterContext;
+      state.namespace = cfg.namespace || "default";
+      state.jobsetName = cfg.jobset_name || "lb-elastic";
+      state.numSlices = newNumSlices;
+      state.standbySlices = newStandbySlices;
+      state.tpuType = cfg.tpu_type || "tpuv5e";
+      state.topology = cfg.topology || "4x8";
+      state.chipsPerSlice = cfg.chips_per_slice || computeChipsFromTopo(state.topology).chips;
+      state.vmsPerSlice = cfg.vms_per_slice || computeChipsFromTopo(state.topology).vms;
+      state.mode = cfg.elasticity_mode || state.mode;
+      state.totalSteps = cfg.total_steps || state.totalSteps;
+
+      headerClusterLabel.textContent = state.clusterContext;
+      headerJobsetLabel.textContent = `${state.namespace}/${state.jobsetName}`;
+      stepSub2.textContent = `${state.numSlices}x ${state.tpuType}:${state.topology} (${state.jobsetName})`;
+
+      if (topologyChanged || state.slotRacks.length !== state.numSlices) {
+        initDynamicSliceTopology();
+      }
+    }
+
+    function initDynamicSliceTopology() {
+      const n = state.numSlices;
+      const m = state.standbySlices;
+      const totalRacks = Math.max(n, n + m);
+      state.slotRacks = Array.from({ length: n }, (_, i) => i);
+      state.slotActive = Array.from({ length: n }, () => true);
+      state.activeIndices = [...state.slotRacks];
+      state.activeSliceCount = n;
+      state.disruptedSlot = null;
+      state.disruptedRack = null;
+      state.reconnectingSlot = null;
+      state.sliceStates = Array.from({ length: totalRacks }, (_, i) => (i < n ? "active" : "standby"));
+      ensureDynamicDomBuilt();
+    }
+
+    function ensureDynamicDomBuilt() {
+      const n = state.numSlices;
+      const m = state.standbySlices;
+      const totalRacks = Math.max(n, n + m);
+      if (state.renderedNumSlices === n && state.renderedTotalRacks === totalRacks) {
+        return;
+      }
+      state.renderedNumSlices = n;
+      state.renderedTotalRacks = totalRacks;
+      logicalSlicesHeaderLabel.textContent = `Logical Workload Slices (${n}-Slice Mesh)`;
+
+      // Build Interrupt Workload Slice buttons
+      interruptButtonsContainer.innerHTML = "";
+      for (let s = 0; s < n; s++) {
+        const btn = document.createElement("button");
+        btn.id = `btnInterruptSlice${s}`;
+        btn.className = "btn-interrupt-slice px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer";
+        btn.textContent = `Interrupt Workload Slice ${s}`;
+        btn.addEventListener("click", () => triggerInterrupt(s));
+        interruptButtonsContainer.appendChild(btn);
+      }
+
+      // Build Logical Workload Slice Cards
+      workloadSlicesGrid.innerHTML = "";
+      for (let s = 0; s < n; s++) {
+        const card = document.createElement("div");
+        card.id = `workloadSlice${s}Card`;
+        card.className = "slice-card workload-card active flex items-center justify-between p-2";
+        card.innerHTML = `
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            <span id="workloadSlice${s}Dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
+            <div class="min-w-0 flex-1">
+              <div class="text-xs font-bold text-[var(--foreground)] truncate">WORKLOAD SLICE ${s}</div>
+              <div id="workloadSlice${s}Mapping" class="workload-mapping text-[10px] text-emerald-400 font-mono">Running on TPU Slice ${s}</div>
+            </div>
+          </div>
+          <span id="workloadSlice${s}Badge" class="workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">Active Slice</span>
+        `;
+        workloadSlicesGrid.appendChild(card);
+      }
+
+      // Build Physical Cluster TPU Slice Cards
+      physicalSlicesGrid.innerHTML = "";
+      for (let i = 0; i < totalRacks; i++) {
+        const card = document.createElement("div");
+        card.id = `rackSlice${i}`;
+        card.className = i < n
+          ? "slice-card tpu-slice-card active flex flex-col justify-between"
+          : "slice-card tpu-slice-card inactive flex flex-col justify-between";
+        card.innerHTML = `
+          <div class="flex items-center justify-between gap-1 h-5 shrink-0">
+            <div id="rackSlice${i}Badge" class="flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0">
+              <span id="rackSlice${i}Dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span id="rackSlice${i}Text">TPU SLICE ${i}</span>
+            </div>
+            <span id="rackSlice${i}RoleBadge" class="tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold">${i < n ? "Active Slice" : "Spare Slice"}</span>
+          </div>
+          <div id="rackSlice${i}Footer" class="tpu-footer text-[10px] text-emerald-300 font-medium">
+            ${i < n ? `Assigned to Workload Slice ${i}` : "Spare Slice"}
+          </div>
+        `;
+        physicalSlicesGrid.appendChild(card);
+      }
+    }
+
+    async function loadInitialConfig() {
+      try {
+        const res = await fetch("/api/config");
+        const data = await res.json();
+        updateKubectlCmdDisplay(data);
+        if (data.config) {
+          populateConfigForm(data.config, data.available_contexts);
+          applyConfigToState(data.config);
+        }
+        if (data.yaml_preview && !yamlManuallyEdited) {
+          yamlEditor.value = data.yaml_preview;
+          setYamlSyncStatus(false);
+        }
+        if (data.snapshot) {
+          applySnapshot(data.snapshot);
+        }
+      } catch (e) {}
+    }
+
+    btnSaveConfig.addEventListener("click", async () => {
+      cfgStatusMessage.textContent = "Saving YAML bundle to /tmp...";
+      cfgStatusMessage.className = "text-[11px] font-mono text-amber-400 truncate";
+      const payload = gatherConfigPayload(false);
+      payload.yaml_manifest = yamlEditor.value;
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      updateKubectlCmdDisplay(data);
+      if (data.config) {
+        populateConfigForm(data.config);
+        applyConfigToState(data.config);
+      }
+      if (data.yaml_preview && !yamlManuallyEdited) {
+        yamlEditor.value = data.yaml_preview;
+        setYamlSyncStatus(false);
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      if (res.ok) {
+        cfgStatusMessage.textContent = data.message || "YAML bundle written.";
+        cfgStatusMessage.className = "text-[11px] font-mono text-emerald-400 truncate";
+        addLog("SUCCESS", "Config", data.message || "Saved configuration and wrote YAML bundle.");
+      } else {
+        cfgStatusMessage.textContent = data.message || "Failed to write YAML.";
+        cfgStatusMessage.className = "text-[11px] font-mono text-rose-400 truncate";
+        addLog("ERROR", "Config", data.message || "Failed to write YAML bundle.");
+      }
+      updateUI();
+    });
+
+    btnSaveAndDeploy.addEventListener("click", async () => {
+      cfgStatusMessage.textContent = "Writing YAML bundle for kubectl...";
+      cfgStatusMessage.className = "text-[11px] font-mono text-amber-400 truncate";
+      const payload = gatherConfigPayload(false);
+      payload.yaml_manifest = yamlEditor.value;
+
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      updateKubectlCmdDisplay(data);
+      if (data.config) {
+        populateConfigForm(data.config);
+        applyConfigToState(data.config);
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      if (res.ok) {
+        cfgStatusMessage.textContent = data.message || "YAML written. Run kubectl apply in your terminal!";
+        cfgStatusMessage.className = "text-[11px] font-mono text-emerald-400 truncate";
+        addLog("INFO", "GKEBridge", `YAML ready. Run in terminal: ${latestKubectlApplyCmd}`);
+        setAnnouncement(
+          "paused",
+          "Run kubectl apply in Your Terminal",
+          `Run '${latestKubectlApplyCmd}' in your terminal to launch the JobSet. This page will detect pods automatically.`
+        );
+        setActiveStep(3);
+      } else {
+        cfgStatusMessage.textContent = data.message || "Failed to write YAML.";
+        cfgStatusMessage.className = "text-[11px] font-mono text-rose-400 truncate";
+        addLog("ERROR", "GKEBridge", data.message || "Failed to write YAML bundle.");
+      }
+      updateUI();
+    });
+
+    btnResetConfigDefaults.addEventListener("click", async () => {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ reset_defaults: true }),
+      });
+      const data = await res.json();
+      updateKubectlCmdDisplay(data);
+      if (data.config) {
+        populateConfigForm(data.config);
+        applyConfigToState(data.config);
+      }
+      if (data.yaml_preview) {
+        yamlEditor.value = data.yaml_preview;
+        setYamlSyncStatus(false);
+      }
+      if (data.snapshot) applySnapshot(data.snapshot);
+      cfgStatusMessage.textContent = "Reset configuration and YAML to defaults.";
+      cfgStatusMessage.className = "text-[11px] font-mono text-sky-400 truncate";
+      updateUI();
+    });
+
+    let logCount = 0;
+    function addLog(level, component, message, customTimeStr) {
+      logCount++;
+      const isAtBottom =
+        logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 24;
+      const timeStr = customTimeStr || new Date().toISOString().substring(11, 23);
+      const row = document.createElement("div");
+      row.className = "flex items-start gap-2 py-0.5 leading-snug";
+
+      let badgeColor = "text-sky-400 bg-sky-500/10";
+      if (level === "WARN") badgeColor = "text-amber-400 bg-amber-500/10";
+      if (level === "ERROR") badgeColor = "text-rose-400 bg-rose-500/10";
+      if (level === "SUCCESS") badgeColor = "text-emerald-400 bg-emerald-500/10";
+
+      row.innerHTML = `
+        <span class="text-[var(--muted-foreground)] opacity-70 shrink-0">${timeStr}</span>
+        <span class="px-1 py-0.2 rounded text-[10px] font-bold shrink-0 ${badgeColor}">${level}</span>
+        <span class="text-[var(--muted-foreground)] shrink-0">[${component}]</span>
+        <span class="break-all ${level === 'ERROR' ? 'text-rose-400 font-semibold' : ''}">${message}</span>
+      `;
+
+      logContainer.appendChild(row);
+      if (logContainer.children.length > 2000) {
+        const firstChild = logContainer.firstChild;
+        const removedHeight = firstChild.offsetHeight;
+        logContainer.removeChild(firstChild);
+        if (!isAtBottom) {
+          logContainer.scrollTop = Math.max(0, logContainer.scrollTop - removedHeight);
+        }
+      }
+      if (isAtBottom) {
+        logContainer.scrollTop = logContainer.scrollHeight;
+      }
+      logStats.textContent = `${logCount} events recorded`;
+    }
+
+    function parseAndLogRawLine(line) {
+      let level = "INFO";
+      let component = "GKEPod";
+      if (line.includes("ERROR") || line.includes("DATA_LOSS") || line.includes("PlacementDataLoss")) {
+        level = "ERROR";
+      } else if (line.includes("WARNING") || line.includes("INTERRUPTING") || line.includes("ELASTIC RECOVERY TRIGGERED") || line.includes("SCALE UP")) {
+        level = "WARN";
+      } else if (line.includes("ELASTIC RECOVERY COMPLETE") || line.includes("Pre-compilation finished") || line.includes("WORKLOAD READY") || line.includes("TRAINING STARTED")) {
+        level = "SUCCESS";
+      }
+
+      if (line.includes("elastic_workload.py")) component = "ElasticWorkload";
+      else if (line.includes("snapshot.py") || line.includes("snapshotter.py")) component = "Snapshotter";
+      else if (line.includes("manager.py") || line.includes("elastic.py")) component = "Manager";
+      else if (line.includes("checkpoint")) component = "Orbax";
+
+      const cleanMsg = line.replace(/^[IWEF]\d{4}\s+[\d:.]+\s+\d+\s+[^\]]+\]\s*/, "")
+                           .replace(/^\d{4}-\d{2}-\d{2}\s+[\d:,]+\s+\[[A-Z]+\]\s+[^:]+:\s*/, "");
+      addLog(level, component, cleanMsg);
+    }
+
+    function highlightStage(stageNum) {
+      for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById(`stage${i}`);
+        const badge = el.querySelector(".stage-num");
+        if (i === stageNum) {
+          el.className = "flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--primary)] text-[var(--primary-foreground)] font-semibold shadow-sm transition-all";
+          badge.className = "stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-white/20 text-white font-bold shrink-0";
+        } else if (i < stageNum) {
+          el.className = "flex items-center gap-2 px-2 py-1.5 rounded bg-emerald-500/15 text-emerald-400 transition-all font-medium";
+          badge.className = "stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-emerald-500 text-white font-bold shrink-0";
+        } else {
+          el.className = "flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all";
+          badge.className = "stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0";
+        }
+      }
+    }
+
+    function resetStages() {
+      for (let i = 1; i <= 5; i++) {
+        const el = document.getElementById(`stage${i}`);
+        const badge = el.querySelector(".stage-num");
+        el.className = "flex items-center gap-2 px-2 py-1.5 rounded bg-[var(--secondary)] text-[var(--muted-foreground)] transition-all";
+        badge.className = "stage-num w-4 h-4 rounded-full flex items-center justify-center font-mono text-[10px] bg-[var(--border)] shrink-0";
+      }
+    }
+
+    function setAnnouncement(type, title, desc) {
+      announcementTitle.textContent = title;
+      announcementDesc.textContent = desc;
+
+      if (type === "healthy") {
+        announcementCallout.className = "p-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 transition-all duration-300 flex flex-col justify-center";
+        announcementIcon.innerHTML = "&#9679;";
+        announcementIcon.className = "text-sm font-bold text-emerald-400";
+      } else if (type === "fault") {
+        announcementCallout.className = "p-2.5 rounded-lg border border-rose-500/50 bg-rose-500/10 text-rose-400 transition-all duration-300 flex flex-col justify-center";
+        announcementIcon.innerHTML = "&#9888;";
+        announcementIcon.className = "text-sm font-bold text-rose-400 animate-bounce";
+      } else if (type === "recovering") {
+        announcementCallout.className = "p-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-400 transition-all duration-300 flex flex-col justify-center";
+        announcementIcon.innerHTML = "&#8635;";
+        announcementIcon.className = "text-sm font-bold text-amber-400 animate-spin";
+      } else if (type === "paused") {
+        announcementCallout.className = "p-2.5 rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-400 transition-all duration-300 flex flex-col justify-center";
+        announcementIcon.innerHTML = "&#10074;&#10074;";
+        announcementIcon.className = "text-sm font-bold text-sky-400 animate-pulse";
+      } else if (type === "scaleup") {
+        announcementCallout.className = "p-2.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 text-indigo-400 transition-all duration-300 flex flex-col justify-center";
+        announcementIcon.innerHTML = "&#8679;";
+        announcementIcon.className = "text-sm font-bold text-indigo-400";
+      }
+    }
+
+    function syncRackStates() {
+      const n = state.numSlices;
+      const totalRacks = Math.max(n, n + state.standbySlices);
+      const nextStates = Array.from({ length: totalRacks }, () => "standby");
+      for (let s = 0; s < n; s++) {
+        const r = state.slotRacks[s] ?? s;
+        if (state.slotActive[s]) {
+          if (r < totalRacks) nextStates[r] = "active";
+        } else {
+          const dispR = (state.disruptedSlot === s && state.disruptedRack !== null) ? state.disruptedRack : r;
+          if (dispR < totalRacks) nextStates[dispR] = "disrupted";
+        }
+      }
+      state.sliceStates = nextStates;
+    }
+
+    function updateTopologyVisualizers() {
+      ensureDynamicDomBuilt();
+      syncRackStates();
+      const n = state.numSlices;
+      const totalRacks = state.renderedTotalRacks;
+
+      // 1. Update Logical Workload Slice Cards & Interrupt Buttons
+      const canInterruptAny =
+        state.activeSliceCount >= n &&
+        n > 1 &&
+        !state.isReconnecting &&
+        !state.pendingInterrupt &&
+        state.jobsetStatus !== "IDLE" &&
+        state.jobsetStatus !== "STARTING";
+
+      for (let s = 0; s < n; s++) {
+        const cardEl = document.getElementById(`workloadSlice${s}Card`);
+        const dotEl = document.getElementById(`workloadSlice${s}Dot`);
+        const mappingEl = document.getElementById(`workloadSlice${s}Mapping`);
+        const badgeEl = document.getElementById(`workloadSlice${s}Badge`);
+        const btnInt = document.getElementById(`btnInterruptSlice${s}`);
+        if (!cardEl) continue;
+
+        const rackIdx = state.slotRacks[s] ?? s;
+        const wPod = state.workerPods.find(w => w.slice === s);
+        const podSuffix = wPod ? ` \u2022 ${wPod.name} (${wPod.phase})` : "";
+        const isSlotReconnecting = state.isReconnecting && state.reconnectingSlot === s;
+
+        if (state.slotActive[s] && !isSlotReconnecting) {
+          cardEl.className = "slice-card workload-card active flex items-center justify-between p-2";
+          if (dotEl) dotEl.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0";
+          if (mappingEl) {
+            mappingEl.className = "workload-mapping text-[10px] text-emerald-400 font-mono";
+            mappingEl.textContent = `Running on TPU Slice ${rackIdx}${podSuffix}`;
+          }
+          if (badgeEl) {
+            badgeEl.className = "workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold";
+            badgeEl.textContent = "Active Slice";
+          }
+          if (btnInt) {
+            btnInt.disabled = !canInterruptAny;
+            btnInt.className = canInterruptAny
+              ? "btn-interrupt-slice px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white hover:bg-rose-600 active:scale-95 shadow-sm cursor-pointer"
+              : "btn-interrupt-slice px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+          }
+        } else if (isSlotReconnecting) {
+          cardEl.className = "slice-card workload-card reconnecting flex items-center justify-between p-2";
+          if (dotEl) dotEl.className = "w-2 h-2 rounded-full bg-amber-400 animate-ping shrink-0";
+          if (mappingEl) {
+            mappingEl.className = "workload-mapping text-[10px] text-amber-400 font-mono";
+            mappingEl.textContent = `Allocating TPU Slice ${rackIdx} & resharding...`;
+          }
+          if (badgeEl) {
+            badgeEl.className = "workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-semibold";
+            badgeEl.textContent = "Reconnecting";
+          }
+          if (btnInt) {
+            btnInt.disabled = true;
+            btnInt.className = "btn-interrupt-slice px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+          }
+        } else {
+          const dispRack = state.disruptedRack !== null ? state.disruptedRack : rackIdx;
+          cardEl.className = "slice-card workload-card disrupted flex items-center justify-between p-2";
+          if (dotEl) dotEl.className = "w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0";
+          if (mappingEl) {
+            mappingEl.className = "workload-mapping text-[10px] text-rose-400 font-mono";
+            mappingEl.textContent = `Interrupted on TPU Slice ${dispRack}`;
+          }
+          if (badgeEl) {
+            badgeEl.className = "workload-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold";
+            badgeEl.textContent = "Interrupted Slice";
+          }
+          if (btnInt) {
+            btnInt.disabled = true;
+            btnInt.className = "btn-interrupt-slice px-2.5 py-1 rounded text-xs font-bold transition-all bg-rose-500 text-white shadow-sm opacity-40 cursor-not-allowed";
+          }
+        }
+      }
+
+      // Update Reconnect button state
+      const canReconnect = state.activeSliceCount < n && !state.isReconnecting && state.disruptedSlot !== null;
+      if (state.isReconnecting) {
+        btnRestoreSlice.disabled = true;
+        btnRestoreSlice.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-50 cursor-not-allowed animate-pulse";
+        btnRestoreSlice.textContent = "Reconnecting...";
+      } else if (canReconnect) {
+        btnRestoreSlice.disabled = false;
+        btnRestoreSlice.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 shadow-sm cursor-pointer animate-bounce";
+        btnRestoreSlice.textContent = "Reconnect a slice";
+      } else {
+        btnRestoreSlice.disabled = true;
+        btnRestoreSlice.className = "px-2.5 py-1 rounded text-xs font-bold transition-all bg-emerald-600 text-white shadow-sm opacity-40 cursor-not-allowed";
+        btnRestoreSlice.textContent = "Reconnect a slice";
+      }
+
+      // 2. Update Physical Cluster TPU Slice Cards
+      for (let i = 0; i < totalRacks; i++) {
+        const rackEl = document.getElementById(`rackSlice${i}`);
+        const badgeEl = document.getElementById(`rackSlice${i}Badge`);
+        const dotEl = document.getElementById(`rackSlice${i}Dot`);
+        const textEl = document.getElementById(`rackSlice${i}Text`);
+        const roleBadgeEl = document.getElementById(`rackSlice${i}RoleBadge`);
+        const footerEl = document.getElementById(`rackSlice${i}Footer`);
+        if (!rackEl) continue;
+
+        const st = state.sliceStates[i];
+        let assignedWorkload = null;
+        for (let s = 0; s < n; s++) {
+          if (state.slotRacks[s] === i) {
+            assignedWorkload = s;
+            break;
+          }
+        }
+
+        if (st === "active") {
+          rackEl.className = "slice-card tpu-slice-card active flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-emerald-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-semibold";
+            roleBadgeEl.textContent = "Active Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-emerald-300 font-medium";
+            footerEl.textContent = assignedWorkload !== null ? `Assigned to Workload Slice ${assignedWorkload}` : "Active Slice";
+          }
+        } else if (st === "disrupted") {
+          rackEl.className = "slice-card tpu-slice-card disrupted flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-rose-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 font-semibold";
+            roleBadgeEl.textContent = "Interrupted Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-rose-300 font-semibold";
+            footerEl.textContent = state.disruptedSlot !== null ? `Interrupted (Workload Slice ${state.disruptedSlot})` : "Interrupted Slice";
+          }
+        } else {
+          rackEl.className = "slice-card tpu-slice-card inactive flex flex-col justify-between";
+          if (badgeEl) badgeEl.className = "flex items-center gap-1.5 text-xs font-bold text-zinc-400 shrink-0";
+          if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full bg-zinc-500";
+          if (textEl) textEl.textContent = `TPU SLICE ${i}`;
+          if (roleBadgeEl) {
+            roleBadgeEl.className = "tpu-role-badge text-[9px] font-mono px-1.5 py-0.5 rounded bg-zinc-500/10 text-zinc-400 font-semibold";
+            roleBadgeEl.textContent = "Spare Slice";
+          }
+          if (footerEl) {
+            footerEl.className = "tpu-footer text-[10px] text-zinc-400 font-medium";
+            footerEl.textContent = "Spare Slice";
+          }
+        }
+      }
+    }
+
+    function updateUI() {
+      ensureDynamicDomBuilt();
+      simTimeLabel.textContent = `${state.elapsedTimeSec.toFixed(1)}s elapsed`;
+
+      kpiStep.textContent = state.step;
+      kpiTotalStepsLabel.textContent = `/ ${state.totalSteps}`;
+      lossAxisLabel.innerHTML = `X: Global Step (0 to ${state.totalSteps}) &bull; Y: Training Loss`;
+      const progressPct = Math.min(100, (state.step / Math.max(1, state.totalSteps)) * 100);
+      kpiStepProgress.style.width = `${progressPct}%`;
+      kpiLoss.textContent = state.loss !== null ? state.loss.toFixed(4) : "---";
+      kpiLossDelta.textContent = state.loss !== null ? "Live convergence telemetry" : "Waiting for first step";
+      kpiSlices.textContent = state.activeSliceCount;
+      kpiDevicesLabel.textContent = `Slices (${state.activeSliceCount * state.chipsPerSlice} ${state.tpuType.toUpperCase()} Chips)`;
+      kpiModeName.textContent = state.mode;
+      kpiGoodput.textContent = `${state.goodput.toFixed(1)}%`;
+
+      if (state.jobsetStatus === "IDLE") {
+        kpiGoodputEfficiency.textContent = "No active workload deployed";
+        kpiGoodputEfficiency.className = "kpi-sub text-[var(--muted-foreground)] font-medium";
+      } else if (state.jobsetStatus === "READY" || state.jobsetStatus === "PAUSED") {
+        kpiGoodputEfficiency.textContent = "Waiting for Start Training signal";
+        kpiGoodputEfficiency.className = "kpi-sub text-sky-400 font-medium";
+      } else if (state.inRecovery || state.jobsetStatus === "DISRUPTED" || state.jobsetStatus === "RECOVERING") {
+        kpiGoodputEfficiency.textContent = "Recovery transition active (G declining)";
+        kpiGoodputEfficiency.className = "kpi-sub text-amber-400 font-medium";
+      } else if (state.activeSliceCount >= state.numSlices) {
+        kpiGoodputEfficiency.textContent = `${state.numSlices}-slice progress (climbing toward 100%)`;
+        kpiGoodputEfficiency.className = "kpi-sub text-emerald-400 font-medium";
+      } else {
+        kpiGoodputEfficiency.textContent = `${state.activeSliceCount}-slice degraded progress (G climbing)`;
+        kpiGoodputEfficiency.className = "kpi-sub text-emerald-400 font-medium";
+      }
+
+      updateTopologyVisualizers();
+
+      if (state.jobsetStatus === "IDLE") {
+        setClusterStatus("Workload Deleted / Idle", "bg-zinc-500", "text-zinc-400");
+      } else if (state.jobsetStatus === "STARTING") {
+        setClusterStatus("Initializing GKE Pods...", "bg-amber-400 animate-ping", "text-amber-400");
+      } else if (state.jobsetStatus === "READY") {
+        setClusterStatus("Workload Ready (Step 0)", "bg-sky-400 animate-pulse", "text-sky-400");
+      } else if (state.jobsetStatus === "PAUSED") {
+        setClusterStatus("Training Paused", "bg-sky-400", "text-sky-400");
+      } else if (state.jobsetStatus === "FAILED") {
+        setClusterStatus("Pod Exited (Deploy or Start)", "bg-rose-500", "text-rose-400");
+      } else if (state.isReconnecting || state.jobsetStatus === "SCALING_UP") {
+        setClusterStatus("Scaling Up Mesh...", "bg-indigo-400 animate-pulse", "text-indigo-400");
+      } else if (state.activeSliceCount >= state.numSlices) {
+        setClusterStatus(`Cluster Healthy (${state.numSlices} Slices)`, "bg-emerald-500", "text-emerald-400");
+      } else {
+        const wIdx = state.disruptedSlot ?? 0;
+        const tpuIdx = state.disruptedRack ?? state.slotRacks[wIdx];
+        setClusterStatus(`Degraded (Workload ${wIdx} / TPU ${tpuIdx} Down)`, "bg-amber-500", "text-amber-400");
+      }
+
+      btnToggleRun.textContent = state.running
+        ? "Pause Training"
+        : (state.step === 0 ? "Start Training" : "Resume Training");
+      btnToggleRun.className = state.running
+        ? "px-3 py-1 rounded-lg font-semibold text-xs transition-all duration-150 bg-amber-500 text-black hover:bg-amber-400 active:scale-95 shadow-sm cursor-pointer"
+        : "px-3 py-1 rounded-lg font-semibold text-xs transition-all duration-150 bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 active:scale-95 shadow-sm cursor-pointer";
+
+      if (state.jobsetStatus === "IDLE") {
+        stepSub3.textContent = "Live telemetry & fault injection";
+      } else if (state.jobsetStatus === "STARTING" || state.jobsetStatus === "READY") {
+        stepSub3.textContent = `JobSet ${state.jobsetStatus.toLowerCase()} (Step ${state.step})`;
+      } else {
+        stepSub3.textContent = `Step ${state.step} / ${state.totalSteps} (${state.activeSliceCount} slices)`;
+      }
+      renderStepTabs();
+    }
+
+    function renderCharts() {
+      const dpr = window.devicePixelRatio || 1;
+      const wLoss = lossCanvas.width;
+      const hLoss = lossCanvas.height;
+      const wGp = goodputCanvas.width;
+      const hGp = goodputCanvas.height;
+
+      lossCtx.clearRect(0, 0, wLoss, hLoss);
+      goodputCtx.clearRect(0, 0, wGp, hGp);
+
+      const nLoss = state.history.lossSteps.length;
+      const nGp = state.history.goodputTimeSec.length;
+
+      const padLeft = 40 * dpr;
+      const padRight = 14 * dpr;
+      const padTop = 14 * dpr;
+      const padBottom = 22 * dpr;
+      const plotW = wLoss - padLeft - padRight;
+      const plotH = hLoss - padTop - padBottom;
+
+      let maxLoss = 10.0;
+      let minLoss = 2.0;
+      if (nLoss > 0) {
+        const vals = state.history.lossValues;
+        const hi = Math.max(...vals);
+        const lo = Math.min(...vals);
+        maxLoss = Math.max(hi + 0.5, lo + 2.0);
+        minLoss = Math.max(0.0, Math.min(lo - 0.5, hi - 2.0));
+      }
+
+      lossCtx.strokeStyle = "rgba(150, 150, 150, 0.15)";
+      lossCtx.lineWidth = 1 * dpr;
+      lossCtx.font = `${8.5 * dpr}px monospace`;
+      lossCtx.fillStyle = "rgba(150, 150, 150, 0.7)";
+      lossCtx.textAlign = "center";
+
+      const maxSteps = Math.max(10, state.totalSteps);
+      const stepTicks = [0, Math.round(maxSteps * 0.25), Math.round(maxSteps * 0.5), Math.round(maxSteps * 0.75), maxSteps];
+      for (const st of stepTicks) {
+        const x = padLeft + (st / maxSteps) * plotW;
+        lossCtx.beginPath();
+        lossCtx.moveTo(x, padTop);
+        lossCtx.lineTo(x, padTop + plotH);
+        lossCtx.stroke();
+        lossCtx.fillText(`${st}`, x, hLoss - 4 * dpr);
+      }
+
+      lossCtx.textAlign = "right";
+      for (let i = 0; i <= 4; i++) {
+        const lt = maxLoss - (i / 4) * (maxLoss - minLoss);
+        const normY = (lt - minLoss) / (maxLoss - minLoss);
+        const y = padTop + (1 - normY) * plotH;
+        lossCtx.beginPath();
+        lossCtx.moveTo(padLeft, y);
+        lossCtx.lineTo(padLeft + plotW, y);
+        lossCtx.stroke();
+        lossCtx.fillText(lt.toFixed(1), padLeft - 4 * dpr, y + 2.5 * dpr);
+      }
+
+      if (nLoss >= 1) {
+        lossCtx.beginPath();
+        lossCtx.strokeStyle = "#6366f1";
+        lossCtx.lineWidth = 2.2 * dpr;
+        for (let i = 0; i < nLoss; i++) {
+          const st = state.history.lossSteps[i];
+          const x = padLeft + (st / maxSteps) * plotW;
+          const normY = Math.max(0, Math.min(1, (state.history.lossValues[i] - minLoss) / (maxLoss - minLoss)));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) lossCtx.moveTo(x, y);
+          else lossCtx.lineTo(x, y);
+        }
+        lossCtx.stroke();
+      }
+
+      const lossStr = state.loss !== null ? state.loss.toFixed(4) : "---";
+      lossChartLegend.textContent = `Step: ${state.step} / ${state.totalSteps} | Loss: ${lossStr}`;
+
+      const latestTimeSec = nGp > 0 ? Math.max(0, state.history.goodputTimeSec[nGp - 1]) : 0;
+      const maxTimeSec = Math.max(30, Math.ceil((latestTimeSec + 5) / 5) * 5);
+
+      goodputCtx.strokeStyle = "rgba(150, 150, 150, 0.15)";
+      goodputCtx.lineWidth = 1 * dpr;
+      goodputCtx.font = `${8.5 * dpr}px monospace`;
+      goodputCtx.fillStyle = "rgba(150, 150, 150, 0.7)";
+      goodputCtx.textAlign = "center";
+
+      const numTimeTicks = 5;
+      for (let i = 0; i <= numTimeTicks; i++) {
+        const tVal = Math.round((i / numTimeTicks) * maxTimeSec);
+        const x = padLeft + (tVal / maxTimeSec) * plotW;
+        goodputCtx.beginPath();
+        goodputCtx.moveTo(x, padTop);
+        goodputCtx.lineTo(x, padTop + plotH);
+        goodputCtx.stroke();
+        goodputCtx.fillText(`${tVal}s`, x, hGp - 4 * dpr);
+      }
+
+      goodputCtx.textAlign = "right";
+      const gpTicks = [100, 75, 50, 25, 0];
+      for (const gp of gpTicks) {
+        const y = padTop + (1 - gp / 100.0) * plotH;
+        goodputCtx.beginPath();
+        goodputCtx.moveTo(padLeft, y);
+        goodputCtx.lineTo(padLeft + plotW, y);
+        goodputCtx.stroke();
+        goodputCtx.fillText(`${gp}%`, padLeft - 4 * dpr, y + 2.5 * dpr);
+      }
+
+      goodputCtx.save();
+      goodputCtx.strokeStyle = "rgba(16, 185, 129, 0.35)";
+      goodputCtx.setLineDash([4 * dpr, 4 * dpr]);
+      goodputCtx.beginPath();
+      goodputCtx.moveTo(padLeft, padTop);
+      goodputCtx.lineTo(padLeft + plotW, padTop);
+      goodputCtx.stroke();
+      goodputCtx.restore();
+
+      if (nGp >= 1) {
+        goodputCtx.beginPath();
+        goodputCtx.strokeStyle = "#10b981";
+        goodputCtx.lineWidth = 2.2 * dpr;
+        for (let i = 0; i < nGp; i++) {
+          const tVal = Math.max(0, state.history.goodputTimeSec[i]);
+          const x = padLeft + (tVal / maxTimeSec) * plotW;
+          const normY = Math.max(0, Math.min(1, state.history.goodputValues[i] / 100.0));
+          const y = padTop + (1 - normY) * plotH;
+          if (i === 0) goodputCtx.moveTo(x, y);
+          else goodputCtx.lineTo(x, y);
+        }
+        goodputCtx.stroke();
+      }
+
+      const latestG = state.history.goodputValues[nGp - 1] ?? 0.0;
+      goodputChartLegend.textContent = `Goodput: ${latestG.toFixed(1)}% (${latestTimeSec.toFixed(1)}s elapsed)`;
+    }
+
+    function resetFrontendTelemetry(keepSlices = false) {
+      state.running = false;
+      state.step = 0;
+      state.loss = null;
+      state.goodput = 0.0;
+      state.elapsedTimeSec = 0.0;
+      state.inRecovery = false;
+      state.pendingInterrupt = false;
+      state.isReconnecting = false;
+      state.reconnectingSlot = null;
+      if (!keepSlices) {
+        initDynamicSliceTopology();
+      }
+      state.history = {
+        lossSteps: [],
+        lossValues: [],
+        goodputTimeSec: [0.0],
+        goodputValues: [0.0],
+      };
+      resetStages();
+      updateUI();
+      renderCharts();
+    }
+
+    function applySnapshot(snap) {
+      if (!snap) return;
+      if (snap.config) {
+        applyConfigToState(snap.config);
+      }
+      state.jobsetStatus = snap.jobset_status || "IDLE";
+      state.running = Boolean(snap.training_running);
+      state.workloadReady = Boolean(snap.workload_ready);
+      state.step = snap.current_step || 0;
+      state.totalSteps = snap.total_steps || state.totalSteps;
+      state.loss = snap.last_loss !== undefined ? snap.last_loss : null;
+      state.goodput = snap.current_goodput || 0.0;
+      state.headPodName = snap.head_pod_name || "";
+      state.workerPods = snap.worker_pods || [];
+
+      const n = state.numSlices;
+      if (snap.active_slices && snap.active_slices.length < n) {
+        state.activeSliceCount = snap.active_slices.length;
+        if (!state.isReconnecting) {
+          const activeSet = new Set(snap.active_slices);
+          for (let s = 0; s < n; s++) {
+            const isAct = activeSet.has(s);
+            state.slotActive[s] = isAct;
+            if (!isAct) {
+              state.disruptedSlot = s;
+              state.disruptedRack = state.slotRacks[s];
+            }
+          }
+          state.activeIndices = state.slotRacks.filter((_, idx) => state.slotActive[idx]);
+          syncRackStates();
+        }
+      } else if (snap.active_slices && snap.active_slices.length >= n && !state.pendingInterrupt) {
+        state.activeSliceCount = n;
+        state.slotActive = Array.from({ length: n }, () => true);
+        state.disruptedSlot = null;
+        state.disruptedRack = null;
+        state.isReconnecting = false;
+        state.reconnectingSlot = null;
+        state.activeIndices = [...state.slotRacks];
+        syncRackStates();
+      }
+
+      if (Array.isArray(snap.loss_history)) {
+        state.history.lossSteps = snap.loss_history.map(pt => pt.step);
+        state.history.lossValues = snap.loss_history.map(pt => pt.loss);
+      }
+      if (Array.isArray(snap.goodput_history) && snap.goodput_history.length > 0) {
+        state.history.goodputTimeSec = snap.goodput_history.map(pt => Math.max(0, pt.time));
+        state.history.goodputValues = snap.goodput_history.map(pt => pt.goodput);
+        state.elapsedTimeSec = state.history.goodputTimeSec[state.history.goodputTimeSec.length - 1] || 0.0;
+      } else {
+        state.history.goodputTimeSec = [0.0];
+        state.history.goodputValues = [0.0];
+        state.elapsedTimeSec = 0.0;
+      }
+
+      if (snap.jobset_status === "IDLE") {
+        setAnnouncement("paused", "Waiting for Workload / Idle", "No active JobSet detected on GKE. Generate the YAML in Step 2 and run kubectl apply in your terminal.");
+      } else if (snap.jobset_status === "STARTING") {
+        setAnnouncement("recovering", "Initializing GKE JobSet", `Launching head & TPU worker pods (${state.numSlices}x ${state.tpuType}:${state.topology}) and pre-compiling executables...`);
+      } else if (snap.jobset_status === "READY") {
+        setAnnouncement("healthy", "Workload Ready (Step 0)", "Pre-compilation complete on GKE! Click 'Start Training' to begin executing training steps.");
+      }
+
+      if (!initialStepResolved) {
+        initialStepResolved = true;
+        if (snap.jobset_status && snap.jobset_status !== "IDLE") {
+          setActiveStep(3);
+        } else {
+          setActiveStep(1);
+        }
+      }
+
+      updateUI();
+      renderCharts();
+    }
+
+    btnToggleRun.addEventListener("click", async () => {
+      if (!state.running) {
+        addLog("INFO", "Control", "Sending Start Training signal to GKE workload...");
+        const res = await fetch("/api/signal/start", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (data.snapshot) applySnapshot(data.snapshot);
+        if (!res.ok || data.action === "missing_jobset") {
+          setAnnouncement("fault", "No Active JobSet", data.message || "Run kubectl apply from Step 2 first.");
+          addLog("WARN", "GKEBridge", data.message || "No active JobSet detected on GKE.");
+          if (data.kubectl_apply_cmd) {
+            updateKubectlCmdDisplay(data.kubectl_apply_cmd, data.yaml_bundle_path);
+          }
+        } else if (data.action === "queued_start") {
+          setAnnouncement("recovering", "Start Signal Queued", data.message);
+          addLog("INFO", "GKEBridge", data.message);
+        } else {
+          state.running = true;
+          setAnnouncement("healthy", "Training Active", `Executing distributed training steps on ${state.numSlices} GKE ${state.tpuType.toUpperCase()} slice(s).`);
+          addLog("SUCCESS", "Control", "Start Training signal acknowledged by head pod.");
+        }
+      } else {
+        addLog("INFO", "Control", "Sending Pause Training signal to GKE workload...");
+        const res = await fetch("/api/signal/pause", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        state.running = false;
+        if (data.snapshot) applySnapshot(data.snapshot);
+        setAnnouncement("paused", "Training Paused", "Workload paused at step boundary. Click Resume Training to continue.");
+      }
+      updateUI();
+    });
+
+    btnReset.addEventListener("click", async () => {
+      addLog("INFO", "Control", "Resetting demo telemetry and GKE workload state to Step 0...");
+      resetFrontendTelemetry(false);
+      const res = await fetch("/api/signal/reset", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (data.snapshot) applySnapshot(data.snapshot);
+      setAnnouncement("healthy", "Demo Reset (Step 0)", `Ready to start demo. All ${state.numSlices} configured slice(s) active on GKE TPU cluster.`);
+    });
+
+    btnLaunch.addEventListener("click", () => {
+      setActiveStep(2);
+      addLog("INFO", "GKEBridge", "Switched to Step 2 (Generate YAML). Copy and run the kubectl apply command in your terminal.");
+    });
+
+    btnDelete.addEventListener("click", async () => {
+      addLog("WARN", "GKEBridge", `Deleting JobSet '${state.jobsetName}' from GKE cluster and uncordoning nodes...`);
+      const res = await fetch("/api/jobset/delete", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      logContainer.innerHTML = "";
+      logCount = 0;
+      logStats.textContent = "0 events recorded";
+      resetFrontendTelemetry(false);
+      state.jobsetStatus = "IDLE";
+      if (data.snapshot) applySnapshot(data.snapshot);
+      addLog("WARN", "GKEBridge", `Deleted JobSet '${state.jobsetName}' from GKE cluster. All telemetry cleared.`);
+      setAnnouncement("paused", "Workload Deleted", `JobSet '${state.jobsetName}' deleted from GKE cluster. Click Generate / Apply YAML to launch a new run.`);
+      updateUI();
+    });
+
+    async function triggerInterrupt(slotIdx) {
+      if (state.activeSliceCount < state.numSlices || state.isReconnecting || state.pendingInterrupt || !state.slotActive[slotIdx]) return;
+
+      const mechanism = mechanismSelector.value;
+      const targetDisruptedRack = state.slotRacks[slotIdx];
+
+      state.slotActive[slotIdx] = false;
+      state.disruptedSlot = slotIdx;
+      state.disruptedRack = targetDisruptedRack;
+      state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
+      state.activeSliceCount = state.activeIndices.length;
+      state.inRecovery = true;
+      state.pendingInterrupt = true;
+      state.isReconnecting = false;
+      state.reconnectingSlot = null;
+      syncRackStates();
+
+      highlightStage(1);
+      addLog("WARN", "FaultInjector", `>>> INTERRUPTING WORKLOAD SLICE ${slotIdx} (TPU Slice ${targetDisruptedRack}) via ${mechanism === 'k8s' ? 'kubectl cordon + drain' : 'Port 8090 RPC'} <<<`);
+      setAnnouncement(
+        "fault",
+        `Workload Slice ${slotIdx} Interrupted`,
+        mechanism === "k8s"
+          ? `Cordoning and draining GKE node for TPU Slice ${targetDisruptedRack}. Triggering JAX DATA_LOSS & elastic retry...`
+          : `Sending fault signal via Port 8090 RPC for Workload Slice ${slotIdx} (TPU Slice ${targetDisruptedRack})...`
+      );
+      updateUI();
+
+      await fetch("/api/signal/interrupt", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ slice: slotIdx, mechanism }),
+      });
+    }
+
+    async function triggerReconnect() {
+      const slotIdx = state.disruptedSlot;
+      if (slotIdx === null || state.activeSliceCount >= state.numSlices || state.isReconnecting || state.slotActive[slotIdx]) return;
+
+      const mechanism = mechanismSelector.value;
+      const previousDisruptedRack = state.disruptedRack !== null ? state.disruptedRack : state.slotRacks[slotIdx];
+      const otherActiveRacks = new Set(state.slotRacks.filter((_, i) => i !== slotIdx && state.slotActive[i]));
+      let newSelectedRack = previousDisruptedRack;
+
+      if (mechanism === "k8s" && state.standbySlices > 0) {
+        const totalRacks = state.numSlices + state.standbySlices;
+        const candidates = [];
+        for (let cand = 0; cand < totalRacks; cand++) {
+          if (cand !== previousDisruptedRack && !otherActiveRacks.has(cand)) {
+            candidates.push(cand);
+          }
+        }
+        if (candidates.length > 0) {
+          newSelectedRack = candidates[Math.floor(Math.random() * candidates.length)];
+        }
+      }
+
+      state.slotRacks[slotIdx] = newSelectedRack;
+      state.slotActive[slotIdx] = true;
+      state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
+      state.disruptedSlot = null;
+      state.disruptedRack = null;
+      state.pendingInterrupt = false;
+      state.isReconnecting = true;
+      state.reconnectingSlot = slotIdx;
+      state.inRecovery = true;
+      syncRackStates();
+
+      setAnnouncement(
+        "scaleup",
+        mechanism === "k8s" ? "Allocating Replacement Slice" : `Reconnecting Workload Slice ${slotIdx}`,
+        mechanism === "k8s"
+          ? `Uncordoning GKE node & allocating TPU Slice ${newSelectedRack} from hardware pool for Workload Slice ${slotIdx}...`
+          : `Sending reconnect signal via Port 8090 RPC to restore Workload Slice ${slotIdx} on TPU Slice ${newSelectedRack}...`
+      );
+      highlightStage(3);
+      addLog(
+        "INFO",
+        mechanism === "k8s" ? "GKEBridge" : "FaultInjector",
+        mechanism === "k8s"
+          ? `Uncordoning GKE node to schedule replacement worker pod on TPU Slice ${newSelectedRack} for Workload Slice ${slotIdx}...`
+          : `Sending in-workload reconnect signal via Port 8090 RPC for Workload Slice ${slotIdx} (TPU Slice ${newSelectedRack})...`
+      );
+      updateUI();
+
+      await fetch("/api/signal/reconnect", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ slice: slotIdx, mechanism }),
+      });
+    }
+
+    btnRestoreSlice.addEventListener("click", triggerReconnect);
+
+    btnClearLogs.addEventListener("click", () => {
+      logContainer.innerHTML = "";
+      logCount = 0;
+      logStats.textContent = "0 events recorded";
+    });
+
+    function connectSSE() {
+      const es = new EventSource("/api/telemetry/stream");
+
+      es.onmessage = (evt) => {
+        const data = JSON.parse(evt.data);
+
+        if (data.type === "init") {
+          const snap = data.snapshot;
+          if (snap && snap.config) {
+            populateConfigForm(snap.config);
+            applyConfigToState(snap.config);
+          }
+          if (snap && Array.isArray(snap.recent_logs)) {
+            logContainer.innerHTML = "";
+            logCount = 0;
+            snap.recent_logs.forEach(item => parseAndLogRawLine(item.line));
+          }
+          applySnapshot(snap);
+        } else if (data.type === "config_updated") {
+          if (data.config) {
+            populateConfigForm(data.config);
+            applyConfigToState(data.config);
+          }
+          if (data.snapshot) applySnapshot(data.snapshot);
+        } else if (data.type === "reset" || data.type === "deleted" || data.type === "launched") {
+          if (data.type === "deleted") {
+            logContainer.innerHTML = "";
+            logCount = 0;
+            logStats.textContent = "0 events recorded";
+          }
+          resetFrontendTelemetry(false);
+          applySnapshot(data.snapshot);
+          if (data.type === "launched" && data.message) {
+            addLog("SUCCESS", "GKEBridge", data.message);
+          }
+        } else if (data.type === "log") {
+          parseAndLogRawLine(data.line);
+        } else if (data.type === "step") {
+          state.running = true;
+          state.workloadReady = true;
+          state.step = data.step;
+          state.loss = data.loss;
+          state.goodput = data.goodput;
+          state.elapsedTimeSec = data.elapsed_time;
+
+          if (data.active_slices >= state.numSlices) {
+            if (!state.pendingInterrupt) {
+              state.inRecovery = false;
+              state.jobsetStatus = "RUNNING";
+              state.activeSliceCount = state.numSlices;
+              state.slotActive = Array.from({ length: state.numSlices }, () => true);
+              state.disruptedSlot = null;
+              state.disruptedRack = null;
+              state.isReconnecting = false;
+              state.reconnectingSlot = null;
+              state.activeIndices = [...state.slotRacks];
+              syncRackStates();
+            }
+          } else {
+            state.pendingInterrupt = false;
+            if (!state.isReconnecting) {
+              state.inRecovery = false;
+              state.jobsetStatus = "DEGRADED";
+              state.activeSliceCount = data.active_slices;
+            }
+          }
+
+          state.history.lossSteps.push(data.step);
+          state.history.lossValues.push(data.loss);
+          state.history.goodputTimeSec.push(Math.max(0, data.elapsed_time));
+          state.history.goodputValues.push(data.goodput);
+
+          updateUI();
+          renderCharts();
+        } else if (data.type === "goodput_tick") {
+          state.goodput = data.goodput;
+          state.elapsedTimeSec = data.elapsed_time;
+          state.history.goodputTimeSec.push(Math.max(0, data.elapsed_time));
+          state.history.goodputValues.push(data.goodput);
+          updateUI();
+          renderCharts();
+        } else if (data.type === "event") {
+          if (data.event === "workload_ready") {
+            state.workloadReady = true;
+            state.running = false;
+            state.inRecovery = false;
+            state.pendingInterrupt = false;
+            state.isReconnecting = false;
+            state.reconnectingSlot = null;
+            state.jobsetStatus = "READY";
+            initDynamicSliceTopology();
+            resetStages();
+            setAnnouncement("healthy", "Workload Ready (Step 0)", "Pre-compilation complete on GKE! Click 'Start Training' to begin stepping.");
+          } else if (data.event === "training_started") {
+            state.running = true;
+            state.jobsetStatus = "RUNNING";
+            setAnnouncement("healthy", "Normal Execution", `All ${state.numSlices} slice(s) active. Pre-compiled train_step executing on GKE ${state.tpuType.toUpperCase()}.`);
+          } else if (data.event === "training_paused") {
+            state.running = false;
+            state.jobsetStatus = "PAUSED";
+            setAnnouncement("paused", "Training Paused", "Training paused at step boundary. Click Resume Training to continue.");
+          } else if (data.event === "disrupted") {
+            const slotIdx = data.slice !== undefined ? data.slice : (state.disruptedSlot ?? (state.numSlices - 1));
+            const targetRack = state.slotRacks[slotIdx] ?? slotIdx;
+            state.slotActive[slotIdx] = false;
+            state.disruptedSlot = slotIdx;
+            state.disruptedRack = targetRack;
+            state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
+            state.activeSliceCount = state.activeIndices.length;
+            state.inRecovery = true;
+            state.jobsetStatus = "DISRUPTED";
+            syncRackStates();
+            highlightStage(1);
+            setAnnouncement("fault", `Workload Slice ${slotIdx} Failure`, data.message);
+          } else if (data.event === "recovery_started") {
+            state.inRecovery = true;
+            state.jobsetStatus = "RECOVERING";
+            highlightStage(2);
+            setAnnouncement("recovering", "Stage 2: Cache Cleanup", "Clearing dangling JAX buffers and invalidating stale device placements.");
+          } else if (data.event === "stage1") {
+            highlightStage(3);
+            setAnnouncement("recovering", "Stage 3: Slice Discovery", data.message);
+          } else if (data.event === "stage2") {
+            highlightStage(4);
+            setAnnouncement("recovering", "Stage 4: Executable Switch", data.message);
+          } else if (data.event === "stage3") {
+            highlightStage(5);
+            setAnnouncement("recovering", "Stage 5: Snapshot Restore", data.message);
+          } else if (data.event === "scale_up_detected") {
+            state.inRecovery = true;
+            state.jobsetStatus = "SCALING_UP";
+            highlightStage(3);
+            setAnnouncement("scaleup", "Scale-Up Signal Detected", data.message);
+          } else if (data.event === "recovery_complete") {
+            highlightStage(5);
+            state.inRecovery = false;
+            state.pendingInterrupt = false;
+            state.isReconnecting = false;
+            state.reconnectingSlot = null;
+            const activeCnt = (data.active_slices && data.active_slices.length) || state.activeSliceCount;
+            if (activeCnt >= state.numSlices) {
+              state.activeSliceCount = state.numSlices;
+              state.slotActive = Array.from({ length: state.numSlices }, () => true);
+              state.disruptedSlot = null;
+              state.disruptedRack = null;
+              state.activeIndices = [...state.slotRacks];
+              state.jobsetStatus = "RUNNING";
+              syncRackStates();
+              setAnnouncement("healthy", "Scale-Up Complete", `Cluster fully restored to ${state.numSlices} Slices. Operating at 100% nominal goodput.`);
+            } else {
+              state.activeSliceCount = activeCnt;
+              state.jobsetStatus = "DEGRADED";
+              if (Array.isArray(data.active_slices)) {
+                const actSet = new Set(data.active_slices);
+                for (let s = 0; s < state.numSlices; s++) {
+                  state.slotActive[s] = actSet.has(s);
+                  if (!actSet.has(s)) {
+                    state.disruptedSlot = s;
+                    state.disruptedRack = state.slotRacks[s];
+                  }
+                }
+                state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
+              }
+              syncRackStates();
+              setAnnouncement("healthy", `Recovered on ${activeCnt} Slice(s)`, `Training resumed on surviving slice(s) [${state.activeIndices.join(', ')}] using pre-compiled executable.`);
+            }
+          } else if (data.event === "finished") {
+            state.running = false;
+            state.jobsetStatus = "COMPLETED";
+            setAnnouncement("healthy", "Training Completed", `Executed all ${state.totalSteps} training steps successfully on GKE.`);
+          }
+          updateUI();
+        }
+      };
+
+      es.onerror = () => {
+        setClusterStatus("Reconnecting to GKE Bridge...", "bg-rose-500", "text-rose-400");
+      };
+    }
+
+    setInterval(async () => {
+      try {
+        const res = await fetch("/api/cluster/status");
+        const snap = await res.json();
+        state.headPodName = snap.head_pod_name || "";
+        state.workerPods = snap.worker_pods || [];
+        if (snap.jobset_status === "IDLE" && state.jobsetStatus !== "IDLE") {
+          state.jobsetStatus = "IDLE";
+          state.running = false;
+        }
+        updateUI();
+      } catch (e) {}
+    }, 3000);
+
+    initDynamicSliceTopology();
+    setActiveStep(1);
+    resizeCanvases();
+    resetStages();
+    updateUI();
+    loadInitialConfig();
+    connectSSE();
+  </script>
+</body>
+</html>
