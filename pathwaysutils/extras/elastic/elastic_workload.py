@@ -87,22 +87,12 @@ _SIMULATE_SLICE_INDEX = flags.DEFINE_integer(
 class ElasticityMode(enum.Enum):
   """Supported recovery strategies for elastic training."""
 
-  RUN_CHECKPOINT_REPLICA_RESIZE = "run_checkpoint_replica_resize"
-  STEP_CHECKPOINT_REPLICA_RESIZE = "step_checkpoint_replica_resize"
   STEP_SNAPSHOT_PAUSE_RESUME = "step_snapshot_pause_resume"
   STEP_SNAPSHOT_REPLICA_RESIZE = "step_snapshot_replica_resize"
 
   @property
-  def is_run_level(self) -> bool:
-    return "run_" in self.value
-
-  @property
   def is_replica_resize(self) -> bool:
-    return "replica_resize" in self.value
-
-  @property
-  def uses_snapshot(self) -> bool:
-    return "snapshot" in self.value
+    return self == ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE
 
 
 class WorkloadControlHandler(http.server.BaseHTTPRequestHandler):
@@ -342,7 +332,7 @@ class ElasticWorkload:
       self.last_saved_grain_state = (
           self.data_iterator.get_state() if self.data_iterator else None
       )
-      if save_snapshot and self.mode.uses_snapshot:
+      if save_snapshot:
         promoted = self._promote_to_replicated(
             self.params, artifacts.replicated_sharding
         )
@@ -370,10 +360,12 @@ class ElasticWorkload:
     latest = self.checkpoint_manager.latest_step()
     if latest is not None:
       _logger.info("Found GCS checkpoint at step %d, restoring...", latest)
+      self.init_or_reconfigure_data_iterator()
+      assert self.data_iterator is not None
       abstract_state = {
           "params": artifacts.abstract_params,
           "step": 0,
-          "grain_state": {},
+          "grain_state": self.data_iterator.get_state(),
       }
       restored = self.checkpoint_manager.restore(
           latest, args=ocp.args.StandardRestore(abstract_state)
@@ -384,6 +376,14 @@ class ElasticWorkload:
       self.init_or_reconfigure_data_iterator(
           restore_state=self.last_saved_grain_state
       )
+      promoted = self._promote_to_replicated(
+          self.params, artifacts.replicated_sharding
+      )
+      self.snapshotter.save(
+          latest,
+          {"params": promoted, "grain_state": self.last_saved_grain_state},
+      )
+      self.snapshotter.join()
     else:
       _logger.info("Initializing fresh Flax NNX model parameters.")
       self._reset_model_params(save_snapshot=True)
@@ -402,7 +402,7 @@ class ElasticWorkload:
       return
     grain_st = self.data_iterator.get_state() if self.data_iterator else None
 
-    if self.mode.uses_snapshot and (self.step % self.snapshot_interval == 0):
+    if self.snapshot_interval > 0 and self.step % self.snapshot_interval == 0:
       promoted = self._promote_to_replicated(
           self.params, artifacts.replicated_sharding
       )
@@ -413,7 +413,10 @@ class ElasticWorkload:
         self.snapshotter.join()
       self.last_saved_grain_state = grain_st
 
-    if self.step % self.checkpoint_interval == 0:
+    if (
+        self.checkpoint_interval > 0
+        and self.step % self.checkpoint_interval == 0
+    ):
       self.checkpoint_manager.save(
           self.step,
           args=ocp.args.StandardSave({
@@ -433,34 +436,18 @@ class ElasticWorkload:
         "Stage 3: Restoring model parameters and Grain iterator state..."
     )
 
-    if self.mode.uses_snapshot:
-      self.snapshotter.join()
-      payload = self.snapshotter.load(
-          {
-              "params": artifacts.abstract_params,
-              "grain_state": self.last_saved_grain_state,
-          },
-          reset_snapshot_state=True,
-      )
-      self.params = payload["params"]
-      self.last_saved_grain_state = payload["grain_state"]
-      assert self.snapshotter.latest is not None
-      self.step = self.snapshotter.latest.step + 1
-    else:
-      latest_step = self.checkpoint_manager.latest_step()
-      if latest_step is None:
-        raise RuntimeError("No GCS checkpoint found to restore from.")
-      restored = self.checkpoint_manager.restore(
-          latest_step,
-          args=ocp.args.StandardRestore({
-              "params": artifacts.abstract_params,
-              "step": 0,
-              "grain_state": {},
-          }),
-      )
-      self.params = restored["params"]
-      self.step = latest_step + 1
-      self.last_saved_grain_state = restored["grain_state"]
+    self.snapshotter.join()
+    payload = self.snapshotter.load(
+        {
+            "params": artifacts.abstract_params,
+            "grain_state": self.last_saved_grain_state,
+        },
+        reset_snapshot_state=True,
+    )
+    self.params = payload["params"]
+    self.last_saved_grain_state = payload["grain_state"]
+    assert self.snapshotter.latest is not None
+    self.step = self.snapshotter.latest.step + 1
 
     self.params = jax.device_put(self.params, artifacts.param_shardings)
     jax.block_until_ready(self.params)

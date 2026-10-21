@@ -2903,8 +2903,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
       type=str,
       default="",
       help=(
-          "One of run_checkpoint_replica_resize, step_checkpoint_replica_resize,"
-          " step_snapshot_pause_resume, step_snapshot_replica_resize."
+          "One of step_snapshot_pause_resume, step_snapshot_replica_resize."
       ),
   )
   workload.add_argument(

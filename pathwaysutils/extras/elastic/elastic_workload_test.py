@@ -92,43 +92,31 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
       (
           "step_snapshot_replica_resize",
           elastic_workload.ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE,
-          False,
           True,
-          True,
-      ),
-      (
-          "step_checkpoint_replica_resize",
-          elastic_workload.ElasticityMode.STEP_CHECKPOINT_REPLICA_RESIZE,
-          False,
-          True,
-          False,
-      ),
-      (
-          "run_checkpoint_replica_resize",
-          elastic_workload.ElasticityMode.RUN_CHECKPOINT_REPLICA_RESIZE,
-          True,
-          True,
-          False,
       ),
       (
           "step_snapshot_pause_resume",
           elastic_workload.ElasticityMode.STEP_SNAPSHOT_PAUSE_RESUME,
           False,
-          False,
-          True,
       ),
   )
   def test_elasticity_modes_properties(
       self,
       mode: elastic_workload.ElasticityMode,
-      expected_run_level: bool,
       expected_replica_resize: bool,
-      expected_uses_snapshot: bool,
   ):
     self.assertIsInstance(mode, elastic_workload.ElasticityMode)
-    self.assertEqual(mode.is_run_level, expected_run_level)
     self.assertEqual(mode.is_replica_resize, expected_replica_resize)
-    self.assertEqual(mode.uses_snapshot, expected_uses_snapshot)
+    self.assertEqual(
+        {m.value for m in elastic_workload.ElasticityMode},
+        {"step_snapshot_pause_resume", "step_snapshot_replica_resize"},
+    )
+    for removed in (
+        "step_checkpoint_replica_resize",
+        "run_checkpoint_replica_resize",
+    ):
+      with self.assertRaises(ValueError):
+        elastic_workload.ElasticityMode(removed)
 
   def test_simulated_fault_injection_recovery(self):
     elastic_mgr, slice_to_devs = self._create_mock_elastic_manager(
@@ -301,7 +289,7 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
           config=tiny_cfg,
           mode=elastic_workload.ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE,
           total_steps=2,
-          checkpoint_interval=10,
+          checkpoint_interval=1,
           snapshot_interval=1,
           checkpoint_dir=self.temp_dir.name,
           simulator=None,
@@ -315,6 +303,8 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
 
       with mock.patch("time.sleep", return_value=None):
         workload.run_one_step()
+      workload.checkpoint_manager.wait_until_finished()
+      self.assertEqual(workload.checkpoint_manager.latest_step(), 1)
       self.assertEqual(workload.step, 2)
       self.assertIsNotNone(workload.prev_loss)
 
@@ -323,6 +313,26 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
       self.assertEqual(workload.current_slice_count, 1)
       self.assertEqual(workload.step, 2)
       workload.close()
+
+      # Verify cold start restore from CheckpointManager seeds Snapshotter.
+      elastic_mgr.active_slice_indices = {0, 1}
+      workload_resumed = elastic_workload.ElasticWorkload(
+          elastic_manager=elastic_mgr,
+          config=tiny_cfg,
+          mode=elastic_workload.ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE,
+          total_steps=4,
+          checkpoint_interval=10,
+          snapshot_interval=5,
+          checkpoint_dir=self.temp_dir.name,
+          simulator=None,
+      )
+      workload_resumed.initialize()
+      self.assertEqual(workload_resumed.step, 2)
+      elastic_mgr.active_slice_indices = {0}
+      workload_resumed.pre_callback_restore_and_reconfigure()
+      self.assertEqual(workload_resumed.current_slice_count, 1)
+      self.assertEqual(workload_resumed.step, 2)
+      workload_resumed.close()
 
 
 if __name__ == "__main__":

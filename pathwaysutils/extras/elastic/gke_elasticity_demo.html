@@ -486,7 +486,6 @@
           <select id="cfgPresetSelector" class="bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-medium rounded px-2 py-1 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
             <option value="replica_resize_default">Snapshot Replica Resize (2x v5e:4x8 + 2 Spare)</option>
             <option value="pause_resume_default">Snapshot Pause Resume (2x v5e:4x8)</option>
-            <option value="checkpoint_resize_default">Checkpoint Replica Resize (2x v5e:4x8 + 2 Spare)</option>
             <option value="custom_workload">Custom Workload / Command</option>
           </select>
         </div>
@@ -534,8 +533,6 @@
             <select id="cfgElasticityMode" class="w-full bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-mono rounded px-2 py-1.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
               <option value="step_snapshot_replica_resize">step_snapshot_replica_resize</option>
               <option value="step_snapshot_pause_resume">step_snapshot_pause_resume</option>
-              <option value="step_checkpoint_replica_resize">step_checkpoint_replica_resize</option>
-              <option value="run_checkpoint_replica_resize">run_checkpoint_replica_resize</option>
             </select>
           </div>
 
@@ -1283,13 +1280,6 @@
         cfgTpuType.value = "tpuv5e";
         cfgTopology.value = "4x8";
         cfgElasticityMode.value = "step_snapshot_pause_resume";
-        cfgWorkloadPreset.value = "builtin_elastic_demo";
-        updateTopologyPreview();
-      } else if (p === "checkpoint_resize_default") {
-        cfgNumSlices.value = 2;
-        cfgTpuType.value = "tpuv5e";
-        cfgTopology.value = "4x8";
-        cfgElasticityMode.value = "step_checkpoint_replica_resize";
         cfgWorkloadPreset.value = "builtin_elastic_demo";
         updateTopologyPreview();
       } else if (p === "custom_workload") {
