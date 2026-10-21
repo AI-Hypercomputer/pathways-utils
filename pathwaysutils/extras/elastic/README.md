@@ -1,10 +1,10 @@
 # Pathways Elasticity Demos
 
 Evaluating distributed machine learning training on elastic TPU topologies
-requires understanding how varying failure scenarios and reinitialization
-latencies affect cumulative goodput and step progression. This folder provides
-both an interactive browser-based simulation and a live Google Kubernetes Engine
-(GKE) demo comparing Pathways elasticity recovery paradigms.
+requires understanding varying failure scenarios, reinitialization latencies,
+and their impact on cumulative goodput and step progression. This folder
+provides both an interactive browser-based simulation and a live Google
+Kubernetes Engine (GKE) demo comparing Pathways elasticity recovery paradigms.
 
 ## Browser-Based Recovery Simulation
 
@@ -53,52 +53,96 @@ drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
   training step, loss, cumulative goodput, logical workload slices, physical
   cluster TPU slices, recovery stages, and the JAX driver event stream.
 
-### Running the Live GKE Demo
-
-The flow is: build the workload image once, render a base ConfigMap + JobSet
-YAML, adjust the YAML to match how your cluster is set up, deploy it, and open
-the demo page. Every command below runs from your workstation.
-
-#### What you need
+### Prerequisites
 
 * A GKE cluster with the [JobSet](https://jobset.sigs.k8s.io/) controller
-  installed and TPU node pools for the slices you want to run. You pass the TPU
-  type, topology, and slice count as flags and
-  `pathwaysutils.experimental.gke.jobset.PathwaysJobSet` generates the worker
-  templates for that shape; any additional idle pools of the same shape are
-  discovered automatically and shown as spares. Anything else about the
-  cluster, such as Kueue, a dedicated CPU node pool for the head pod, custom
-  tolerations, or a workload service account, is handled by editing the YAML
-  in step 4 below.
-* A GCS bucket the cluster's node service account can read and write, used as
-  the Pathways scratch location.
-* An Artifact Registry repository you can push the workload image to, plus
-  either Cloud Build permissions or a local Docker daemon.
-* Locally: Python 3.11+, `git`, `gcloud`, `kubectl`, and the
-  `gke-gcloud-auth-plugin` component.
+  installed and TPU node pools matching the slices you want to run. Passing the
+  TPU type, topology, and slice count generates worker templates through
+  `pathwaysutils.experimental.gke.jobset.PathwaysJobSet`; any additional idle
+  pools of the same shape are discovered automatically as spares. Cluster-specific
+  settings such as Kueue queues, CPU node pools, tolerations, or workload
+  service accounts are applied in the rendered YAML before deployment.
+* A Google Cloud Storage (GCS) bucket readable and writable by the cluster's
+  node or Workload Identity service account for Pathways scratch storage and
+  checkpoints.
+* An Artifact Registry Docker repository you can push the workload image to,
+  along with either Cloud Build permissions or a local Docker daemon.
+* A workstation or cloud VM with Python 3.11+, `git`, `gcloud`, `kubectl`, and
+  the `gke-gcloud-auth-plugin` component installed.
 
-#### 1. Clone the branch and install
+### Running the Live GKE Demo
+
+You can either use the bundled agent skill to let an AI coding assistant inspect
+your environment, ask any clarifying cluster questions, customize the manifest,
+and start the dashboard in a single pass, or walk through each CLI command
+step by step.
+
+#### Option 1: Guided Setup with the Agent Skill
+
+This repository includes a portable Agent Skill at
+[`.agents/skills/pathways-elastic-demo/SKILL.md`](../../../.agents/skills/pathways-elastic-demo/SKILL.md)
+compatible with Gemini CLI, Claude Code, Codex, Cursor, and other tools supporting
+`SKILL.md` discovery.
+
+1. Clone the repository and open your coding agent inside the `pathways-utils`
+   directory:
+
+   ```bash
+   git clone -b elastic-demo https://github.com/AI-Hypercomputer/pathways-utils.git
+   cd pathways-utils
+   ```
+
+   If your agent looks for project skills under `.claude/skills/` instead of
+   `.agents/skills/`, link the directory first:
+
+   ```bash
+   mkdir -p .claude/skills
+   ln -s ../../.agents/skills/pathways-elastic-demo .claude/skills/pathways-elastic-demo
+   ```
+
+2. Send a single prompt asking your agent to drive setup end to end:
+
+   ```text
+   Use the pathways-elastic-demo skill to set up and launch the live Pathways GKE elasticity demo on my cluster. Inspect my environment first and ask me anything unclear about my cluster, Artifact Registry repository, GCS bucket, or YAML configuration before building or deploying.
+   ```
+
+The skill checks your local Python 3.11+ interpreter (including `pyenv` or `uv`),
+inspects your GKE cluster's CPU nodes, TPU node pools, taints, and Kueue queues,
+asks one grouped set of questions for any missing inputs, builds and pushes the
+workload image, customizes and dry-run validates `elastic_demo.yaml`, and
+starts the live monitoring dashboard on port `48259` (locally or via SSH port
+forwarding).
+
+#### Option 2: Step-by-Step CLI Setup
+
+Every command below runs from your workstation and takes you from a fresh clone
+to a live monitoring session: build the workload image once, render a base
+ConfigMap + JobSet YAML, tailor the YAML to your cluster, deploy it, and open
+the monitoring page.
+
+##### 1. Clone the branch and install
 
 ```bash
 git clone -b elastic-demo https://github.com/AI-Hypercomputer/pathways-utils.git
 cd pathways-utils
-python3.12 -m venv .venv && source .venv/bin/activate   # any Python >= 3.11
+python3.12 -m venv .venv   # any Python >= 3.11 (or `pyenv local 3.12` first)
+source .venv/bin/activate
 pip install --upgrade pip
 pip install -e ".[elastic-demo]"
 ```
 
-Check `python --version` inside the venv before installing. If an older
-interpreter such as 3.10 is first on your `PATH`, pip cannot find NumPy or JAX
-wheels for it and falls back to a source build that fails.
+Verify `python --version` inside `.venv` prints `3.11` or newer before running
+`pip install`. When `python3` resolves to Python `3.10`, `pip` cannot find
+prebuilt `numpy` or `jax` wheels and fails attempting a source build.
 
-#### 2. Point kubectl at your cluster
+##### 2. Point kubectl at your cluster
 
 ```bash
 gcloud container clusters get-credentials CLUSTER --region REGION --project PROJECT
 kubectl config current-context   # the demo uses this context unless --context is set
 ```
 
-#### 3. Build the workload image and render the base YAML
+##### 3. Build the workload image and render the base YAML
 
 ```bash
 python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
@@ -112,22 +156,23 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
 This builds `pathwaysutils/extras/elastic/Dockerfile` with Cloud Build, pushes
 it to `--image`, writes `elastic_demo.yaml`, and exits. Add `--builder=docker`
 to build with a local Docker daemon instead, or drop `--build-image` on later
-runs to only re-render the YAML. The image bundles JAX, Flax, Grain, Orbax,
-and this checkout of `pathwaysutils`.
+runs to only re-render the YAML. By default, the manifest uses the standard
+public `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest` and
+`proxy_server:latest` images and bundles JAX, Flax, Grain, Orbax, and this
+checkout of `pathwaysutils` into `--image`.
 
-#### 4. Adjust the YAML for your cluster
+##### 4. Adjust the YAML for your cluster
 
 `elastic_demo.yaml` contains two documents: a `ConfigMap` named
 `elastic-workload-code` holding `elastic_workload.py`, the `simple_model`
 package, `elastic/manager.py`, and `test/mock_fault_injection.py` from your
-checkout, followed by the `JobSet` produced by `PathwaysJobSet`. The JobSet
-has one `pathways-head` replicated job (the JAX driver plus the Pathways
-resource manager and proxy as init containers) and one `pathways-worker`
-replicated job per slice. Open the file and
-change whatever your cluster requires. Common edits:
+checkout, followed by the `JobSet` produced by `PathwaysJobSet`. The JobSet has
+one `pathways-head` replicated job (the JAX driver plus the Pathways resource
+manager and proxy as init containers) and one `pathways-worker` replicated job
+per slice. Review the file and apply any edits required by your cluster:
 
-* Kueue: if your cluster admits workloads through Kueue, add the queue label
-  under the JobSet `metadata`:
+* If your cluster admits workloads through Kueue, add the queue label under the
+  JobSet `metadata`:
   ```yaml
   metadata:
     name: elastic-demo
@@ -135,48 +180,49 @@ change whatever your cluster requires. Common edits:
     labels:
       kueue.x-k8s.io/queue-name: YOUR-LOCAL-QUEUE
   ```
-  Leave it out if you do not use Kueue; the `kueue.x-k8s.io/podset` labels
+  Leave it out when Kueue is not installed; the `kueue.x-k8s.io/podset` labels
   already present on the pod templates are harmless without it.
-* Head pod placement: the head pod requests `cpu: "24"` and `memory: 100G`.
-  Lower those `resources.limits` to fit your nodes, or pin it to a node pool
-  by adding a `nodeSelector` to the `pathways-head` pod `spec`:
+* For head pod placement and sizing, the `jax-tpu` container sets limits of
+  `cpu: "24"` and `memory: 100G`. Lower container `resources.limits` to fit
+  smaller nodes, or pin `pathways-head` to a dedicated CPU node pool by adding
+  a `nodeSelector` to the head pod `spec`:
   ```yaml
   nodeSelector:
     cloud.google.com/gke-nodepool: YOUR-CPU-NODEPOOL
   ```
-* TPU workers: the `pathways-worker` template (node selectors, `google.com/tpu`
-  limits, `parallelism`/`completions`) is generated by `PathwaysJobSet` from
-  `--tpu-type`, `--topology`, and `--num-slices`, so re-render rather than
-  hand-editing those; add `tolerations` to the worker pod `spec` if your TPU
-  node pools are tainted.
-* Namespace, service account, image pull secrets, or anything else your
-  cluster policy requires can be added to the pod `spec`s directly.
-* The training flags live in the head container `command`; `--total_steps`,
-  `--elasticity_mode`, and `--config_name` can be changed there without
-  re-rendering.
+* On TPU worker pools, the `pathways-worker` template (node selectors,
+  `google.com/tpu` limits, `parallelism`/`completions`) is generated by
+  `PathwaysJobSet` from `--tpu-type`, `--topology`, and `--num-slices`, so
+  re-render without `--build-image` rather than hand-editing those fields. Add
+  `tolerations` to the worker pod `spec` when your TPU node pools carry taints
+  such as `google.com/tpu=present:NoSchedule`.
+* Add `namespace`, `serviceAccountName`, `imagePullSecrets`, or any other pod
+  `spec` settings required by your cluster policy, and validate before
+  deploying with `kubectl apply --dry-run=server -f elastic_demo.yaml`.
+* Update `--total_steps`, `--elasticity_mode`, `--checkpoint_interval`,
+  `--snapshot_interval`, or `--config_name` directly inside the head container
+  `command` if needed without re-rendering.
 
-Keep the JobSet `metadata.name` and `metadata.namespace` in mind; you pass
-them to the bridge in the next step so it can find the pods.
+Keep the JobSet `metadata.name` and `metadata.namespace` values matching the
+flags you pass to the bridge in the next step so it can locate the pods.
 
-To re-render after changing flags, run the step 3 command again without
-`--build-image`; it overwrites the file.
-
-#### 5. Deploy and open the UI
+##### 5. Deploy and open the UI
 
 ```bash
 python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
   --yaml=elastic_demo.yaml --jobset-name=elastic-demo --namespace=default
 ```
 
-This runs `kubectl apply -f elastic_demo.yaml` against the current context,
+This runs `kubectl apply -f elastic_demo.yaml` against the target context,
 starts the bridge on `http://localhost:48259/`, and opens it in your browser
-(`--no-browser` to skip, `--host=0.0.0.0 --port=PORT` when running on a remote
-VM). Pass `--no-apply` if you prefer to run `kubectl apply` yourself.
+(`--no-browser` skips opening a browser; forward port `48259` over SSH or pass
+`--host=IP_OR_HOSTNAME --port=PORT` when running on a remote VM). Pass
+`--no-apply` if you prefer to run `kubectl apply` yourself.
 
-If you later re-run with no deployment flags, the bridge starts in
-monitor-only mode and attaches to the JobSet that is already running.
+Re-running later with no deployment flags starts the bridge in monitor-only mode
+and attaches to the JobSet already running on the cluster.
 
-#### 6. Drive the demo from the browser
+##### 6. Drive the demo from the browser
 
 The monitoring page attaches to the JobSet once the head pod starts. From that
 single view you can start, pause, or reset training, inject real node
@@ -187,9 +233,9 @@ from `cloud.google.com/gke-nodepool` and marks each pool as active, spare, busy,
 or cordoned.
 
 The head pod waits for the Start Training button (`--wait_for_start_signal=true`),
-so nothing trains until you click it.
+so nothing steps until you click it.
 
-#### 7. Clean up
+##### 7. Clean up
 
 ```bash
 python3 -m pathwaysutils.extras.elastic.gke_demo_bridge --delete \
@@ -197,13 +243,13 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge --delete \
 ```
 
 This deletes the JobSet and the `elastic-workload-code` ConfigMap from the
-configured context and namespace. The Delete button in the header does the same
-thing and also uncordons any nodes drained during the demo.
+configured context and namespace. Clicking `Delete` in the dashboard header
+deletes both resources and also uncordons any nodes drained during the session.
 
 #### Shortcut for clusters that need no YAML edits
 
-If the base YAML already fits your cluster, one command does steps 3 through 5
-together:
+When the generated YAML fits your cluster directly without edits, one command
+runs steps 3 through 5 together:
 
 ```bash
 python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
@@ -217,12 +263,12 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
 
 | Flag | Purpose |
 | --- | --- |
-| `--context`, `--namespace`, `--jobset-name` | Where the JobSet lives (defaults: current context, `default`, `elastic-demo`). |
-| `--image`, `--build-image`, `--builder`, `--project` | Workload image and how to build it. |
-| `--server-image`, `--proxy-image` | Pathways server and proxy images (default to the public `cloud-tpu-v2-images/pathways` images). |
+| `--context`, `--namespace`, `--jobset-name` | Cluster context, namespace, and JobSet name (defaults: current context, `default`, `elastic-demo`). |
+| `--image`, `--build-image`, `--builder`, `--project` | Workload image URI and build backend (`gcloud` Cloud Build or `docker`). |
+| `--server-image`, `--proxy-image` | Pathways server and proxy images (default to public `cloud-tpu-v2-images/pathways` `:latest` images). |
 | `--gcs-scratch` | Pathways GCS scratch location (required to render a deployable YAML). |
-| `--tpu-type`, `--topology`, `--num-slices` | Slice shape and count in the rendered YAML. Spare node pools are not configured; the bridge discovers every pool with matching accelerator and topology labels and marks each as active (yours), spare, busy (hosting another workload's TPU pods), or cordoned. |
-| `--total-steps`, `--elasticity-mode` | Workload length and recovery strategy in the rendered YAML. |
-| `--orbax-ref` | Git ref of `google/orbax` installed in the head pod (default `main`; the demo needs an unreleased snapshot feature). |
-| `--kueue-queue`, `--cpu-nodepool` | Convenience flags that add the Kueue queue label or head pod `nodeSelector` to the rendered YAML, equivalent to the manual edits above. |
-| `--render-only PATH`, `--yaml PATH`, `--apply/--no-apply`, `--delete` | Render the base YAML, deploy an edited one, skip applying, or tear down. |
+| `--tpu-type`, `--topology`, `--num-slices` | Slice shape and active slice count in the rendered YAML. Idle pools with matching accelerator and topology labels are discovered automatically and shown as active, spare, busy, or cordoned. |
+| `--total-steps`, `--elasticity-mode` | Workload step count and recovery strategy (`step_snapshot_replica_resize` or `step_snapshot_pause_resume`). |
+| `--orbax-ref` | Git ref of `google/orbax` installed in the head image (default `main`). |
+| `--kueue-queue`, `--cpu-nodepool` | Convenience flags adding the Kueue queue label or head pod `nodeSelector` to the rendered YAML. |
+| `--render-only PATH`, `--yaml PATH`, `--apply/--no-apply`, `--delete` | Render base YAML, deploy an edited manifest, skip applying, or delete resources. |
