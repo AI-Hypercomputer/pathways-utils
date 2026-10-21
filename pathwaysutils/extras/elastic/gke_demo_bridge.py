@@ -1488,15 +1488,16 @@ def _build_head_startup_script(cfg: dict[str, Any], instance_type: str) -> str:
   if preset == "builtin_elastic_demo":
     orbax_ref = cfg.get("orbax_ref", "") or DEFAULT_ORBAX_REF
     lines.extend([
-        "pip install --no-cache-dir grain",
-        'echo "Grain package installed successfully"',
         (
-            "pip install --no-cache-dir --no-deps"
-            f' "git+https://github.com/google/orbax.git@{orbax_ref}#subdirectory=checkpoint"'
+            'python3 -c "import grain" >/dev/null 2>&1'
+            " || pip install --no-cache-dir grain"
         ),
         (
-            f'echo "Orbax checkpoint installed from ref {orbax_ref}'
-            ' successfully"'
+            'python3 -c "from'
+            " orbax.checkpoint.experimental.v1._src.training.pathways import"
+            ' snapshotter" >/dev/null 2>&1 || pip install --no-cache-dir'
+            " --no-deps"
+            f' "git+https://github.com/google/orbax.git@{orbax_ref}#subdirectory=checkpoint"'
         ),
     ])
     if "snapshotter.py" in file_names:
@@ -1666,9 +1667,17 @@ def _build_jobset_manifest(
       },
       proxy_container_kwargs={
           "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
+          "resources": k8s_client.V1ResourceRequirements(
+              requests={"cpu": "2", "memory": "8G"},
+              limits={"cpu": "16", "memory": "100G"},
+          ),
       },
       rm_container_kwargs={
           "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
+          "resources": k8s_client.V1ResourceRequirements(
+              requests={"cpu": "1", "memory": "4G"},
+              limits={"cpu": "8", "memory": "32G"},
+          ),
       },
       worker_container_kwargs={
           "args": ["--xla_tpu_use_enhanced_launch_barrier=true"],
@@ -1691,7 +1700,8 @@ def _build_jobset_manifest(
       },
       ports=[k8s_client.V1ContainerPort(container_port=8090, protocol="TCP")],
       resources=k8s_client.V1ResourceRequirements(
-          limits={"cpu": "24", "memory": "100G"}
+          requests={"cpu": "2", "memory": "8G"},
+          limits={"cpu": "24", "memory": "100G"},
       ),
       security_context=k8s_client.V1SecurityContext(privileged=True),
       volume_mounts=head_mounts,
@@ -1902,7 +1912,9 @@ def _run_logged(cmd: list[str], cwd: str | None = None) -> int:
   return proc.returncode
 
 
-def _build_and_push_image(image: str, builder: str, project: str) -> bool:
+def _build_and_push_image(
+    image: str, builder: str, project: str, orbax_ref: str = "main"
+) -> bool:
   """Builds the demo workload image from the repository root and pushes it.
 
   The image bundles JAX, Flax, Grain, Orbax (from `--orbax-ref`), and this
@@ -1910,10 +1922,19 @@ def _build_and_push_image(image: str, builder: str, project: str) -> bool:
   without any runtime pip installs.
   """
   dockerfile_rel = os.path.relpath(DOCKERFILE_PATH, REPO_ROOT)
+  build_arg = f"ORBAX_REF={orbax_ref or 'main'}"
   if builder == "docker":
-    rc = _run_logged(
-        ["docker", "build", "-f", DOCKERFILE_PATH, "-t", image, REPO_ROOT]
-    )
+    rc = _run_logged([
+        "docker",
+        "build",
+        "--build-arg",
+        build_arg,
+        "-f",
+        DOCKERFILE_PATH,
+        "-t",
+        image,
+        REPO_ROOT,
+    ])
     if rc != 0:
       return False
     return _run_logged(["docker", "push", image]) == 0
@@ -1921,7 +1942,16 @@ def _build_and_push_image(image: str, builder: str, project: str) -> bool:
   cloudbuild = {
       "steps": [{
           "name": "gcr.io/cloud-builders/docker",
-          "args": ["build", "-f", dockerfile_rel, "-t", image, "."],
+          "args": [
+              "build",
+              "--build-arg",
+              build_arg,
+              "-f",
+              dockerfile_rel,
+              "-t",
+              image,
+              ".",
+          ],
       }],
       "images": [image],
   }
@@ -2988,7 +3018,9 @@ def main(argv: list[str] | None = None) -> None:
   if args.build_image:
     if not args.image:
       raise SystemExit("--build-image requires --image=REGISTRY/REPO/NAME:TAG")
-    if not _build_and_push_image(args.image, args.builder, args.project):
+    if not _build_and_push_image(
+        args.image, args.builder, args.project, cfg["orbax_ref"]
+    ):
       raise SystemExit("Image build failed.")
     _logger.info("Built and pushed %s", args.image)
 

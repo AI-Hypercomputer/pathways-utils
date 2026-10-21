@@ -12,13 +12,3 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Pathways elasticity extra tools, simulations, and live GKE demo."""
-
-from pathwaysutils.extras.elastic.elastic_workload import ElasticityMode
-from pathwaysutils.extras.elastic.elastic_workload import ElasticWorkload
-from pathwaysutils.extras.elastic.elastic_workload import WorkloadControlHandler
-
-__all__ = [
-    "ElasticWorkload",
-    "ElasticityMode",
-    "WorkloadControlHandler",
-]
