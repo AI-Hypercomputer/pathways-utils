@@ -44,14 +44,14 @@ drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
 * `elastic_workload.py` runs the `pathwaysutils.extras.simple_model` workload
   with `ElasticManager` and `Snapshotter`, exposing an HTTP control server on
   head pod port `8090` for start, pause, reset, and fault-injection signals.
-* `gke_demo_bridge.py` binds to `127.0.0.1:48259` by default, streams live JAX
-  driver telemetry over Server-Sent Events (SSE), writes a combined ConfigMap
-  and JobSet manifest bundle to `/tmp/gke_elastic_workload.yaml`, and triggers
-  disruptions via Kubernetes `kubectl cordon` and `drain` or in-workload HTTP
-  signaling, avoiding the need to actually interrupt the nodes.
-* `gke_elasticity_demo.html` renders live training step, loss, step time,
-  cumulative goodput, logical workload slices, physical cluster TPU slices, and
-  a real-time JAX driver log stream.
+* `gke_demo_bridge.py` renders the ConfigMap and JobSet manifest bundle from the
+  command line, applies or deletes deployments, binds to `127.0.0.1:48259` by
+  default, streams live JAX driver telemetry over Server-Sent Events (SSE), and
+  triggers disruptions via Kubernetes `kubectl cordon` and `drain` or
+  in-workload HTTP signaling.
+* `gke_elasticity_demo.html` provides a single-screen monitoring view for live
+  training step, loss, cumulative goodput, logical workload slices, physical
+  cluster TPU slices, recovery stages, and the JAX driver event stream.
 
 ### Running the Live GKE Demo
 
@@ -178,22 +178,16 @@ monitor-only mode and attaches to the JobSet that is already running.
 
 #### 6. Drive the demo from the browser
 
-* Step 1 shows the selected kubeconfig context and namespace and checks
-  cluster connectivity.
-* Step 2 shows the generated YAML for reference. Since you deployed your own
-  edited file, treat it as read-only here; redeploy by editing
-  `elastic_demo.yaml` and re-running step 5.
-* Step 3 detects the JobSet once the head pod is running, then lets you start
-  or pause training, inject real node preemptions (`kubectl cordon` +
-  `drain`) or in-workload fault signals, and watch step, loss, goodput, and
-  slice topology update live from the head pod logs. The Physical Cluster
-  panel lists the TPU node pools that match your slice shape by name, read
-  from `cloud.google.com/gke-nodepool`, and shows which pool each workload
-  slice is actually running on, which pools are idle spares, and which are
-  busy with another workload.
+The monitoring page attaches to the JobSet once the head pod starts. From that
+single view you can start, pause, or reset training, inject real node
+preemptions (`kubectl cordon` + `drain`) or in-workload fault signals, and watch
+step progress, loss, goodput, recovery stages, and slice placement update live
+from the head pod logs. The cluster pool section lists matching TPU node pools
+from `cloud.google.com/gke-nodepool` and marks each pool as active, spare, busy,
+or cordoned.
 
-The head pod waits for the Start button (`--wait_for_start_signal=true`), so
-nothing trains until you click it.
+The head pod waits for the Start Training button (`--wait_for_start_signal=true`),
+so nothing trains until you click it.
 
 #### 7. Clean up
 
@@ -203,7 +197,7 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge --delete \
 ```
 
 This deletes the JobSet and the `elastic-workload-code` ConfigMap from the
-configured context and namespace. The Delete button in Step 3 does the same
+configured context and namespace. The Delete button in the header does the same
 thing and also uncordons any nodes drained during the demo.
 
 #### Shortcut for clusters that need no YAML edits
@@ -232,4 +226,3 @@ python3 -m pathwaysutils.extras.elastic.gke_demo_bridge \
 | `--orbax-ref` | Git ref of `google/orbax` installed in the head pod (default `main`; the demo needs an unreleased snapshot feature). |
 | `--kueue-queue`, `--cpu-nodepool` | Convenience flags that add the Kueue queue label or head pod `nodeSelector` to the rendered YAML, equivalent to the manual edits above. |
 | `--render-only PATH`, `--yaml PATH`, `--apply/--no-apply`, `--delete` | Render the base YAML, deploy an edited one, skip applying, or tear down. |
-| `--yaml`, `--apply/--no-apply`, `--delete` | Bring your own manifest, skip applying, or tear down. |

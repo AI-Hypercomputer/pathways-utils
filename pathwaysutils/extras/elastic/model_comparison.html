@@ -46,11 +46,9 @@
       animation: pulse-soft 1.5s infinite;
     }
 
-    /* Precision fixed sizing to eliminate movement / jitter during simulation */
+    /* Precision sizing to prevent layout shift without clipping button text */
     #headerClusterStatusPill {
-      width: 270px !important;
-      min-width: 270px !important;
-      max-width: 270px !important;
+      min-width: 240px !important;
       height: 30px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -60,16 +58,11 @@
     }
     #headerClusterStatusText {
       display: block;
-      width: 240px;
       text-align: center;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     #topoClusterStatusPill {
-      width: 245px !important;
-      min-width: 245px !important;
-      max-width: 245px !important;
+      min-width: 210px !important;
       height: 24px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -79,16 +72,11 @@
     }
     #topoClusterStatusText {
       display: block;
-      width: 215px;
       text-align: center;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
     }
     #simTimePill {
-      width: 110px !important;
       min-width: 110px !important;
-      max-width: 110px !important;
       height: 30px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -101,9 +89,8 @@
       white-space: nowrap;
     }
     #btnToggleRun {
-      width: 130px !important;
-      min-width: 130px !important;
-      max-width: 130px !important;
+      min-width: 140px !important;
+      padding-inline: 14px !important;
       height: 30px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -114,9 +101,8 @@
       box-sizing: border-box !important;
     }
     #btnInterruptSlice0, #btnInterruptSlice1 {
-      width: 175px !important;
-      min-width: 175px !important;
-      max-width: 175px !important;
+      min-width: 190px !important;
+      padding-inline: 12px !important;
       height: 28px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -127,9 +113,8 @@
       box-sizing: border-box !important;
     }
     #btnRestoreSlice1 {
-      width: 175px !important;
-      min-width: 175px !important;
-      max-width: 175px !important;
+      min-width: 165px !important;
+      padding-inline: 12px !important;
       height: 28px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -170,9 +155,8 @@
       font-size: 0.75rem;
     }
     .strategy-state-badge {
-      width: 135px !important;
-      min-width: 135px !important;
-      max-width: 135px !important;
+      min-width: 120px !important;
+      padding-inline: 8px !important;
       height: 20px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -229,9 +213,8 @@
       justify-content: space-between !important;
     }
     .workload-badge {
-      width: 115px !important;
-      min-width: 115px !important;
-      max-width: 115px !important;
+      min-width: 105px !important;
+      padding-inline: 8px !important;
       height: 22px !important;
       display: inline-flex !important;
       align-items: center !important;
@@ -261,9 +244,8 @@
       justify-content: space-between !important;
     }
     .tpu-role-badge {
-      width: 105px !important;
-      min-width: 105px !important;
-      max-width: 105px !important;
+      min-width: 96px !important;
+      padding-inline: 8px !important;
       height: 20px !important;
       display: inline-flex !important;
       align-items: center !important;

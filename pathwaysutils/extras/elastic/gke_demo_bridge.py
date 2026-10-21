@@ -19,10 +19,9 @@ configurable Kubernetes cluster and Pathways JobSet workload.
 It provides:
 - Static file hosting on port 48259 (gke_elasticity_demo.html and
   model_comparison.html), bound to 127.0.0.1 by default
+- CLI helpers to build the workload image, render ConfigMap + JobSet YAML,
+  apply a manifest, or delete an active deployment
 - Real-time Server-Sent Events (SSE) telemetry stream parsing JAX driver logs
-- Live workload and cluster configuration API (/api/config) with preset support
-- Dynamic ConfigMap and JobSet YAML generation written to /tmp for the user to
-  inspect and apply manually with kubectl
 - Per-session token authentication and same-origin request validation
 - Start, Pause, and Reset training signaling to head pod port 8090
 - Dual-mode disruption and reconnect signaling:
@@ -1810,17 +1809,6 @@ def _build_kubectl_apply_cmd(
   return " ".join(parts)
 
 
-def _build_yaml_preview(cfg: dict[str, Any]) -> str:
-  """Builds the Kubernetes JobSet YAML string for the given configuration."""
-  cm_files = list(cfg.get("configmap_files", []))
-  has_configmap = bool(cm_files) or (
-      cfg.get("workload_preset") == "builtin_elastic_demo"
-      and os.path.isdir(SIMPLE_MODEL_DIR)
-  )
-  manifest = _build_jobset_manifest(cfg, has_configmap=has_configmap)
-  return _manifest_to_yaml(manifest) + "\n"
-
-
 def _build_yaml_bundle(
     cfg: dict[str, Any], jobset_yaml_override: str | None = None
 ) -> tuple[bool, str, str]:
@@ -2052,15 +2040,8 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
     if parsed.path == "/api/cluster/status":
       self._send_json(state.get_snapshot())
     elif parsed.path == "/api/config":
-      cfg = state.get_config()
-      _, _, bundle = _build_yaml_bundle(cfg)
       self._send_json({
-          "config": cfg,
-          "available_contexts": _get_kubeconfig_contexts(),
-          "yaml_preview": _build_yaml_preview(cfg),
-          "yaml_bundle": bundle,
-          "yaml_path": JOBSET_YAML_PATH,
-          "kubectl_apply_cmd": _build_kubectl_apply_cmd(cfg),
+          "config": state.get_config(),
           "snapshot": state.get_snapshot(),
       })
     elif parsed.path == "/api/telemetry/stream":
@@ -2071,7 +2052,7 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
       super().do_GET()
 
   def do_POST(self) -> None:  # pylint: disable=invalid-name
-    """Routes HTTP POST requests to configuration, lifecycle, and signal handlers."""
+    """Routes HTTP POST requests to lifecycle and signal handlers."""
     host_hdr = self.headers.get("Host", "")
     origin_hdr = self.headers.get("Origin", "")
     token_hdr = self.headers.get("X-Demo-Token", "")
@@ -2099,13 +2080,7 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
     except json.JSONDecodeError:
       payload = {}
 
-    if parsed.path == "/api/config":
-      self._handle_update_config(payload)
-    elif parsed.path == "/api/cluster/connect":
-      self._handle_cluster_connect(payload)
-    elif parsed.path == "/api/jobset/preview":
-      self._handle_jobset_preview(payload)
-    elif parsed.path == "/api/jobset/delete":
+    if parsed.path == "/api/jobset/delete":
       self._handle_delete()
     elif parsed.path == "/api/signal/start":
       self._handle_start(payload)
@@ -2158,206 +2133,6 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
     finally:
       state.unregister_subscriber(client_queue)
 
-  def _handle_update_config(self, payload: dict[str, Any]) -> None:
-    """Updates bridge configuration and writes the YAML bundle to /tmp."""
-    prev_cfg = state.get_config()
-    if payload.get("reset_defaults"):
-      with state.lock:
-        state.config = default_config()
-      updated_cfg = state.update_config({})
-    else:
-      updated_cfg = state.update_config(payload)
-
-    if (
-        prev_cfg["cluster_context"] != updated_cfg["cluster_context"]
-        or prev_cfg["namespace"] != updated_cfg["namespace"]
-        or prev_cfg["jobset_name"] != updated_cfg["jobset_name"]
-    ):
-      if tailer_instance is not None:
-        tailer_instance.stop_current_tail()
-        tailer_instance.finished_pods.clear()
-
-    yaml_manifest = payload.get("yaml_manifest")
-    ok, msg, bundle = _write_workload_yaml_bundle(
-        updated_cfg,
-        jobset_yaml_override=yaml_manifest
-        if isinstance(yaml_manifest, str)
-        else None,
-    )
-    if not ok:
-      self._send_json(
-          {
-              "status": "error",
-              "message": msg,
-              "config": updated_cfg,
-              "yaml_preview": _build_yaml_preview(updated_cfg),
-              "yaml_path": JOBSET_YAML_PATH,
-              "kubectl_apply_cmd": _build_kubectl_apply_cmd(updated_cfg),
-              "snapshot": state.get_snapshot(),
-          },
-          400,
-      )
-      return
-
-    state.broadcast({
-        "type": "config_updated",
-        "config": updated_cfg,
-        "snapshot": state.get_snapshot(),
-    })
-    self._send_json({
-        "status": "ok",
-        "message": msg,
-        "config": updated_cfg,
-        "yaml_preview": _build_yaml_preview(updated_cfg),
-        "yaml_bundle": bundle,
-        "yaml_path": JOBSET_YAML_PATH,
-        "kubectl_apply_cmd": _build_kubectl_apply_cmd(updated_cfg),
-        "snapshot": state.get_snapshot(),
-    })
-
-  def _handle_cluster_connect(self, payload: dict[str, Any]) -> None:
-    """Verifies connectivity to the GKE cluster and inspects TPU and CPU nodes."""
-    prev_cfg = state.get_config()
-    updated_cfg = state.update_config(payload)
-    if (
-        prev_cfg["cluster_context"] != updated_cfg["cluster_context"]
-        or prev_cfg["namespace"] != updated_cfg["namespace"]
-    ):
-      if tailer_instance is not None:
-        tailer_instance.stop_current_tail()
-        tailer_instance.finished_pods.clear()
-
-    ctx = updated_cfg["cluster_context"]
-    ns = updated_cfg["namespace"]
-    try:
-      cmd = _kubectl_cmd(
-          "get", "nodes", "-o", "json", context=ctx, include_ns=False
-      )
-    except ValueError as e:
-      self._send_json(
-          {
-              "status": "error",
-              "connected": False,
-              "message": str(e),
-              "config": updated_cfg,
-          },
-          400,
-      )
-      return
-
-    try:
-      proc = subprocess.run(
-          cmd, capture_output=True, text=True, check=False, timeout=12
-      )
-    except subprocess.TimeoutExpired:
-      self._send_json(
-          {
-              "status": "error",
-              "connected": False,
-              "message": f"Timed out connecting to cluster context '{ctx}'.",
-              "config": updated_cfg,
-          },
-          400,
-      )
-      return
-
-    if proc.returncode != 0:
-      err_msg = proc.stderr.strip() or proc.stdout.strip() or "kubectl failed."
-      self._send_json(
-          {
-              "status": "error",
-              "connected": False,
-              "message": err_msg,
-              "config": updated_cfg,
-          },
-          400,
-      )
-      return
-
-    try:
-      nodes_data = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-      nodes_data = {}
-
-    items = nodes_data.get("items", [])
-    total_nodes = len(items)
-    tpu_nodes = 0
-    accelerators: set[str] = set()
-    topologies: set[str] = set()
-    nodepools: set[str] = set()
-    for node in items:
-      labels = node.get("metadata", {}).get("labels", {})
-      np = labels.get("cloud.google.com/gke-nodepool")
-      if np:
-        nodepools.add(np)
-      accel = labels.get("cloud.google.com/gke-tpu-accelerator")
-      if accel:
-        tpu_nodes += 1
-        accelerators.add(accel)
-      topo = labels.get("cloud.google.com/gke-tpu-topology")
-      if topo:
-        topologies.add(topo)
-
-    cpu_nodes = total_nodes - tpu_nodes
-    pools = _fetch_tpu_pools(updated_cfg)
-    with state.lock:
-      state.tpu_pools = pools
-    _, _, bundle = _write_workload_yaml_bundle(updated_cfg)
-    state.broadcast({
-        "type": "config_updated",
-        "config": updated_cfg,
-        "snapshot": state.get_snapshot(),
-    })
-    self._send_json({
-        "status": "ok",
-        "connected": True,
-        "cluster_context": ctx,
-        "namespace": ns,
-        "total_nodes": total_nodes,
-        "tpu_nodes": tpu_nodes,
-        "cpu_nodes": cpu_nodes,
-        "accelerators": sorted(accelerators),
-        "topologies": sorted(topologies),
-        "nodepools": sorted(nodepools),
-        "tpu_pools": pools,
-        "available_contexts": _get_kubeconfig_contexts(),
-        "config": updated_cfg,
-        "yaml_preview": _build_yaml_preview(updated_cfg),
-        "yaml_bundle": bundle,
-        "yaml_path": JOBSET_YAML_PATH,
-        "kubectl_apply_cmd": _build_kubectl_apply_cmd(updated_cfg),
-        "snapshot": state.get_snapshot(),
-        "message": (
-            f"Connected to {ctx}: {total_nodes} nodes ({tpu_nodes} TPU,"
-            f" {cpu_nodes} CPU)."
-        ),
-    })
-
-  def _handle_jobset_preview(self, payload: dict[str, Any]) -> None:
-    """Generates a YAML preview from form fields without mutating bridge state."""
-    preview_cfg = _merge_config_dict(state.get_config(), payload)
-    yaml_str = _build_yaml_preview(preview_cfg)
-    yaml_override = payload.get("yaml_manifest")
-    ok, err, bundle = _build_yaml_bundle(
-        preview_cfg,
-        jobset_yaml_override=yaml_override
-        if isinstance(yaml_override, str)
-        else None,
-    )
-    if not ok:
-      self._send_json({"status": "error", "message": err}, status=400)
-      return
-    self._send_json({
-        "status": "ok",
-        "yaml": yaml_str,
-        "yaml_bundle": bundle,
-        "yaml_path": JOBSET_YAML_PATH,
-        "kubectl_apply_cmd": _build_kubectl_apply_cmd(preview_cfg),
-        "jobset_name": preview_cfg["jobset_name"],
-        "chips_per_slice": preview_cfg["chips_per_slice"],
-        "vms_per_slice": preview_cfg["vms_per_slice"],
-    })
-
   def _handle_delete(self) -> None:
     """Deletes the active JobSet from GKE and clears bridge state."""
     cfg = state.get_config()
@@ -2399,16 +2174,15 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
         or js_status in ("IDLE", "FAILED", "COMPLETED")
         or head_phase in ("Failed", "Succeeded", "Unknown")
     ):
-      apply_cmd = _build_kubectl_apply_cmd(cfg)
       self._send_json(
           {
               "status": "error",
               "action": "missing_jobset",
               "message": (
-                  f"No active JobSet found on GKE. Run '{apply_cmd}' in your"
-                  " terminal first."
+                  f"No active JobSet '{cfg['namespace']}/{cfg['jobset_name']}'"
+                  " found on GKE. Deploy with --yaml=... or kubectl apply"
+                  " first."
               ),
-              "kubectl_apply_cmd": apply_cmd,
               "snapshot": state.get_snapshot(),
           },
           400,
@@ -2947,6 +2721,61 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return parser.parse_args(argv)
 
 
+_ACCEL_TO_TPU_TYPE = {
+    "tpu-v5-lite-podslice": "tpuv5e",
+    "tpu-v6e-slice": "tpuv6e",
+    "tpu-v5p-slice": "tpuv5p",
+    "tpu7x": "tpuv7x",
+    "tpu-v4-podslice": "tpuv4",
+}
+
+
+def _infer_config_from_yaml(yaml_path: str) -> dict[str, Any]:
+  """Extracts JobSet metadata, slice topology, and workload flags from YAML."""
+  inferred: dict[str, Any] = {}
+  with open(yaml_path, "r", encoding="utf-8") as f:
+    docs = list(yaml.safe_load_all(f))
+  for doc in docs:
+    if not isinstance(doc, dict) or doc.get("kind") != "JobSet":
+      continue
+    meta = doc.get("metadata") or {}
+    if meta.get("name"):
+      inferred["jobset_name"] = str(meta["name"])
+    if meta.get("namespace"):
+      inferred["namespace"] = str(meta["namespace"])
+    rjobs = (doc.get("spec") or {}).get("replicatedJobs") or []
+    for rjob in rjobs:
+      pod_spec = (
+          (((rjob.get("template") or {}).get("spec") or {}).get("template") or {})
+          .get("spec")
+          or {}
+      )
+      if rjob.get("name") == pw_jobset.PATHWAYS_WORKER_JOB_NAME:
+        if rjob.get("replicas"):
+          inferred["num_slices"] = int(rjob["replicas"])
+        node_sel = pod_spec.get("nodeSelector") or {}
+        accel = node_sel.get("cloud.google.com/gke-tpu-accelerator", "")
+        if accel in _ACCEL_TO_TPU_TYPE:
+          inferred["tpu_type"] = _ACCEL_TO_TPU_TYPE[accel]
+        if node_sel.get("cloud.google.com/gke-tpu-topology"):
+          inferred["topology"] = str(
+              node_sel["cloud.google.com/gke-tpu-topology"]
+          )
+      elif rjob.get("name") == pw_jobset.PATHWAYS_HEAD_JOB_NAME:
+        for container in pod_spec.get("containers") or []:
+          tokens = list(container.get("command") or []) + list(
+              container.get("args") or []
+          )
+          joined = " ".join(str(t) for t in tokens)
+          m_steps = re.search(r"--total_steps=(\d+)", joined)
+          if m_steps:
+            inferred["total_steps"] = int(m_steps.group(1))
+          m_mode = re.search(r"--elasticity_mode=([a-z0-9_]+)", joined)
+          if m_mode:
+            inferred["elasticity_mode"] = m_mode.group(1)
+  return inferred
+
+
 def _startup_config_updates(args: argparse.Namespace) -> dict[str, Any]:
   """Maps CLI flags onto bridge configuration keys, skipping unset flags."""
   updates: dict[str, Any] = {}
@@ -2998,6 +2827,15 @@ def main(argv: list[str] | None = None) -> None:
   if args.host and args.host != "0.0.0.0":
     _ALLOWED_HOSTS.add(args.host.lower())
 
+  yaml_path = JOBSET_YAML_PATH
+  if args.yaml:
+    yaml_path = os.path.abspath(args.yaml)
+    if not os.path.isfile(yaml_path):
+      raise SystemExit(f"--yaml file not found: {yaml_path}")
+    inferred = _infer_config_from_yaml(yaml_path)
+    if inferred:
+      state.update_config(inferred)
+
   startup_updates = _startup_config_updates(args)
   if startup_updates:
     state.update_config(startup_updates)
@@ -3044,19 +2882,12 @@ def main(argv: list[str] | None = None) -> None:
 
   deploy_requested = bool(args.yaml or args.image or args.build_image)
   if args.yaml:
-    yaml_path = os.path.abspath(args.yaml)
-    if not os.path.isfile(yaml_path):
-      raise SystemExit(f"--yaml file not found: {yaml_path}")
     _logger.info("Using workload manifest %s", yaml_path)
-  else:
-    yaml_path = JOBSET_YAML_PATH
+  elif deploy_requested:
     ok, msg, _ = _write_workload_yaml_bundle(cfg)
-    if ok:
-      _logger.info(msg)
-    elif deploy_requested:
+    if not ok:
       raise SystemExit(msg)
-    else:
-      _logger.warning("Could not write initial YAML bundle: %s", msg)
+    _logger.info(msg)
 
   if deploy_requested and args.apply:
     ok, output = _kubectl_apply(cfg, yaml_path)
@@ -3065,8 +2896,8 @@ def main(argv: list[str] | None = None) -> None:
     if not ok:
       raise SystemExit("kubectl apply failed.")
     _logger.info(
-        "Deployed JobSet %s/%s. The UI will show it in Step 3 once the head"
-        " pod is running.",
+        "Deployed JobSet %s/%s. Monitoring live telemetry once the head pod"
+        " starts.",
         cfg["namespace"],
         cfg["jobset_name"],
     )
@@ -3077,8 +2908,10 @@ def main(argv: list[str] | None = None) -> None:
     )
   else:
     _logger.info(
-        "Monitor-only mode: no --image, --build-image, or --yaml given, so"
-        " nothing was deployed."
+        "Monitor-only mode: watching %s/%s on context %s.",
+        cfg["namespace"],
+        cfg["jobset_name"],
+        cfg["cluster_context"],
     )
 
   poller = ClusterPoller(state)

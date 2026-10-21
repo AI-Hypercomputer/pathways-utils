@@ -24,6 +24,7 @@ import orbax.checkpoint as ocp
 from pathwaysutils.elastic import manager
 from pathwaysutils.extras import simple_model
 from pathwaysutils.extras.elastic import elastic_workload
+from pathwaysutils.extras.elastic import gke_demo_bridge
 from pathwaysutils.test import mock_fault_injection
 
 
@@ -333,6 +334,46 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
       self.assertEqual(workload_resumed.current_slice_count, 1)
       self.assertEqual(workload_resumed.step, 2)
       workload_resumed.close()
+
+  def test_default_checkpoint_interval_is_infrequent(self):
+    elastic_mgr = mock.MagicMock(spec=manager.Manager)
+    workload = elastic_workload.ElasticWorkload(
+        elastic_manager=elastic_mgr,
+        checkpoint_dir=self.temp_dir.name,
+    )
+    self.assertEqual(workload.checkpoint_interval, 200)
+    self.assertEqual(workload.snapshot_interval, 2)
+    self.assertEqual(elastic_workload._CHECKPOINT_INTERVAL.default, 200)
+    workload.close()
+
+  def test_bridge_yaml_inference(self):
+    cfg = gke_demo_bridge._merge_config_dict(
+        gke_demo_bridge.default_config(),
+        {
+            "jobset_name": "custom-elastic-job",
+            "namespace": "ml-team",
+            "num_slices": 3,
+            "tpu_type": "tpuv5e",
+            "topology": "4x8",
+            "total_steps": 750,
+            "elasticity_mode": "step_snapshot_pause_resume",
+            "container_image": "us-docker.pkg.dev/demo/repo/image:v1",
+            "gcs_scratch_location": "gs://demo-bucket/scratch",
+        },
+    )
+    ok, err, bundle = gke_demo_bridge._build_yaml_bundle(cfg)
+    self.assertTrue(ok, msg=err)
+    yaml_file = f"{self.temp_dir.name}/rendered.yaml"
+    with open(yaml_file, "w", encoding="utf-8") as f:
+      f.write(bundle)
+    inferred = gke_demo_bridge._infer_config_from_yaml(yaml_file)
+    self.assertEqual(inferred["jobset_name"], "custom-elastic-job")
+    self.assertEqual(inferred["namespace"], "ml-team")
+    self.assertEqual(inferred["num_slices"], 3)
+    self.assertEqual(inferred["tpu_type"], "tpuv5e")
+    self.assertEqual(inferred["topology"], "4x8")
+    self.assertEqual(inferred["total_steps"], 750)
+    self.assertEqual(inferred["elasticity_mode"], "step_snapshot_pause_resume")
 
 
 if __name__ == "__main__":

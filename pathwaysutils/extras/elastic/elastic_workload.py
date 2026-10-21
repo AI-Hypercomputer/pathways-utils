@@ -62,7 +62,7 @@ _TOTAL_STEPS = flags.DEFINE_integer(
     "total_steps", 1000, "Total training steps."
 )
 _CHECKPOINT_INTERVAL = flags.DEFINE_integer(
-    "checkpoint_interval", 20, "Checkpoint step interval."
+    "checkpoint_interval", 200, "Checkpoint step interval."
 )
 _SNAPSHOT_INTERVAL = flags.DEFINE_integer(
     "snapshot_interval", 2, "Snapshot step interval."
@@ -173,7 +173,7 @@ class ElasticWorkload:
       config: simple_model.ModelConfig = simple_model.DEFAULT_CONFIG,
       mode: ElasticityMode = ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE,
       total_steps: int = 1000,
-      checkpoint_interval: int = 20,
+      checkpoint_interval: int = 200,
       snapshot_interval: int = 2,
       checkpoint_dir: str | None = None,
       simulator: mock_fault_injection.DeviceLossSimulator | None = None,
