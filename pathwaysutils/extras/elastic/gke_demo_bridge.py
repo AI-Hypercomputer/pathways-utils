@@ -3096,7 +3096,10 @@ def main(argv: list[str] | None = None) -> None:
   _logger.info("=" * 60)
   _logger.info("GKE Demo Bridge Server running on %s", local_url)
   if fqdn and fqdn != "localhost":
-    _logger.info("Remote / Cloudtop URL: %s", remote_url)
+    if args.host in ("0.0.0.0", "::", ""):
+      _logger.info("Remote / Cloudtop URL: %s", remote_url)
+    else:
+      _logger.info("Pass --host=0.0.0.0 to expose on %s", remote_url)
   _logger.info("=" * 60)
 
   if not args.no_browser:
