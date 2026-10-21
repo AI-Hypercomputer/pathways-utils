@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import math
@@ -99,12 +100,16 @@ def _format_image(image: str, default_tag: str) -> str:
 def _deserialize_dict(
     api_client: Any, data_dict: Mapping[str, Any], klass: Any
 ) -> Any:
+  raw = json.dumps(data_dict)
+  if "content_type" in inspect.signature(api_client.deserialize).parameters:
+    return api_client.deserialize(raw, klass, "application/json")
+
   class FakeResponse:
 
     def __init__(self, data):
       self.data = data
 
-  return api_client.deserialize(FakeResponse(json.dumps(data_dict)), klass)
+  return api_client.deserialize(FakeResponse(raw), klass)
 
 
 def _make_env_var(
@@ -346,7 +351,7 @@ def _build_proxy_container(
       f"--gcs_scratch_location={pathways_dir}",
   ]
   if elastic_slices > 0:
-    proxy_args.append(f"--num_elastic_slices={elastic_slices}")
+    proxy_args.append(f"--num_elastic_instances={elastic_slices}")
 
   proxy_env = [
       client.V1EnvVar(

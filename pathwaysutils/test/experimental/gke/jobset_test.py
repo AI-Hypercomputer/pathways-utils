@@ -175,7 +175,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         proxy_container["image"],
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
     )
-    self.assertIn("--num_elastic_slices=2", proxy_container["args"])
+    self.assertIn("--num_elastic_instances=2", proxy_container["args"])
     self.assertTrue(
         any(
             e.get("name") == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
