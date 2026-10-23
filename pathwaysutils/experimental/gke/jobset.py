@@ -882,6 +882,25 @@ class PathwaysJobSet:
     )
     _apply_container_kwargs(user_container, container_kwargs)
 
+    volume_mounts = list(user_container.volume_mounts or [])
+    if not any(
+        getattr(vm, "mount_path", None) == "/dev/shm"
+        or (isinstance(vm, Mapping) and vm.get("mountPath") == "/dev/shm")
+        for vm in volume_mounts
+    ):
+      shm_volume_name = "dshm"
+      self._add_volume_to_pod_spec(
+          pod_spec,
+          client.V1Volume(
+              name=shm_volume_name,
+              empty_dir=client.V1EmptyDirVolumeSource(medium="Memory"),
+          ),
+      )
+      volume_mounts.append(
+          client.V1VolumeMount(name=shm_volume_name, mount_path="/dev/shm")
+      )
+      user_container.volume_mounts = volume_mounts
+
     init_containers = list(pod_spec.init_containers or [])
     containers = []
     for c in pod_spec.containers:
