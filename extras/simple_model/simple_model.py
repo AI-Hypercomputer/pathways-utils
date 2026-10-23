@@ -19,9 +19,9 @@ import logging
 from absl import app
 from absl import flags
 import pathwaysutils
-from pathwaysutils.extras.simple_model.config import DEFAULT_CONFIG
-from pathwaysutils.extras.simple_model.config import parse_topology
-from pathwaysutils.extras.simple_model.workload import Workload
+from extras.simple_model.config import DEFAULT_CONFIG
+from extras.simple_model.config import parse_topology
+from extras.simple_model.workload import Workload
 
 _TOPOLOGY = flags.DEFINE_string(
     "topology", "", "Optional TPU slice topology (e.g., 4x8, 4x4x4)."

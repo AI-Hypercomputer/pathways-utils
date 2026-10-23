@@ -23,8 +23,8 @@ from flax import nnx
 import jax
 from jax import numpy as jnp
 import numpy as np
-from pathwaysutils.extras.simple_model import config as config_lib
-from pathwaysutils.extras.simple_model import model as model_lib
+from extras.simple_model import config as config_lib
+from extras.simple_model import model as model_lib
 
 
 def compute_mesh_shape(
