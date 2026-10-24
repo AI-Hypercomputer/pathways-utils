@@ -158,7 +158,10 @@ class Manager:
           pass
         else:
           raise
-      self._monitor_thread = None
+      finally:
+        self._monitor_thread = None
+        self._stop_event = None
+    else:
       self._stop_event = None
 
   @functools.cached_property

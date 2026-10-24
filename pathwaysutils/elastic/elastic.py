@@ -198,6 +198,10 @@ def wait_for_slices(
     TimeoutError: If the timeout is reached before the slices become
       active.
   """
+  if poll_interval < 0:
+    raise ValueError(f"poll_interval must be non-negative, got {poll_interval}")
+  if timeout is not None and timeout < 0:
+    raise ValueError(f"timeout must be non-negative, got {timeout}")
   if slice_to_devices is None:
     _logger.debug("slice_to_devices is None. Getting from jax.devices().")
     slice_to_devices = get_slice_to_devices(jax.devices())
