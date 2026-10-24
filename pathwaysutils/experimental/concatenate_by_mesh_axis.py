@@ -68,10 +68,21 @@ def concatenate_by_mesh_axis(
   if not flattened_arrays[0]:
     return array_trees[0]
 
-  # Extract the shared mesh from each PyTree (from an arbitrary array in each).
+  # Extract the shared mesh from each PyTree and verify all leaves in a PyTree
+  # share that mesh.
   meshes_to_concatenate = [
       _get_named_sharding(array).mesh for array in input_flat_arrays[0]
   ]
+  for tree_arrays, expected_mesh in zip(
+      flattened_arrays, meshes_to_concatenate
+  ):
+    for array in tree_arrays:
+      sharding = _get_named_sharding(array)
+      if sharding.mesh != expected_mesh:
+        raise ValueError(
+            "All arrays in each PyTree must have the same mesh. Got"
+            f" {sharding.mesh} vs. {expected_mesh}."
+        )
 
   # Validate that the meshes are compatible.
   reference_mesh = meshes_to_concatenate[0]
@@ -117,6 +128,19 @@ def concatenate_by_mesh_axis(
   ) -> jax.sharding.NamedSharding:
     reference_sharding = _get_named_sharding(arrays[0])
     reference_spec = reference_sharding.spec
+    for array in arrays[1:]:
+      sharding = _get_named_sharding(array)
+      if sharding.spec != reference_spec:
+        raise ValueError(
+            "Corresponding arrays across PyTrees must have the same"
+            f" PartitionSpec. Got {sharding.spec} vs. {reference_spec}."
+        )
+      if sharding.memory_kind != reference_sharding.memory_kind:
+        raise ValueError(
+            "Corresponding arrays across PyTrees must have the same"
+            f" memory_kind. Got {sharding.memory_kind} vs."
+            f" {reference_sharding.memory_kind}."
+        )
     return jax.sharding.NamedSharding(
         concatenated_mesh,
         reference_spec,
