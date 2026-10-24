@@ -68,15 +68,17 @@ class InitializeTest(parameterized.TestCase):
     )
 
   @parameterized.named_parameters(
+      ("none", None),
       ("empty", ""),
       ("cpu", "cpu"),
       ("tpu", "tpu"),
       ("gpu", "gpu"),
       ("cpu,tpu,gpu", "cpu,tpu,gpu"),
   )
-  def test_not_is_pathways_backend_used(self, platform: str):
+  def test_not_is_pathways_backend_used(self, platform: str | None):
     jax.config.update("jax_platforms", platform)
-    self.assertFalse(_initialize.is_pathways_backend_used())
+    result = _initialize.is_pathways_backend_used()
+    self.assertIs(result, False)
 
   @parameterized.named_parameters(
       ("proxy", "proxy"),

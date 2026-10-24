@@ -26,7 +26,19 @@ def register_backend_factory() -> None:
     options = ifrt_proxy.ClientConnectionOptions()
     timeout_secs = os.environ.get("PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS")
     if timeout_secs:
-      options.connection_timeout_in_seconds = int(timeout_secs)
+      try:
+        timeout_val = int(timeout_secs)
+      except ValueError as e:
+        raise ValueError(
+            "PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS must be an integer, got:"
+            f" {timeout_secs}"
+        ) from e
+      if timeout_val <= 0:
+        raise ValueError(
+            "PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS must be positive, got:"
+            f" {timeout_secs}"
+        )
+      options.connection_timeout_in_seconds = timeout_val
     return ifrt_proxy.get_client(
         jax.config.read("jax_backend_target"),
         options,

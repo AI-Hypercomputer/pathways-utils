@@ -95,6 +95,18 @@ class ProxyBackendTest(absltest.TestCase):
     options = args[1]
     self.assertNotEqual(options.connection_timeout_in_seconds, 42)
 
+  def test_proxy_backend_registration_with_invalid_timeout(self):
+    self.enter_context(
+        mock.patch.dict(
+            os.environ, {"PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS": "-5"}
+        )
+    )
+    proxy_backend.register_backend_factory()
+    with self.assertRaisesRegex(
+        RuntimeError, "PATHWAYS_PROXY_CONNECTION_TIMEOUT_SECS must be positive"
+    ):
+      backend.backends()
+
 
 if __name__ == "__main__":
   absltest.main()
