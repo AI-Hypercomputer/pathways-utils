@@ -836,11 +836,15 @@ class PathwaysJobSet:
   def _add_volume_to_pod_spec(
       self, pod_spec: client.V1PodSpec, volume: client.V1Volume
   ) -> None:
-    """Appends volume to pod_spec if not already present."""
-    volumes = pod_spec.volumes or []
-    if not any(v.name == volume.name for v in volumes):
-      volumes.append(volume)
-      pod_spec.volumes = volumes
+    """Adds or replaces volume by name in pod_spec."""
+    volumes = list(pod_spec.volumes or [])
+    for i, existing in enumerate(volumes):
+      if existing.name == volume.name:
+        volumes[i] = volume
+        pod_spec.volumes = volumes
+        return
+    volumes.append(volume)
+    pod_spec.volumes = volumes
 
   def add_user_workload(
       self,
@@ -984,7 +988,10 @@ class PathwaysJobSet:
     # stopped after, pathways-worker.
     sidecar_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
-    init_containers = list(pod_spec.init_containers or [])
+    sidecar_name = f"{name}-sidecar"
+    init_containers = [
+        c for c in (pod_spec.init_containers or []) if c.name != sidecar_name
+    ]
     init_containers.append(sidecar_container)
     pod_spec.init_containers = init_containers
 
@@ -1003,7 +1010,17 @@ class PathwaysJobSet:
           )
         container.args = args
         volume_mounts = container.volume_mounts or []
-        if not any(vm.name == shm_volume_name for vm in volume_mounts):
+        existing_shm_mount = next(
+            (vm for vm in volume_mounts if vm.name == shm_volume_name), None
+        )
+        if existing_shm_mount is not None:
+          if existing_shm_mount.mount_path != shm_mount_path:
+            raise ValueError(
+                f"Conflicting shm_mount_path {shm_mount_path!r};"
+                f" {shm_volume_name!r} is already mounted at"
+                f" {existing_shm_mount.mount_path!r}."
+            )
+        else:
           volume_mounts.append(
               client.V1VolumeMount(
                   name=shm_volume_name, mount_path=shm_mount_path
@@ -1097,7 +1114,11 @@ class PathwaysJobSet:
       self._add_volume_to_pod_spec(pod_spec, volume)
 
       for container in matching:
-        volume_mounts = container.volume_mounts or []
+        volume_mounts = [
+            vm
+            for vm in (container.volume_mounts or [])
+            if vm.mount_path != mount_path
+        ]
         volume_mounts.append(volume_mount)
         container.volume_mounts = volume_mounts
 
@@ -1158,7 +1179,11 @@ class PathwaysJobSet:
         )
       for container in matching:
         if mount_host_dir:
-          volume_mounts = container.volume_mounts or []
+          volume_mounts = [
+              vm
+              for vm in (container.volume_mounts or [])
+              if vm.name != CUSTOM_LIBTPU_VOLUME_NAME
+          ]
           volume_mounts.append(
               client.V1VolumeMount(
                   name=CUSTOM_LIBTPU_VOLUME_NAME,
@@ -1167,8 +1192,14 @@ class PathwaysJobSet:
               )
           )
           container.volume_mounts = volume_mounts
-        env = container.env or []
-        env.append(client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path))
+        env = list(container.env or [])
+        new_env_var = client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path)
+        for i, existing_env in enumerate(env):
+          if existing_env.name == "TPU_LIBRARY_PATH":
+            env[i] = new_env_var
+            break
+        else:
+          env.append(new_env_var)
         container.env = env
 
     return self

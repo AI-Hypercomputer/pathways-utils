@@ -1771,6 +1771,87 @@ class PathwaysJobSetTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, expected_error):
       pw_jobset.with_custom_libtpu(path, mount_host_dir=mount_host_dir)
 
+  def test_with_custom_libtpu_replaces_existing_env_and_mount(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.with_custom_libtpu(
+        "/var/lib/custom_tpu_v1/libtpu.so",
+        containers="worker",
+        mount_host_dir=True,
+    )
+    pw_jobset.with_custom_libtpu(
+        "/var/lib/custom_tpu_v2/libtpu.so",
+        containers="worker",
+        mount_host_dir=True,
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    tpu_lib_envs = [
+        e for e in worker["env"] if e["name"] == "TPU_LIBRARY_PATH"
+    ]
+    self.assertEqual(
+        tpu_lib_envs,
+        [{"name": "TPU_LIBRARY_PATH", "value": "/var/lib/custom_tpu_v2/libtpu.so"}],
+    )
+    libtpu_mounts = [
+        m for m in worker["volumeMounts"] if m["name"] == "custom-libtpu"
+    ]
+    self.assertEqual(
+        libtpu_mounts,
+        [{
+            "name": "custom-libtpu",
+            "mountPath": "/var/lib/custom_tpu_v2",
+            "readOnly": True,
+        }],
+    )
+    self.assertEqual(
+        helper.volumes["pathways-worker"]["custom-libtpu"]["hostPath"]["path"],
+        "/var/lib/custom_tpu_v2",
+    )
+
+  def test_add_gcsfuse_replaces_duplicate_mount_path(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_gcsfuse(
+        containers="worker",
+        mount_path="/gcs/data",
+        bucket="my-bucket",
+        read_only=False,
+    )
+    pw_jobset.add_gcsfuse(
+        containers="worker",
+        mount_path="/gcs/data",
+        bucket="my-bucket",
+        read_only=True,
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    worker = helper.containers["pathways-worker"]["pathways-worker"]
+    gcs_mounts = [
+        m for m in worker["volumeMounts"] if m["mountPath"] == "/gcs/data"
+    ]
+    self.assertLen(gcs_mounts, 1)
+    self.assertTrue(gcs_mounts[0]["readOnly"])
+
+  def test_add_external_sidecar_deduplicates_and_rejects_conflicting_shm_path(
+      self,
+  ):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_external_sidecar(
+        image="gcr.io/my-project/sidecar:v1", name="custom"
+    )
+    pw_jobset.add_external_sidecar(
+        image="gcr.io/my-project/sidecar:v2", name="custom"
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    init_list = helper.pod_specs["pathways-worker"]["initContainers"]
+    self.assertLen(init_list, 1)
+    self.assertEqual(init_list[0]["image"], "gcr.io/my-project/sidecar:v2")
+
+    with self.assertRaisesRegex(ValueError, "Conflicting shm_mount_path"):
+      pw_jobset.add_external_sidecar(
+          image="gcr.io/my-project/other:v1",
+          name="other",
+          shm_mount_path="/tmp/other-shm",
+      )
+
 
 if __name__ == "__main__":
   absltest.main()
