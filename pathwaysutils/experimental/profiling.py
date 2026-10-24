@@ -48,16 +48,17 @@ def start_trace(
       supported.
   """
   log_dir = profile_request["traceLocation"]
-  if not str(log_dir).startswith("gs://"):
-    raise ValueError(
-        "profile_request['traceLocation'] must be a GCS bucket path, got"
-        f" {log_dir}"
-    )
+  profiling._validate_gcs_bucket(str(log_dir))  # pylint: disable=protected-access
 
   profiling._start_pathways_trace_from_profile_request(profile_request)  # pylint: disable=protected-access
 
-  profiling._original_start_trace(  # pylint: disable=protected-access
-      log_dir=log_dir,
-      create_perfetto_link=create_perfetto_link,
-      create_perfetto_trace=create_perfetto_trace,
-  )
+  try:
+    profiling._original_start_trace(  # pylint: disable=protected-access
+        log_dir=log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+    )
+  except Exception:
+    with profiling._profile_state.lock:  # pylint: disable=protected-access
+      profiling._profile_state.reset()  # pylint: disable=protected-access
+    raise

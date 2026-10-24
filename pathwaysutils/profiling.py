@@ -76,11 +76,7 @@ class _ProfileState:
     ):
       out_avals = [jax.core.ShapedArray((1,), jnp.object_)]
       out_shardings = [
-          getattr(
-              jax.sharding,
-              "make_single_device_sharding",
-              jax.sharding.SingleDeviceSharding,
-          )(backend.get_default_device())
+          jax.sharding.SingleDeviceSharding(backend.get_default_device())
       ]
     else:
       out_avals = ()
@@ -502,14 +498,31 @@ def start_server(port: int, requires_backend: bool = True) -> None:
       _logger.debug("Capturing profiling data for %s ms", pc.duration_ms)
       log_dir = pc.repository_path.strip()
       _logger.debug("Writing profiling data to %s", log_dir)
-      _validate_gcs_bucket(log_dir)
+      try:
+        _validate_gcs_bucket(log_dir)
+      except ValueError as e:
+        raise fastapi.HTTPException(
+            status_code=fastapi.status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
 
       options = None
       if jax.version.__version_info__ >= (0, 9, 2):
         options = jax.profiler.ProfileOptions()
         options.duration_ms = pc.duration_ms
 
-      await asyncio.to_thread(start_trace, log_dir, profiler_options=options)
+      try:
+        await asyncio.to_thread(start_trace, log_dir, profiler_options=options)
+      except ValueError as e:
+        raise fastapi.HTTPException(
+            status_code=fastapi.status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+      except RuntimeError as e:
+        raise fastapi.HTTPException(
+            status_code=fastapi.status.HTTP_409_CONFLICT,
+            detail=str(e),
+        ) from e
       try:
         await asyncio.sleep(pc.duration_ms / 1e3)
       finally:
