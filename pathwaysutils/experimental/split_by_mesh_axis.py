@@ -129,7 +129,7 @@ def split_by_mesh_axis(
         range(axis_size, mesh.axis_sizes[mesh_axis_idx] + 1, axis_size)
     )
   else:
-    mesh_axis_sections = mesh_axis_indices_or_sections
+    mesh_axis_sections = list(mesh_axis_indices_or_sections)
     for i, boundary in enumerate(mesh_axis_sections):
       if boundary <= 0 or boundary >= mesh.axis_sizes[mesh_axis_idx]:
         raise ValueError(
@@ -142,7 +142,7 @@ def split_by_mesh_axis(
             "Mesh axis sections must be monotonically increasing, but got"
             f" {mesh_axis_sections=}."
         )
-    mesh_axis_sections += [mesh.axis_sizes[mesh_axis_idx]]  # pyrefly: ignore[unsupported-operation]
+    mesh_axis_sections += [mesh.axis_sizes[mesh_axis_idx]]
 
   submeshes = []
   axis_boundary_start = 0
