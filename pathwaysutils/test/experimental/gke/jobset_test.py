@@ -941,7 +941,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
         "metadata": {"name": "test"},
         "spec": {
             "replicatedJobs": [
-                {"name": "worker", "replicas": 1, "template": {}}
+                {"name": "pathways-worker", "replicas": 1, "template": {}}
             ]
         },
     }
@@ -1770,6 +1770,128 @@ class PathwaysJobSetTest(parameterized.TestCase):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
     with self.assertRaisesRegex(ValueError, expected_error):
       pw_jobset.with_custom_libtpu(path, mount_host_dir=mount_host_dir)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="zero_slices",
+          topology="2x2",
+          num_slices=0,
+          elastic_slices=0,
+          expected_error="num_slices .* must be positive",
+      ),
+      dict(
+          testcase_name="negative_slices",
+          topology="2x2",
+          num_slices=-1,
+          elastic_slices=0,
+          expected_error="num_slices .* must be positive",
+      ),
+      dict(
+          testcase_name="negative_elastic_slices",
+          topology="2x2",
+          num_slices=2,
+          elastic_slices=-1,
+          expected_error="elastic_slices .* cannot be negative",
+      ),
+      dict(
+          testcase_name="empty_topology",
+          topology="",
+          num_slices=1,
+          elastic_slices=0,
+          expected_error="Invalid topology",
+      ),
+      dict(
+          testcase_name="non_numeric_topology",
+          topology="2xabc",
+          num_slices=1,
+          elastic_slices=0,
+          expected_error="Invalid topology",
+      ),
+      dict(
+          testcase_name="zero_dim_topology",
+          topology="0x4",
+          num_slices=1,
+          elastic_slices=0,
+          expected_error="Topology dimensions must be positive",
+      ),
+      dict(
+          testcase_name="negative_dim_topology",
+          topology="-2x4",
+          num_slices=1,
+          elastic_slices=0,
+          expected_error="Topology dimensions must be positive",
+      ),
+      dict(
+          testcase_name="non_divisible_chips_per_vm",
+          topology="2x3",
+          num_slices=1,
+          elastic_slices=0,
+          expected_error="must be divisible by chips_per_vm",
+      ),
+  )
+  def test_invalid_slices_and_topology(
+      self, topology, num_slices, elastic_slices, expected_error
+  ):
+    with self.assertRaisesRegex(ValueError, expected_error):
+      self._create_jobset(
+          topology=topology,
+          num_slices=num_slices,
+          elastic_slices=elastic_slices,
+      )
+
+  def test_import_yaml_sets_shared_pathways_service_and_supports_add_user_workload(
+      self,
+  ):
+    temp_dir = self.create_tempdir().full_path
+    # Normal JobSet roundtrip + add_user_workload
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    normal_path = os.path.join(temp_dir, "normal.yaml")
+    pw_jobset.export_yaml(normal_path)
+    imported_normal = jobset.PathwaysJobSet.import_yaml(normal_path)
+    self.assertFalse(imported_normal._shared_pathways_service)
+    imported_normal.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 test.py",
+    )
+    self.assertIn("successPolicy", imported_normal.to_dict()["spec"])
+
+    # Shared Pathways Service JobSet roundtrip + add_user_workload
+    sps_jobset = self._create_jobset(
+        topology="2x2", num_slices=1, shared_pathways_service=True
+    )
+    sps_path = os.path.join(temp_dir, "sps.yaml")
+    sps_jobset.export_yaml(sps_path)
+    imported_sps = jobset.PathwaysJobSet.import_yaml(sps_path)
+    self.assertTrue(imported_sps._shared_pathways_service)
+    imported_sps.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 test.py",
+    )
+    self.assertNotIn("successPolicy", imported_sps.to_dict()["spec"])
+
+  def test_import_yaml_rejects_legacy_head_and_worker_job_names(self):
+    temp_dir = self.create_tempdir().full_path
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    head_config = pw_jobset.to_dict()
+    for job in head_config["spec"]["replicatedJobs"]:
+      if job["name"] == jobset.PATHWAYS_HEAD_JOB_NAME:
+        job["name"] = "head"
+    head_path = os.path.join(temp_dir, "head_legacy.yaml")
+    with open(head_path, "w") as f:
+      yaml.dump(head_config, f)
+    with self.assertRaisesRegex(ValueError, "Missing head replicated job"):
+      jobset.PathwaysJobSet.import_yaml(head_path)
+
+    worker_config = pw_jobset.to_dict()
+    for job in worker_config["spec"]["replicatedJobs"]:
+      if job["name"] == jobset.PATHWAYS_WORKER_JOB_NAME:
+        job["name"] = "worker"
+    worker_path = os.path.join(temp_dir, "worker_legacy.yaml")
+    with open(worker_path, "w") as f:
+      yaml.dump(worker_config, f)
+    with self.assertRaisesRegex(ValueError, "Missing worker replicated job"):
+      jobset.PathwaysJobSet.import_yaml(worker_path)
 
 
 if __name__ == "__main__":
