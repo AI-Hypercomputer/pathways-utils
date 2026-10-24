@@ -40,7 +40,9 @@ def is_pathways_backend_used() -> bool:
   is not necessarily which backend is ultimately selected or there may be more
   than one platform specified and another may have higher priority.
   """
-  return jax.config.jax_platforms and "proxy" in jax.config.jax_platforms
+  return bool(
+      jax.config.jax_platforms and "proxy" in jax.config.jax_platforms
+  )
 
 
 def _is_persistence_enabled() -> bool:
