@@ -100,11 +100,22 @@ class Manager:
   available_inactive_slices: Set[int]
   _stop_event: threading.Event | None
   _monitor_thread: threading.Thread | None
-  def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
+  def __init__(
+      self,
+      devices: Sequence[jax.Device] | None = None,
+      *,
+      minimum_slice_count: int | None = None,
+      poll_interval: float | int = 10,
+      timeout: float | int | None = None,
+  ) -> None:
     """Initializes the manager.
 
     Args:
       devices: The devices to use. If None, jax.devices() is used.
+      minimum_slice_count: Minimum active slices to wait for (< 1 = all). If
+        None, active slices are sampled once without waiting.
+      poll_interval: Seconds between slice health checks when waiting.
+      timeout: Maximum seconds to wait when waiting, or None for no timeout.
     """
     if devices is None:
       devices = jax.devices()
@@ -115,9 +126,18 @@ class Manager:
     self._active_slice_indices = frozenset()
     self.available_inactive_slices = frozenset()
 
-    self.active_slice_indices = elastic.get_active_slice_indices(
-        slice_to_devices=self.slice_to_devices
-    )
+    if minimum_slice_count is not None:
+      slice_count = None if minimum_slice_count < 1 else minimum_slice_count
+      self.active_slice_indices = elastic.wait_for_slices(
+          slice_count=slice_count,
+          poll_interval=poll_interval,
+          timeout=timeout,
+          slice_to_devices=self.slice_to_devices,
+      )
+    else:
+      self.active_slice_indices = elastic.get_active_slice_indices(
+          slice_to_devices=self.slice_to_devices
+      )
 
     self._stop_event = None
     self._monitor_thread = None
