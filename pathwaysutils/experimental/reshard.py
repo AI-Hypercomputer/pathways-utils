@@ -61,7 +61,7 @@ class ReshardingPlanWrapper:
       result = {
           "devices": {
               "device_ids": [
-                  device.id for device in sharding._addressable_device_assignment  # pylint: disable=protected-access
+                  device.id for device in sharding._device_assignment  # pylint: disable=protected-access
               ]
           },
           "xla_hlo_sharding": (
