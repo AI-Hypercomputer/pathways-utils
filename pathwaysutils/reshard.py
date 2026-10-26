@@ -58,9 +58,8 @@ def reshard_generic(
   for index, (arr, dst_sharding) in enumerate(zip(flat_x, flat_sharding)):
     if not isinstance(dst_sharding, jax.sharding.Sharding):
       raise ValueError("`sharding` must contain only `jax.sharding.Sharding`")
-    if not isinstance(arr, jax.Array) or (
-        hasattr(arr, "dtype")
-        and jax.dtypes.issubdtype(arr.dtype, jax.dtypes.prng_key)
+    if not isinstance(arr, jax.Array) or jax.dtypes.issubdtype(
+        arr.dtype, jax.dtypes.prng_key
     ):
       non_reshardable_arrays["arrays"].append(arr)
       non_reshardable_arrays["indices"].append(index)
@@ -212,6 +211,7 @@ def _get_split_candidates(
     if (
         gcd_shards[i] == 1
         and src_dims[i] > dst_dims[i]
+        and src_dims[i] % dst_dims[i] == 0
         and isinstance(spec, str)
     ):
       split_candidates.append((i, spec))

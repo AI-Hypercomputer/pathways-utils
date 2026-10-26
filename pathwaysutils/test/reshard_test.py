@@ -90,5 +90,18 @@ class ReshardTest(parameterized.TestCase):
     self.assertLen(args[0], 2)
     self.assertLen(args[1], 2)
 
+  def test_find_intermediate_sharding_rejects_indivisible_candidate(self):
+    # src_dims=[8, 3], dst_dims=[3, 4], gcd_shards=[1, 1] -> src_dims[0] % dst_dims[0] != 0
+    in_sharding = mock.MagicMock(spec=jax.sharding.NamedSharding)
+    in_sharding.spec = jax.sharding.PartitionSpec("x", "y")
+    with self.assertRaises(reshard.NoIntermediateShardingError):
+      reshard._get_split_candidates(
+          in_sharding,
+          src_dims=[8, 3],
+          dst_dims=[3, 4],
+          gcd_shards=[1, 1],
+      )
+
+
 if __name__ == "__main__":
   absltest.main()
