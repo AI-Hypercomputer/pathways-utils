@@ -16,11 +16,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import posixpath
 import time
 from typing import Any, Mapping, Sequence
 
+from pathwaysutils import tpu_utils
 import yaml
 
 try:
@@ -478,6 +478,10 @@ class PathwaysJobSet:
     self._labels = dict(labels) if labels else {}
     self._annotations = dict(annotations) if annotations else {}
 
+    if num_slices <= 0:
+      raise ValueError(f"num_slices ({num_slices}) must be positive")
+    if elastic_slices < 0:
+      raise ValueError(f"elastic_slices ({elastic_slices}) cannot be negative")
     if elastic_slices > num_slices:
       raise ValueError(
           f"elastic_slices ({elastic_slices}) cannot be greater than "
@@ -492,11 +496,15 @@ class PathwaysJobSet:
     )
 
     # Calculate VMs.
-    dims = [int(x) for x in topology.split("x")]
-    total_chips = math.prod(dims)
+    total_chips = tpu_utils.parse_topology(topology)
     chips_per_vm = 8 if tpu_type.lower().endswith("8t") else 4
     if total_chips < chips_per_vm:
       num_vms = 1
+    elif total_chips % chips_per_vm != 0:
+      raise ValueError(
+          f"Total chips ({total_chips}) for topology {topology!r} must be"
+          f" divisible by chips_per_vm ({chips_per_vm}) for {tpu_type!r}"
+      )
     else:
       num_vms = total_chips // chips_per_vm
 
@@ -1271,7 +1279,7 @@ class PathwaysJobSet:
           head_job_template = _deserialize_dict(
               api_client, job["template"], client.V1JobTemplateSpec
           )
-        elif job["name"] in ("worker", PATHWAYS_WORKER_JOB_NAME):
+        elif job["name"] == PATHWAYS_WORKER_JOB_NAME:
           worker_job_template = _deserialize_dict(
               api_client, job["template"], client.V1JobTemplateSpec
           )
@@ -1289,6 +1297,7 @@ class PathwaysJobSet:
 
     rm_image = DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE
     proxy_image = DEFAULT_PATHWAYS_PROXY_IMAGE
+    has_proxy = False
     if (
         head_job_template.spec
         and head_job_template.spec.template
@@ -1301,8 +1310,11 @@ class PathwaysJobSet:
       for c in all_containers:
         if c.name == "pathways-rm" and c.image:
           rm_image = c.image
-        elif c.name == "pathways-proxy" and c.image:
-          proxy_image = c.image
+        elif c.name == "pathways-proxy":
+          has_proxy = True
+          if c.image:
+            proxy_image = c.image
+    instance._shared_pathways_service = not has_proxy
     instance._pathways_rm_and_worker_image = rm_image
     instance._pathways_proxy_image = proxy_image
 
@@ -1317,14 +1329,13 @@ class PathwaysJobSet:
     jobs = {
         j["name"]: j for j in config.get("spec", {}).get("replicatedJobs", [])
     }
-    if "head" not in jobs and PATHWAYS_HEAD_JOB_NAME not in jobs:
+    if PATHWAYS_HEAD_JOB_NAME not in jobs:
       raise ValueError(
-          f"Missing head replicated job ('head' or '{PATHWAYS_HEAD_JOB_NAME}')"
+          f"Missing head replicated job ('{PATHWAYS_HEAD_JOB_NAME}')"
       )
-    if "worker" not in jobs and PATHWAYS_WORKER_JOB_NAME not in jobs:
+    if PATHWAYS_WORKER_JOB_NAME not in jobs:
       raise ValueError(
-          "Missing worker replicated job ('worker' or"
-          f" '{PATHWAYS_WORKER_JOB_NAME}')"
+          f"Missing worker replicated job ('{PATHWAYS_WORKER_JOB_NAME}')"
       )
 
   def apply(
