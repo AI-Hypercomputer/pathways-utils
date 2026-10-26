@@ -1,6 +1,7 @@
 """Tests for the persistence module."""
 
 import datetime
+from unittest import mock
 
 from absl.testing import absltest
 import jax
@@ -106,6 +107,25 @@ class PersistenceTest(absltest.TestCase):
         timeout=self.timeout,
     )
     self.assertNotEmpty(bulk_write_request)
+
+  def test_dtype_to_xla_primitive_type_str_bool_and_float16(self):
+    self.assertEqual(
+        helper.dtype_to_xla_primitive_type_str(np.dtype("bool")), "PRED"
+    )
+    self.assertEqual(
+        helper.dtype_to_xla_primitive_type_str(np.dtype("float16")), "F16"
+    )
+
+  def test_get_write_request_invalid_sharding_raises_value_error(self):
+    fake_array = mock.MagicMock(spec=jax.Array)
+    fake_array.sharding = "not_a_sharding"
+    with self.assertRaisesRegex(ValueError, "Expected jax.sharding.Sharding"):
+      helper.get_write_request(
+          location_path=self.location,
+          name=self.name,
+          jax_array=fake_array,
+          timeout=self.timeout,
+      )
 
 
 if __name__ == "__main__":
