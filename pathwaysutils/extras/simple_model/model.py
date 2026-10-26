@@ -60,13 +60,17 @@ class TransformerBlock(nnx.Module):
     )
 
   def __call__(self, x: jax.Array) -> jax.Array:
+    b, t, _ = x.shape
     h = self.rmsnorm_1(x)
-    scores = (
-        jnp.einsum("btd,bsd->bts", self.attn_q(h), self.attn_k(h))
-        / jnp.sqrt(self.head_dim)
-    )
-    attn = jnp.einsum(
-        "bts,bsd->btd", jax.nn.softmax(scores, axis=-1), self.attn_v(h)
+    q = self.attn_q(h).reshape(b, t, self.num_heads, self.head_dim)
+    k = self.attn_k(h).reshape(b, t, self.num_heads, self.head_dim)
+    v = self.attn_v(h).reshape(b, t, self.num_heads, self.head_dim)
+    scores = jnp.einsum("bthd,bshd->bhts", q, k) / jnp.sqrt(self.head_dim)
+    mask = jnp.tril(jnp.ones((t, t), dtype=jnp.bool_))
+    scores = jnp.where(mask, scores, jnp.finfo(scores.dtype).min)
+    attn_weights = jax.nn.softmax(scores, axis=-1)
+    attn = jnp.einsum("bhts,bshd->bthd", attn_weights, v).reshape(
+        b, t, self.num_heads * self.head_dim
     )
     x = x + self.attn_o(attn)
     return x + self.mlp_down(geglu(self.mlp_gate_up(self.rmsnorm_2(x))))

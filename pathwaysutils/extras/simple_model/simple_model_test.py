@@ -57,7 +57,10 @@ class SimpleModelTest(absltest.TestCase):
   def test_config_dimensions_and_mesh(self):
     self.assertEqual(config_lib.parse_topology("4x8"), 32)
     self.assertEqual(config_lib.parse_topology("4x4x4"), 64)
-    self.assertEqual(config_lib.parse_topology("invalid"), 1)
+    with self.assertRaises(ValueError):
+      config_lib.parse_topology("invalid")
+    with self.assertRaises(ValueError):
+      config_lib.parse_topology("4xinvalid")
 
     self.assertIn("default", config_lib.CONFIGS)
     self.assertIn("test", config_lib.CONFIGS)
@@ -118,6 +121,14 @@ class SimpleModelTest(absltest.TestCase):
     model.output_scale.value = jnp.array(2.0, dtype=jnp.float32)
     scaled_logits = model(tokens)
     np.testing.assert_allclose(scaled_logits, logits * 2.0, rtol=1e-5)
+
+    # Verify causal attention masking: modifying a future token at t > 0 must
+    # not change logits at earlier positions.
+    tokens_modified = tokens.at[:, -1].set(1)
+    logits_modified = model(tokens_modified)
+    np.testing.assert_allclose(
+        logits_modified[:, :-1, :], scaled_logits[:, :-1, :], rtol=1e-5
+    )
 
   def test_synthetic_token_source(self):
     source = data_lib.SyntheticTokenSource(
@@ -231,6 +242,12 @@ class SimpleModelTest(absltest.TestCase):
     self.assertEqual(workload.default_device, jax.devices()[0])
     self.assertEqual(workload.devices_per_slice, 0)
     self.assertIsNone(workload.snapshotter)
+    self.assertIsNone(workload.checkpoint_dir)
+
+    with self.assertRaisesRegex(
+        ValueError, "checkpoint_dir must be specified"
+    ):
+      workload_lib.Workload(config=self.config, checkpoint_interval=1)
 
     with self.assertRaises(RuntimeError):
       workload.run_step()
@@ -319,10 +336,12 @@ class SimpleModelTest(absltest.TestCase):
       real_grain_st = workload.data_iterator.get_state()
       mock_snapshotter.load.return_value = {
           "params": fake_params,
+          "step": 2,
           "grain_state": real_grain_st,
       }
       workload.restore_from_snapshot()
       mock_snapshotter.load.assert_called_once()
+      self.assertEqual(workload.step, 2)
       self.assertEqual(workload.data_iterator.get_state(), real_grain_st)
     finally:
       workload.close()

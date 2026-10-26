@@ -71,9 +71,7 @@ class Workload:
     self.total_steps = total_steps
     self.snapshot_interval = snapshot_interval
     self.checkpoint_interval = checkpoint_interval
-    self.checkpoint_dir = (
-        checkpoint_dir or f"/tmp/simple_model_ckpts_{int(time.time())}"
-    )
+    self.checkpoint_dir = checkpoint_dir
 
     self.snapshotter = snapshotter
     if self.snapshot_interval > 0 and self.snapshotter is None:
@@ -81,6 +79,10 @@ class Workload:
 
     self.checkpoint_manager: ocp.CheckpointManager | None = None
     if self.checkpoint_interval > 0:
+      if not self.checkpoint_dir:
+        raise ValueError(
+            "checkpoint_dir must be specified when checkpoint_interval > 0."
+        )
       self.checkpoint_manager = ocp.CheckpointManager(
           self.checkpoint_dir,
           options=ocp.CheckpointManagerOptions(enable_async_checkpointing=True),
@@ -157,7 +159,8 @@ class Workload:
       promoted = jax.device_put(self.params, self.artifacts.replicated_sharding)
       grain_st = self.data_iterator.get_state()
       self.snapshotter.save(
-          self.step, {"params": promoted, "grain_state": grain_st}
+          self.step,
+          {"params": promoted, "step": self.step, "grain_state": grain_st},
       )
       _logger.info("Saved in-memory snapshot at step %d.", self.step)
 
@@ -187,9 +190,12 @@ class Workload:
     self.snapshotter.join()
     payload = self.snapshotter.load({
         "params": self.artifacts.abstract_params,
+        "step": self.step,
         "grain_state": self.data_iterator.get_state(),
     })
     self.params = payload["params"]
+    if "step" in payload:
+      self.step = int(payload["step"])
     if "grain_state" in payload:
       self.data_iterator.set_state(payload["grain_state"])
     _logger.info("Restored state from in-memory snapshot.")
@@ -214,6 +220,9 @@ class Workload:
     """Cleans up resources and closes the data iterator and snapshotter."""
     if self.snapshotter is not None:
       self.snapshotter.join()
+    if self.checkpoint_manager is not None:
+      self.checkpoint_manager.close()
+      self.checkpoint_manager = None
     if self.data_iterator is not None:
       self.data_iterator.close()
       self.data_iterator = None

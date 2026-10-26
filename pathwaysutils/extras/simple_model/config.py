@@ -14,7 +14,8 @@
 """Single universal configuration for the simple Transformer model."""
 
 import dataclasses
-import math
+
+from pathwaysutils import tpu_utils
 
 
 @dataclasses.dataclass(frozen=True)
@@ -54,5 +55,4 @@ CONFIGS: dict[str, ModelConfig] = {
 
 def parse_topology(topology: str) -> int:
   """Returns the total number of chips in a topology string like '4x8' or '4x4x4'."""
-  dims = [int(x) for x in topology.strip().lower().split("x") if x.isdigit()]
-  return math.prod(dims) if dims else 1
+  return tpu_utils.parse_topology(topology)
