@@ -1,4 +1,4 @@
-# Package of Pathways-on-Cloud utilities
+# APIs to get started with using Pathways on Cloud
 
 Pathways is a novel compute orchestration method that enables single controller runtime ML workloads.
 This approach unlocks a range of new capabilities for training resiliency, multihost inference and interactive development on cluster of arbitrary scale.
@@ -10,12 +10,6 @@ This package handles the underlying adaptations required for the cloud environme
 # Further Reading
 [Pathways Research Paper](https://arxiv.org/abs/2203.12533)
 
-[More resources coming Soon]
-
-
-# How to get access to Pathways on Cloud
-
-Pathways on Cloud is currently in Preview.
-Please contact your Google Cloud account representative to request access to Pathways.
+[Get started with Pathways on Google Cloud](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/pathways-intro)
 
 

@@ -30,11 +30,6 @@ python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_se
 
 Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
 
-`--sidecar_image` is optional. Set it to deploy the colocated Python sidecar
-next to the TPU workers, which workloads need to use
-`--proxy_options=sidecar:true`. Without it, the service is deployed without the
-sidecar.
-
 ### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
 Verify that the Shared Pathways Service components are started, specifically the Pathways resource manager (RM) and
@@ -78,7 +73,7 @@ $ WORKER0_POD_NAME=$(kubectl get pods --selector=jobset.sigs.k8s.io/jobset-name=
 #### Option 3: Check project logs
 
 Find the detailed instructions
-<a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>).
+<a href="https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/troubleshooting-pathways#health_monitoring" target="_blank">here</a>.
 
 <a name="find-pw-service"></a>
 ### 4. Find the Pathways service address
