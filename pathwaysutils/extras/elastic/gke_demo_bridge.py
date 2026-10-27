@@ -73,7 +73,7 @@ FAULT_INJECTION_PY_PATH = os.path.join(
     PATHWAYSUTILS_DIR, "test", "mock_fault_injection.py"
 )
 MANAGER_PY_PATH = os.path.join(PATHWAYSUTILS_DIR, "elastic", "manager.py")
-SNAPSHOTTER_PY_PATH = os.path.normpath(
+_ORBAX_SNAPSHOTTER_PY_PATH = os.path.normpath(
     os.path.join(
         ORBAX_DIR,
         "checkpoint",
@@ -85,6 +85,11 @@ SNAPSHOTTER_PY_PATH = os.path.normpath(
         "snapshotter.py",
     )
 )
+SNAPSHOTTER_PY_PATH = (
+    _ORBAX_SNAPSHOTTER_PY_PATH
+    if os.path.isfile(_ORBAX_SNAPSHOTTER_PY_PATH)
+    else os.path.join(BASE_DIR, "snapshotter.py")
+)
 JOBSET_YAML_PATH = os.path.join(
     tempfile.gettempdir(), "gke_elastic_workload.yaml"
 )
@@ -94,6 +99,7 @@ CONFIGMAP_NAME = "elastic-workload-code"
 PORT = 48259
 
 _SESSION_TOKEN = secrets.token_urlsafe(32)
+_ALLOW_ANY_HOST = False
 _ALLOWED_HOSTS: set[str] = {
     "localhost",
     "127.0.0.1",
@@ -103,7 +109,7 @@ _ALLOWED_HOSTS: set[str] = {
 _SAFE_K8S_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:@/-]{0,252}$")
 _SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,128}$")
 _SAFE_CONTROL_PATH_RE = re.compile(
-    r"^/(start|pause|reset|status|(disrupt|reconnect)\?slice=\d+)$"
+    r"^/(start|pause|reset|status|(disrupt|reconnect)\?slice=\d+|mode\?mode=[a-z_]+)$"
 )
 
 DEFAULT_NAMESPACE = "default"
@@ -263,6 +269,8 @@ def _extract_hostname(host_header: str) -> str:
 
 def _is_valid_host_header(host_header: str) -> bool:
   """Checks whether the HTTP Host header matches an allowed local/server host."""
+  if _ALLOW_ANY_HOST:
+    return True
   hostname = _extract_hostname(host_header)
   return bool(hostname) and hostname in _ALLOWED_HOSTS
 
@@ -276,6 +284,8 @@ def _is_valid_origin_header(origin_header: str, host_header: str) -> bool:
   if ":" in origin_host and not origin_host.startswith("["):
     origin_host = f"[{origin_host}]"
   target_host = _extract_hostname(host_header)
+  if _ALLOW_ANY_HOST:
+    return bool(origin_host) and origin_host == target_host
   return bool(origin_host) and origin_host == target_host and (
       origin_host in _ALLOWED_HOSTS
   )
@@ -881,6 +891,8 @@ class ClusterPoller(threading.Thread):
 
     for item in items:
       meta = item.get("metadata", {})
+      if meta.get("deletionTimestamp"):
+        continue
       pname = meta.get("name", "")
       labels = meta.get("labels", {})
       rep_job = labels.get("jobset.sigs.k8s.io/replicatedjob-name", "")
@@ -889,6 +901,15 @@ class ClusterPoller(threading.Thread):
       phase = status.get("phase", "Unknown")
 
       if rep_job == "pathways-head":
+        for cs in status.get("containerStatuses", []):
+          if cs.get("name") == "jax-tpu":
+            terminated = cs.get("state", {}).get("terminated")
+            if terminated is not None:
+              phase = (
+                  "Succeeded"
+                  if terminated.get("exitCode", 0) == 0
+                  else "Failed"
+              )
         head_name = pname
         head_phase = phase
       elif rep_job == pw_jobset.PATHWAYS_WORKER_JOB_NAME:
@@ -975,6 +996,7 @@ class LogTailer(threading.Thread):
     self.bridge_state = bridge_state
     self.active_process: subprocess.Popen[str] | None = None
     self.finished_pods: set[str] = set()
+    self.pod_line_counts: dict[str, int] = {}
 
   def stop_current_tail(self) -> None:
     """Terminates the active kubectl logs process if one is running."""
@@ -1052,9 +1074,17 @@ class LogTailer(threading.Thread):
     if stdout is None:
       return
 
+    already_seen = self.pod_line_counts.get(pod_key, 0)
+    line_idx = 0
     for line in iter(stdout.readline, ""):
       clean_line = line.rstrip()
       if clean_line:
+        if clean_line.startswith("Error from server"):
+          continue
+        line_idx += 1
+        if line_idx <= already_seen:
+          continue
+        self.pod_line_counts[pod_key] = line_idx
         self.bridge_state.record_log(clean_line)
         self._parse_line(
             clean_line,
@@ -1067,9 +1097,13 @@ class LogTailer(threading.Thread):
             stage2_regex,
         )
 
-    self.active_process.wait()
+    rc = self.active_process.wait()
     self.active_process = None
-    if self.bridge_state.head_pod_phase in ("Succeeded", "Failed", "Completed"):
+    if (rc == 0 and line_idx > 0) or self.bridge_state.head_pod_phase in (
+        "Succeeded",
+        "Failed",
+        "Completed",
+    ):
       self.finished_pods.add(pod_key)
     time.sleep(1.5)
 
@@ -1355,6 +1389,24 @@ class LogTailer(threading.Thread):
       })
       return
 
+    if " slices active. Wanting at least " in line:
+      with self.bridge_state.lock:
+        self.bridge_state.jobset_status = "RECOVERING"
+        self.bridge_state.current_event = (
+            "Paused in step_snapshot_pause_resume mode: waiting for all slices"
+            " to reconnect..."
+        )
+      self.bridge_state.broadcast({
+          "type": "event",
+          "event": "stage1",
+          "message": (
+              "Paused in step_snapshot_pause_resume mode — waiting for all"
+              " slices to reconnect before resuming."
+          ),
+          "timestamp": now,
+      })
+      return
+
     m_stage1 = stage1_re.search(line)
     if m_stage1:
       slices_str = m_stage1.group(1)
@@ -1502,9 +1554,9 @@ def _build_head_startup_script(cfg: dict[str, Any], instance_type: str) -> str:
     if "snapshotter.py" in file_names:
       lines.extend([
           (
-              'ORBAX_PW_DIR=$(python3 -c "import'
-              " orbax.checkpoint.experimental.v1._src.training.pathways as p,"
-              ' os; print(os.path.dirname(p.__file__))")'
+              'ORBAX_PW_DIR=$(python3 -c "from'
+              " orbax.checkpoint.experimental.v1._src.training.pathways import"
+              ' snapshotter as s; import os; print(os.path.dirname(s.__file__))")'
           ),
           'cp /app/workload/snapshotter.py "${ORBAX_PW_DIR}/snapshotter.py"',
           (
@@ -2092,6 +2144,8 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
       self._handle_interrupt(payload)
     elif parsed.path == "/api/signal/reconnect":
       self._handle_reconnect(payload)
+    elif parsed.path == "/api/signal/mode":
+      self._handle_mode(payload)
     else:
       self._send_json({"error": "endpoint not found"}, status=404)
 
@@ -2563,6 +2617,48 @@ class DemoRequestHandler(server.SimpleHTTPRequestHandler):
           "slice": slice_idx,
       })
 
+  def _handle_mode(self, payload: dict[str, Any]) -> None:
+    """Switches the elasticity recovery mode in the bridge and active head pod."""
+    mode = str(payload.get("mode", "")).strip()
+    if mode not in (
+        "step_snapshot_replica_resize",
+        "step_snapshot_pause_resume",
+    ):
+      self._send_json(
+          {"status": "error", "message": f"Invalid elasticity mode: {mode!r}"},
+          status=400,
+      )
+      return
+
+    updated_cfg = state.update_config({"elasticity_mode": mode})
+    with state.lock:
+      head_pod = state.head_pod_name
+      head_phase = state.head_pod_phase
+      ctx = state.config["cluster_context"]
+      ns = state.config["namespace"]
+
+    ok = False
+    out = ""
+    if head_pod and head_phase == "Running":
+      ok, out = _send_workload_control_rpc(
+          head_pod, f"/mode?mode={mode}", context=ctx, namespace=ns
+      )
+      _logger.info("Set elasticity mode to %s on %s (%s)", mode, head_pod, ok)
+
+    snap = state.get_snapshot()
+    state.broadcast({
+        "type": "config_updated",
+        "config": updated_cfg,
+        "snapshot": snap,
+    })
+    self._send_json({
+        "status": "ok",
+        "mode": mode,
+        "forwarded": ok,
+        "output": out,
+        "snapshot": snap,
+    })
+
 
 class ThreadingServer(socketserver.ThreadingMixIn, server.HTTPServer):
   daemon_threads = True
@@ -2809,7 +2905,7 @@ def _startup_config_updates(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> None:
-  global tailer_instance
+  global tailer_instance, _ALLOW_ANY_HOST
   args = _parse_args(argv)
   logging.basicConfig(
       level=logging.INFO,
@@ -2822,9 +2918,13 @@ def main(argv: list[str] | None = None) -> None:
   short_host = (socket.gethostname() or "").lower()
   if fqdn:
     _ALLOWED_HOSTS.add(fqdn)
+    _ALLOWED_HOSTS.add(fqdn.split(".")[0])
   if short_host:
     _ALLOWED_HOSTS.add(short_host)
-  if args.host and args.host != "0.0.0.0":
+    _ALLOWED_HOSTS.add(short_host.split(".")[0])
+  if args.host in ("0.0.0.0", "::", ""):
+    _ALLOW_ANY_HOST = True
+  elif args.host:
     _ALLOWED_HOSTS.add(args.host.lower())
 
   yaml_path = JOBSET_YAML_PATH

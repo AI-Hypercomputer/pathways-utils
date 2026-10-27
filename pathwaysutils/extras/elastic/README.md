@@ -42,8 +42,10 @@ The simulation toolbar allows tuning key workload and infrastructure characteris
 drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
 
 * `elastic_workload.py` runs the `pathwaysutils.extras.simple_model` workload
-  with `ElasticManager` and `Snapshotter`, exposing an HTTP control server on
-  head pod port `8090` for start, pause, reset, and fault-injection signals.
+  with `ElasticManager` and `Snapshotter`, pre-compiling executables for all
+  slice subsets and exposing an HTTP control server on head pod port `8090` for
+  start, pause, reset, live elasticity mode switching, and fault-injection
+  signals.
 * `gke_demo_bridge.py` renders the ConfigMap and JobSet manifest bundle from the
   command line, applies or deletes deployments, binds to `127.0.0.1:48259` by
   default, streams live JAX driver telemetry over Server-Sent Events (SSE), and
@@ -51,7 +53,8 @@ drive and monitor a real Pathways training JobSet on a GKE TPU cluster.
   in-workload HTTP signaling.
 * `gke_elasticity_demo.html` provides a single-screen monitoring view for live
   training step, loss, cumulative goodput, logical workload slices, physical
-  cluster TPU slices, recovery stages, and the JAX driver event stream.
+  cluster TPU slices, live elasticity mode selection, recovery stages, and the
+  scrollable JAX driver event stream.
 
 ### Prerequisites
 
@@ -110,8 +113,8 @@ The skill checks your local Python 3.11+ interpreter (including `pyenv` or `uv`)
 inspects your GKE cluster's CPU nodes, TPU node pools, taints, and Kueue queues,
 asks one grouped set of questions for any missing inputs, builds and pushes the
 workload image, customizes and dry-run validates `elastic_demo.yaml`, and
-starts the live monitoring dashboard on port `48259` (locally or via SSH port
-forwarding).
+starts the live monitoring dashboard on port `48259` (locally, via remote
+proxy, or via SSH port forwarding).
 
 #### Option 2: Step-by-Step CLI Setup
 
@@ -165,8 +168,9 @@ checkout of `pathwaysutils` into `--image`.
 
 `elastic_demo.yaml` contains two documents: a `ConfigMap` named
 `elastic-workload-code` holding `elastic_workload.py`, the `simple_model`
-package, `elastic/manager.py`, and `test/mock_fault_injection.py` from your
-checkout, followed by the `JobSet` produced by `PathwaysJobSet`. The JobSet has
+package, `elastic/manager.py`, `test/mock_fault_injection.py`, and
+`snapshotter.py` from your checkout, followed by the `JobSet` produced by
+`PathwaysJobSet`. The JobSet has
 one `pathways-head` replicated job (the JAX driver plus the Pathways resource
 manager and proxy as init containers) and one `pathways-worker` replicated job
 per slice. Review the file and apply any edits required by your cluster:
@@ -225,12 +229,14 @@ and attaches to the JobSet already running on the cluster.
 ##### 6. Drive the demo from the browser
 
 The monitoring page attaches to the JobSet once the head pod starts. From that
-single view you can start, pause, or reset training, inject real node
-preemptions (`kubectl cordon` + `drain`) or in-workload fault signals, and watch
-step progress, loss, goodput, recovery stages, and slice placement update live
-from the head pod logs. The cluster pool section lists matching TPU node pools
-from `cloud.google.com/gke-nodepool` and marks each pool as active, spare, busy,
-or cordoned.
+single view you can start, pause, or reset training, switch the elasticity
+recovery mode live (`step_snapshot_replica_resize` vs
+`step_snapshot_pause_resume`), inject real node preemptions (`kubectl cordon` +
+`drain`) or in-workload fault signals, and watch step progress, loss, goodput,
+recovery stages, and slice placement update live from the head pod logs. The
+cluster pool section lists matching TPU node pools from
+`cloud.google.com/gke-nodepool` and marks each pool as active, spare, busy, or
+cordoned.
 
 The head pod waits for the Start Training button (`--wait_for_start_signal=true`),
 so nothing steps until you click it.

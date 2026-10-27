@@ -251,6 +251,24 @@ class ElasticWorkloadSimulationTest(parameterized.TestCase):
       self.assertTrue(workload.reset_requested)
       self.assertFalse(workload.start_event.is_set())
 
+      handler.path = "/mode?mode=step_snapshot_pause_resume"
+      handler.do_GET()
+      self.assertEqual(
+          workload.mode,
+          elastic_workload.ElasticityMode.STEP_SNAPSHOT_PAUSE_RESUME,
+      )
+
+      handler.path = "/mode?mode=step_snapshot_replica_resize"
+      handler.do_GET()
+      self.assertEqual(
+          workload.mode,
+          elastic_workload.ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE,
+      )
+
+      handler.path = "/mode?mode=invalid_mode"
+      handler.do_GET()
+      handler.send_response.assert_called_with(400)
+
       handler.path = "/unknown"
       handler.do_GET()
       handler.send_response.assert_called_with(404)

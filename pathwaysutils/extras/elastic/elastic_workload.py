@@ -157,9 +157,23 @@ class WorkloadControlHandler(http.server.BaseHTTPRequestHandler):
           w.simulator.mark_slice_lost(s_idx, em.slice_to_devices)
       else:
         w.pending_reconnect_slice = s_idx
-        if w.simulator and not w.start_event.is_set():
+        if w.simulator:
           w.simulator.mark_slice_connected(s_idx, em.slice_to_devices)
       self._send_json({"status": "ok", "action": action, "slice": s_idx})
+    elif p.path == "/mode":
+      mode_str = urllib.parse.parse_qs(p.query).get(
+          "mode", [ElasticityMode.STEP_SNAPSHOT_REPLICA_RESIZE.value]
+      )[0]
+      try:
+        new_mode = ElasticityMode(mode_str)
+      except ValueError:
+        self._send_json({"error": f"invalid mode: {mode_str}"}, code=400)
+        return
+      w.mode = new_mode
+      _logger.warning(
+          ">>> [CONTROL] ELASTICITY MODE set to %s <<<", w.mode.value
+      )
+      self._send_json({"status": "ok", "mode": w.mode.value})
     else:
       self._send_json({"error": "not found"}, code=404)
 
@@ -261,14 +275,13 @@ class ElasticWorkload:
   def precompile_step_functions(self) -> None:
     """Pre-compiles sharded step executables for active slice subsets."""
     total_slices = self.elastic_manager.total_slice_count
-    target_subsets = [frozenset(range(total_slices))]
-    if self.mode.is_replica_resize:
-      all_idx = frozenset(range(total_slices))
-      target_subsets.extend(frozenset({s}) for s in range(total_slices))
-      target_subsets.extend(
-          all_idx - {s} for s in range(total_slices) if all_idx - {s}
-      )
-      target_subsets = list(dict.fromkeys(target_subsets))
+    all_idx = frozenset(range(total_slices))
+    target_subsets = [all_idx]
+    target_subsets.extend(frozenset({s}) for s in range(total_slices))
+    target_subsets.extend(
+        all_idx - {s} for s in range(total_slices) if all_idx - {s}
+    )
+    target_subsets = list(dict.fromkeys(target_subsets))
 
     for active_idx in target_subsets:
       num_slices = len(active_idx)
@@ -294,6 +307,17 @@ class ElasticWorkload:
   def reconfigure_mesh_and_executables(self) -> None:
     """Switches current artifacts to match active slices."""
     active = frozenset(self.elastic_manager.active_slice_indices)
+    if active not in self.compiled_slices:
+      num_slices = len(active)
+      sorted_devs = self.get_slice_devices(active)
+      devices_per_slice = len(sorted_devs) // num_slices
+      self.graphdef, artifacts = simple_model.compile_training_step(
+          self.config,
+          sorted_devs,
+          devices_per_slice=devices_per_slice,
+          mesh_shape=(num_slices, devices_per_slice),
+      )
+      self.compiled_slices[active] = artifacts
     self.current_slice_count = len(active)
     self.current_artifacts = self.compiled_slices[active]
     _logger.info(
@@ -460,16 +484,47 @@ class ElasticWorkload:
     """Reconfigures the mesh and restores state before an elastic retry."""
     if not self.is_initialized:
       return
-    _logger.warning(
-        ">>> [ELASTIC RECOVERY TRIGGERED] Active slices: %s <<<",
-        self.elastic_manager.active_slice_indices,
-    )
+    if (
+        not self.mode.is_replica_resize
+        and len(self.elastic_manager.active_slice_indices)
+        < self.elastic_manager.total_slice_count
+    ):
+      _logger.warning(
+          ">>> [ELASTIC RECOVERY TRIGGERED] Waiting for %d slices in %s mode"
+          " (currently active: %s) <<<",
+          self.elastic_manager.total_slice_count,
+          self.mode.value,
+          self.elastic_manager.active_slice_indices,
+      )
+      while (
+          not self.mode.is_replica_resize
+          and len(self.elastic_manager.active_slice_indices)
+          < self.elastic_manager.total_slice_count
+      ):
+        _logger.info(
+            "%d slices active. Wanting at least %d. Active indices: %s",
+            len(self.elastic_manager.active_slice_indices),
+            self.elastic_manager.total_slice_count,
+            frozenset(self.elastic_manager.active_slice_indices),
+        )
+        time.sleep(5)
+        self.elastic_manager.active_slice_indices = (
+            elastic.get_active_slice_indices(
+                self.elastic_manager.slice_to_devices
+            )
+        )
+      self.elastic_manager.available_inactive_slices = frozenset()
+    else:
+      _logger.warning(
+          ">>> [ELASTIC RECOVERY TRIGGERED] Active slices: %s <<<",
+          self.elastic_manager.active_slice_indices,
+      )
+    self.pending_reconnect_slice = None
     _logger.info(
         "Stage 1: Active slices detected: %s",
         frozenset(self.elastic_manager.active_slice_indices),
     )
-    if self.mode.is_replica_resize:
-      self.reconfigure_mesh_and_executables()
+    self.reconfigure_mesh_and_executables()
     self.restore_state()
     self.prev_loss, self.prev_start_time = None, None
     _logger.warning(
@@ -557,7 +612,7 @@ class ElasticWorkload:
     )
 
     @self.elastic_manager.elastic_retry(
-        minimum_slice_count=1 if self.mode.is_replica_resize else None,
+        minimum_slice_count=1,
         poll_interval=5,
         pre_callback=self.pre_callback_restore_and_reconfigure,
     )

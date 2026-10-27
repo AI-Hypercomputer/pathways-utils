@@ -248,6 +248,11 @@
       min-height: 64px;
       box-sizing: border-box;
     }
+    #logContainer {
+      height: 15rem;
+      max-height: 15rem;
+      overflow-y: auto;
+    }
 
     /* Fallback utility rules when CDN stylesheet is unavailable */
     .bg-\[var\(--background\)\] { background-color: var(--background); }
@@ -332,12 +337,15 @@
       </div>
 
       <div class="kpi-card bg-[var(--card)] border border-[var(--border)] rounded-lg p-3">
-        <div class="kpi-lbl">Topology</div>
+        <div class="kpi-lbl">Topology &amp; Mode</div>
         <div class="flex items-baseline gap-1.5 min-w-0">
           <span id="kpiSlices" class="kpi-val text-[var(--foreground)]">2</span>
           <span id="kpiDevicesLabel" class="text-[11px] font-mono text-[var(--muted-foreground)] truncate">slices &middot; 64 TPUs</span>
         </div>
-        <div id="kpiModeName" class="kpi-sub font-mono text-indigo-300">step_snapshot_replica_resize</div>
+        <select id="kpiModeName" title="Select elasticity recovery mode" class="w-full mt-0.5 bg-[var(--secondary)] text-indigo-300 font-mono text-[11px] font-medium rounded px-2 py-0.5 border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer">
+          <option value="step_snapshot_replica_resize">step_snapshot_replica_resize</option>
+          <option value="step_snapshot_pause_resume">step_snapshot_pause_resume</option>
+        </select>
       </div>
     </div>
 
@@ -350,7 +358,11 @@
         </div>
 
         <div class="flex items-center gap-1.5 flex-wrap">
-          <select id="mechanismSelector" title="Fault injection mechanism" class="bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-medium rounded px-2.5 h-[28px] border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500">
+          <select id="modeSelector" title="Elasticity recovery mode" class="bg-[var(--secondary)] text-indigo-300 font-mono text-[11px] font-medium rounded px-2.5 h-[28px] border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer">
+            <option value="step_snapshot_replica_resize">Mode: Replica Resize</option>
+            <option value="step_snapshot_pause_resume">Mode: Pause &amp; Resume</option>
+          </select>
+          <select id="mechanismSelector" title="Fault injection mechanism" class="bg-[var(--secondary)] text-[var(--foreground)] text-[11px] font-medium rounded px-2.5 h-[28px] border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer">
             <option value="k8s">Node Cordon + Drain</option>
             <option value="workload">In-Workload RPC</option>
           </select>
@@ -454,7 +466,7 @@
           </div>
         </div>
 
-        <div id="logContainer" class="custom-scrollbar mt-2 h-60 flex-1 overflow-y-auto space-y-1 font-mono text-[11px] p-2.5 bg-[var(--secondary)]/40 rounded border border-[var(--border)]/60"></div>
+        <div id="logContainer" class="custom-scrollbar mt-2 h-60 overflow-y-auto space-y-1 font-mono text-[11px] p-2.5 bg-[var(--secondary)]/40 rounded border border-[var(--border)]/60"></div>
       </div>
     </div>
 
@@ -486,6 +498,7 @@
       slotActive: [true, true],
       disruptedSlot: null,
       disruptedRack: null,
+      disruptedMechanism: null,
       reconnectingSlot: null,
       activeIndices: [0, 1],
       activeSliceCount: 2,
@@ -513,6 +526,7 @@
     const btnToggleRun = document.getElementById("btnToggleRun");
     const btnReset = document.getElementById("btnReset");
     const btnDelete = document.getElementById("btnDelete");
+    const modeSelector = document.getElementById("modeSelector");
     const mechanismSelector = document.getElementById("mechanismSelector");
     const interruptButtonsContainer = document.getElementById("interruptButtonsContainer");
     const btnRestoreSlice = document.getElementById("btnRestoreSlice");
@@ -636,6 +650,7 @@
       state.activeSliceCount = n;
       state.disruptedSlot = null;
       state.disruptedRack = null;
+      state.disruptedMechanism = null;
       state.reconnectingSlot = null;
       state.sliceStates = Array.from({ length: totalRacks }, (_, i) => (i < n ? "active" : "standby"));
       ensureDynamicDomBuilt();
@@ -717,10 +732,38 @@
     }
 
     let logCount = 0;
+    let isLogPinnedToBottom = true;
+    let scrollRafPending = false;
+    let renderRafPending = false;
+
+    logContainer.addEventListener("scroll", () => {
+      isLogPinnedToBottom =
+        logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 24;
+    }, { passive: true });
+
+    function scheduleLogScroll() {
+      if (scrollRafPending || !isLogPinnedToBottom) return;
+      scrollRafPending = true;
+      requestAnimationFrame(() => {
+        scrollRafPending = false;
+        if (isLogPinnedToBottom) {
+          logContainer.scrollTop = logContainer.scrollHeight;
+        }
+      });
+    }
+
+    function scheduleRender() {
+      if (renderRafPending) return;
+      renderRafPending = true;
+      requestAnimationFrame(() => {
+        renderRafPending = false;
+        updateUI();
+        renderCharts();
+      });
+    }
+
     function addLog(level, component, message, customTimeStr) {
       logCount++;
-      const isAtBottom =
-        logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 24;
       const timeStr = customTimeStr || new Date().toISOString().substring(11, 23);
       const row = document.createElement("div");
       row.className = "flex items-start gap-2 py-0.5 leading-snug";
@@ -739,17 +782,10 @@
       row.lastElementChild.textContent = message;
 
       logContainer.appendChild(row);
-      if (logContainer.children.length > 2000) {
-        const firstChild = logContainer.firstChild;
-        const removedHeight = firstChild.offsetHeight;
-        logContainer.removeChild(firstChild);
-        if (!isAtBottom) {
-          logContainer.scrollTop = Math.max(0, logContainer.scrollTop - removedHeight);
-        }
+      while (logContainer.children.length > 300) {
+        logContainer.removeChild(logContainer.firstChild);
       }
-      if (isAtBottom) {
-        logContainer.scrollTop = logContainer.scrollHeight;
-      }
+      scheduleLogScroll();
       logStats.textContent = `${logCount} ${logCount === 1 ? "event" : "events"}`;
     }
 
@@ -842,7 +878,9 @@
           if (r < totalRacks) nextStates[r] = "active";
         } else {
           const dispR = (state.disruptedSlot === s && state.disruptedRack !== null) ? state.disruptedRack : r;
-          if (dispR < totalRacks) nextStates[dispR] = "disrupted";
+          if (dispR < totalRacks) {
+            nextStates[dispR] = state.disruptedMechanism === "workload" ? "active" : "disrupted";
+          }
         }
       }
       state.sliceStates = nextStates;
@@ -1043,7 +1081,8 @@
       kpiLossDelta.textContent = state.loss !== null ? "Latest step loss" : "Waiting for step 1";
       kpiSlices.textContent = `${state.activeSliceCount}/${state.numSlices}`;
       kpiDevicesLabel.textContent = `slices \u00b7 ${state.activeSliceCount * state.chipsPerSlice} chips`;
-      kpiModeName.textContent = state.mode;
+      kpiModeName.value = state.mode;
+      modeSelector.value = state.mode;
       kpiGoodput.textContent = `${state.goodput.toFixed(1)}%`;
 
       if (state.jobsetStatus === "IDLE") {
@@ -1277,6 +1316,11 @@
             if (!isAct) {
               state.disruptedSlot = s;
               state.disruptedRack = state.slotRacks[s];
+              if (!state.disruptedMechanism) {
+                const anyCordoned = state.tpuPools.some(p => p.state === "cordoned");
+                state.disruptedMechanism = anyCordoned ? "k8s" : "workload";
+                mechanismSelector.value = state.disruptedMechanism;
+              }
             }
           }
           state.activeIndices = state.slotRacks.filter((_, idx) => state.slotActive[idx]);
@@ -1287,6 +1331,7 @@
         state.slotActive = Array.from({ length: n }, () => true);
         state.disruptedSlot = null;
         state.disruptedRack = null;
+        state.disruptedMechanism = null;
         state.isReconnecting = false;
         state.reconnectingSlot = null;
         state.activeIndices = [...state.slotRacks];
@@ -1396,6 +1441,7 @@
       state.slotActive[slotIdx] = false;
       state.disruptedSlot = slotIdx;
       state.disruptedRack = targetDisruptedRack;
+      state.disruptedMechanism = mechanism;
       state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
       state.activeSliceCount = state.activeIndices.length;
       state.inRecovery = true;
@@ -1432,6 +1478,7 @@
       state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
       state.disruptedSlot = null;
       state.disruptedRack = null;
+      state.disruptedMechanism = null;
       state.pendingInterrupt = false;
       state.isReconnecting = true;
       state.reconnectingSlot = slotIdx;
@@ -1461,6 +1508,30 @@
         body: JSON.stringify({ slice: slotIdx, mechanism }),
       });
     }
+
+    async function changeElasticityMode(newMode) {
+      if (!newMode || newMode === state.mode) return;
+      state.mode = newMode;
+      kpiModeName.value = newMode;
+      modeSelector.value = newMode;
+      addLog("INFO", "Control", `Switching elasticity mode to ${newMode}...`);
+      updateUI();
+      try {
+        const res = await fetch("/api/signal/mode", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({ mode: newMode }),
+        });
+        const data = await res.json();
+        if (data.snapshot) applySnapshot(data.snapshot);
+        addLog("SUCCESS", "Control", `Elasticity mode set to ${newMode}`);
+      } catch (e) {
+        addLog("ERROR", "Control", `Failed to switch elasticity mode: ${e}`);
+      }
+    }
+
+    kpiModeName.addEventListener("change", (e) => changeElasticityMode(e.target.value));
+    modeSelector.addEventListener("change", (e) => changeElasticityMode(e.target.value));
 
     btnRestoreSlice.addEventListener("click", triggerReconnect);
 
@@ -1522,6 +1593,7 @@
               state.slotActive = Array.from({ length: state.numSlices }, () => true);
               state.disruptedSlot = null;
               state.disruptedRack = null;
+              state.disruptedMechanism = null;
               state.isReconnecting = false;
               state.reconnectingSlot = null;
               state.activeIndices = [...state.slotRacks];
@@ -1538,18 +1610,28 @@
 
           state.history.lossSteps.push(data.step);
           state.history.lossValues.push(data.loss);
+          if (state.history.lossSteps.length > 1500) {
+            state.history.lossSteps.shift();
+            state.history.lossValues.shift();
+          }
           state.history.goodputTimeSec.push(Math.max(0, data.elapsed_time));
           state.history.goodputValues.push(data.goodput);
+          if (state.history.goodputTimeSec.length > 1500) {
+            state.history.goodputTimeSec.shift();
+            state.history.goodputValues.shift();
+          }
 
-          updateUI();
-          renderCharts();
+          scheduleRender();
         } else if (data.type === "goodput_tick") {
           state.goodput = data.goodput;
           state.elapsedTimeSec = data.elapsed_time;
           state.history.goodputTimeSec.push(Math.max(0, data.elapsed_time));
           state.history.goodputValues.push(data.goodput);
-          updateUI();
-          renderCharts();
+          if (state.history.goodputTimeSec.length > 1500) {
+            state.history.goodputTimeSec.shift();
+            state.history.goodputValues.shift();
+          }
+          scheduleRender();
         } else if (data.type === "event") {
           if (data.event === "workload_ready") {
             state.workloadReady = true;
@@ -1576,6 +1658,9 @@
             state.slotActive[slotIdx] = false;
             state.disruptedSlot = slotIdx;
             state.disruptedRack = targetRack;
+            state.disruptedMechanism = data.node ? "k8s" : (state.disruptedMechanism || mechanismSelector.value);
+            state.isReconnecting = false;
+            state.reconnectingSlot = null;
             state.activeIndices = state.slotRacks.filter((_, i) => state.slotActive[i]);
             state.activeSliceCount = state.activeIndices.length;
             state.inRecovery = true;
@@ -1614,6 +1699,7 @@
               state.slotActive = Array.from({ length: state.numSlices }, () => true);
               state.disruptedSlot = null;
               state.disruptedRack = null;
+              state.disruptedMechanism = null;
               state.activeIndices = [...state.slotRacks];
               state.jobsetStatus = "RUNNING";
               syncRackStates();
@@ -1659,6 +1745,13 @@
         if (snap.jobset_status === "IDLE" && state.jobsetStatus !== "IDLE") {
           state.jobsetStatus = "IDLE";
           state.running = false;
+          state.isReconnecting = false;
+          state.reconnectingSlot = null;
+        } else if (snap.jobset_status === "FAILED" && state.jobsetStatus !== "FAILED") {
+          state.jobsetStatus = "FAILED";
+          state.running = false;
+          state.isReconnecting = false;
+          state.reconnectingSlot = null;
         }
         updateUI();
       } catch (e) {}
