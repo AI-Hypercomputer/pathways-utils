@@ -20,9 +20,11 @@ without requiring physical pod/node cordoning or deletion.
 import functools
 from typing import Any, Mapping, Sequence, Set
 from unittest import mock
+import weakref
 import jax
 import jax.core
 import jax.extend.core
+import jax.stages
 import numpy as np
 
 
@@ -55,8 +57,26 @@ class DeviceLossSimulator:
     self._generation: int = 1
     self._device_lost_history: dict[int, list[int]] = {}
     self._array_generation: dict[int, int] = {}
+    self._tracked_refs: dict[int, weakref.ref[Any]] = {}
     self._active = False
     self._patchers: list[Any] = []
+
+  def _evict_id(self, arr_id: int) -> None:
+    """Removes tracking metadata when an array is garbage-collected."""
+    self._corrupted_array_ids.discard(arr_id)
+    self._array_devices.pop(arr_id, None)
+    self._array_generation.pop(arr_id, None)
+    self._tracked_refs.pop(arr_id, None)
+
+  def _register_weakref(self, arr: jax.Array, arr_id: int) -> None:
+    """Registers a weakref finalizer so recycled Python ids do not leak state."""
+    existing_ref = self._tracked_refs.get(arr_id)
+    if existing_ref is not None and existing_ref() is not arr:
+      self._evict_id(arr_id)
+    if arr_id not in self._tracked_refs:
+      self._tracked_refs[arr_id] = weakref.ref(
+          arr, lambda _, aid=arr_id: self._evict_id(aid)
+      )
 
   def bind_array_to_devices(
       self, arr: jax.Array | jax.core.Tracer, devices: Sequence[jax.Device]
@@ -64,6 +84,7 @@ class DeviceLossSimulator:
     """Explicitly binds a JAX array to mock or custom devices for OSS testing."""
     if isinstance(arr, jax.Array) and not isinstance(arr, jax.core.Tracer):
       arr_id = id(arr)
+      self._register_weakref(arr, arr_id)
       dev_ids = {dev.id for dev in devices}
       self._array_devices[arr_id] = dev_ids
       if arr_id not in self._array_generation:
@@ -73,6 +94,7 @@ class DeviceLossSimulator:
     """Tracks a JAX array generation and device mapping."""
     if isinstance(arr, jax.Array) and not isinstance(arr, jax.core.Tracer):
       arr_id = id(arr)
+      self._register_weakref(arr, arr_id)
       if arr_id not in self._array_devices:
         dev_ids = {dev.id for dev in arr.devices()}
         self._array_devices[arr_id] = dev_ids
@@ -235,20 +257,38 @@ class DeviceLossSimulator:
 
       return wrapper
 
+    def patched_compiled_call_factory(orig_call):
+      def wrapper(compiled_self, *args, **kwargs):
+        out = orig_call(compiled_self, *args, **kwargs)
+        inputs = jax.tree_util.tree_leaves((args, kwargs))
+        return sim.propagate_corruption(inputs, out)
+
+      return wrapper
+
     def patched_jit_factory(orig_jit):
+      class _JitWrapper:
+        """Wraps a jitted function to propagate corruption while delegating AOT methods."""
+
+        def __init__(self, jitted_fn: Any):
+          self._jitted_fn = jitted_fn
+          functools.update_wrapper(self, jitted_fn)
+
+        def __call__(self, *call_args: Any, **call_kwargs: Any) -> Any:
+          out = self._jitted_fn(*call_args, **call_kwargs)
+          inputs = jax.tree_util.tree_leaves((call_args, call_kwargs))
+          return sim.propagate_corruption(inputs, out)
+
+        def lower(self, *args: Any, **kwargs: Any) -> Any:
+          return self._jitted_fn.lower(*args, **kwargs)
+
+        def trace(self, *args: Any, **kwargs: Any) -> Any:
+          return self._jitted_fn.trace(*args, **kwargs)
+
       def wrapper(fun=None, **kwargs):
         if fun is None:
           return lambda f: wrapper(f, **kwargs)
 
-        jitted_fn = orig_jit(fun, **kwargs)
-
-        @functools.wraps(jitted_fn)
-        def inner(*call_args, **call_kwargs):
-          out = jitted_fn(*call_args, **call_kwargs)
-          inputs = jax.tree_util.tree_leaves((call_args, call_kwargs))
-          return sim.propagate_corruption(inputs, out)
-
-        return inner
+        return _JitWrapper(orig_jit(fun, **kwargs))
 
       return wrapper
 
@@ -260,6 +300,9 @@ class DeviceLossSimulator:
         ),
         self._patch(
             jax.extend.core.Primitive, "bind", patched_primitive_bind_factory
+        ),
+        self._patch(
+            jax.stages.Compiled, "__call__", patched_compiled_call_factory
         ),
         self._patch(jax, "jit", patched_jit_factory),
         self._patch(jax, "pmap", patched_jit_factory),

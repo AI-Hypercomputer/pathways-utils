@@ -141,6 +141,53 @@ class MockFaultInjectionTest(absltest.TestCase):
       _ = np.asarray(out)
     self.assertIn("DATA_LOSS", str(ctx.exception))
 
+  def test_ahead_of_time_compiled_function_propagates_corruption(self):
+    """Verifies that jax.jit(fn).lower(...).compile() works and propagates corruption."""
+
+    def my_func(x):
+      return x * 2.0
+
+    dev = self.devices[0]
+    arr = jnp.array([1.0, 2.0])
+    compiled_fn = (
+        jax.jit(my_func)
+        .lower(jax.ShapeDtypeStruct(arr.shape, arr.dtype))
+        .compile()
+    )
+
+    self.simulator.bind_array_to_devices(arr, [dev])
+    self.simulator.mark_device_lost(dev)
+
+    out = compiled_fn(arr)
+    with self.assertRaises(jax.errors.JaxRuntimeError) as ctx:
+      _ = np.asarray(out)
+    self.assertIn("DATA_LOSS", str(ctx.exception))
+
+  def test_garbage_collected_corrupted_array_evicts_tracking_state(self):
+    """Verifies that garbage-collected corrupted arrays are evicted from tracking."""
+    _, slice_to_devices = mock_fault_injection.create_mock_devices(
+        num_slices=2, devices_per_slice=1
+    )
+    corrupted_arr = jnp.array([1.0, 2.0])
+    healthy_arr = jnp.array([3.0, 4.0])
+    self.simulator.bind_array_to_devices(corrupted_arr, slice_to_devices[0])
+    self.simulator.bind_array_to_devices(healthy_arr, slice_to_devices[1])
+    self.simulator.mark_slice_lost(0, slice_to_devices)
+
+    # Trigger corruption on corrupted_arr and its temporary sliced derivative.
+    corrupted_sliced = corrupted_arr[:1]
+    corrupted_id = id(corrupted_sliced)
+    self.assertTrue(self.simulator.is_array_corrupted(corrupted_sliced))
+    self.assertIn(corrupted_id, self.simulator._corrupted_array_ids)
+    del corrupted_sliced
+    self.assertNotIn(corrupted_id, self.simulator._corrupted_array_ids)
+    self.assertNotIn(corrupted_id, self.simulator._array_devices)
+    self.assertNotIn(corrupted_id, self.simulator._array_generation)
+
+    # Healthy array on slice 1 must remain healthy.
+    jax.block_until_ready(healthy_arr)
+    np.testing.assert_array_equal(np.asarray(healthy_arr), [3.0, 4.0])
+
   def test_block_until_ready_raises_data_loss(self):
     dev = self.devices[0]
     arr = jnp.array([1.0, 2.0])
