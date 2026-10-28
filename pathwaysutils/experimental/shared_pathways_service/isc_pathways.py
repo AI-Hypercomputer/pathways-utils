@@ -174,7 +174,7 @@ def _deploy_pathways_proxy_server(
   )
 
   _logger.info("Deploying Pathways proxy: %s", proxy_job_name)
-  gke_utils.deploy_gke_yaml(substituted_yaml)
+  gke_utils.deploy_gke_yaml(substituted_yaml, action="create")
 
   _logger.info("Successfully deployed Pathways proxy.")
 
@@ -306,6 +306,7 @@ class _ISCPathways:
     self._old_jax_platforms_config = None
     self._old_jax_backend_target_config = None
     self.total_chips = self._get_total_chips()
+    self._proxy_deployed = False
     self._cleaned_up = False
     self._cleanup_lock = threading.Lock()
     self._original_signal_handlers: dict[signal.Signals, Any] = {}
@@ -403,6 +404,7 @@ class _ISCPathways:
           proxy_server_image=self.proxy_server_image,
           proxy_options=self.proxy_options,
       )
+      self._proxy_deployed = True
       self.metrics_collector.record_user_waiting(True)
       cloud_logging_link = gke_utils.get_log_link(
           cluster=self.cluster,
@@ -496,7 +498,7 @@ class _ISCPathways:
           self._log_process = None
 
       # Delete the proxy GKE job.
-      if self._proxy_job_name:
+      if self._proxy_job_name and self._proxy_deployed:
         _logger.info("Deleting Pathways proxy...")
         try:
           gke_utils.delete_gke_resource("job", self._proxy_job_name)
