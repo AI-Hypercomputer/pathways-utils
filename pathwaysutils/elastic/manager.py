@@ -214,20 +214,6 @@ class Manager:
     else:
       raise ValueError(f"Unsupported type: {type(x)=}")
 
-  def _cleanup_on_retry(self):
-    """Cleans up JAX caches and traces on retry."""
-    try:
-      _logger.debug("Cleaning up any ongoing traces")
-      jax.profiler.stop_trace()
-    except (RuntimeError, ValueError):
-      _logger.debug("No ongoing traces to clean up")
-    except Exception:  # pylint: disable=broad-exception-caught
-      _logger.exception("Error cleaning up ongoing traces")
-
-    jax.clear_caches()
-    for array in jax.live_arrays():
-      array.delete()
-
   def _check_inactive_slices(self) -> None:
     """Checks inactive slices and updates available_inactive_slices."""
     if not self.inactive_slice_indices:
