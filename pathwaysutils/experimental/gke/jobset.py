@@ -992,7 +992,10 @@ class PathwaysJobSet:
     # stopped after, pathways-worker.
     sidecar_container.restart_policy = "Always"  # pyrefly: ignore[missing-attribute]
 
-    init_containers = list(pod_spec.init_containers or [])
+    sidecar_name = f"{name}-sidecar"
+    init_containers = [
+        c for c in (pod_spec.init_containers or []) if c.name != sidecar_name
+    ]
     init_containers.append(sidecar_container)
     pod_spec.init_containers = init_containers
 
@@ -1011,7 +1014,17 @@ class PathwaysJobSet:
           )
         container.args = args
         volume_mounts = container.volume_mounts or []
-        if not any(vm.name == shm_volume_name for vm in volume_mounts):
+        existing_shm_mount = next(
+            (vm for vm in volume_mounts if vm.name == shm_volume_name), None
+        )
+        if existing_shm_mount is not None:
+          if existing_shm_mount.mount_path != shm_mount_path:
+            raise ValueError(
+                f"Conflicting shm_mount_path {shm_mount_path!r};"
+                f" {shm_volume_name!r} is already mounted at"
+                f" {existing_shm_mount.mount_path!r}."
+            )
+        else:
           volume_mounts.append(
               client.V1VolumeMount(
                   name=shm_volume_name, mount_path=shm_mount_path
@@ -1105,7 +1118,11 @@ class PathwaysJobSet:
       self._add_volume_to_pod_spec(pod_spec, volume)
 
       for container in matching:
-        volume_mounts = container.volume_mounts or []
+        volume_mounts = [
+            vm
+            for vm in (container.volume_mounts or [])
+            if vm.mount_path != mount_path
+        ]
         volume_mounts.append(volume_mount)
         container.volume_mounts = volume_mounts
 
@@ -1115,22 +1132,18 @@ class PathwaysJobSet:
       self,
       libtpu_path: str,
       containers: str | Sequence[str] = "all",
-      mount_host_dir: bool = False,
   ) -> "PathwaysJobSet":
     """Overrides `TPU_LIBRARY_PATH` in the selected Pathways containers.
 
     Args:
       libtpu_path: Absolute container path to `libtpu.so`.
       containers: Target container selector (e.g. `"all"` or `"worker"`).
-      mount_host_dir: If True, mounts the parent directory of `libtpu_path` from
-        the host node into matching containers.
 
     Returns:
       Self for method chaining.
 
     Raises:
-      ValueError: If `libtpu_path` is not a valid absolute file path or has no
-        parent subdirectory when `mount_host_dir=True`.
+      ValueError: If `libtpu_path` is not a valid absolute file path.
     """
     stripped = libtpu_path.strip()
     if not stripped.startswith("/") or stripped.endswith("/"):
@@ -1139,11 +1152,6 @@ class PathwaysJobSet:
           f" {libtpu_path!r})."
       )
     path = posixpath.normpath(stripped)
-    parent_dir = posixpath.dirname(path)
-    if mount_host_dir and parent_dir == "/":
-      raise ValueError(
-          f"mount_host_dir=True requires a subdirectory (got {libtpu_path!r})."
-      )
 
     for job_template in (self._head_job_template, self._worker_job_template):
       pod_spec = job_template.spec.template.spec
@@ -1154,29 +1162,15 @@ class PathwaysJobSet:
       if not matching:
         continue
 
-      if mount_host_dir:
-        self._add_volume_to_pod_spec(
-            pod_spec,
-            client.V1Volume(
-                name=CUSTOM_LIBTPU_VOLUME_NAME,
-                host_path=client.V1HostPathVolumeSource(
-                    path=parent_dir, type="DirectoryOrCreate"
-                ),
-            ),
-        )
       for container in matching:
-        if mount_host_dir:
-          volume_mounts = container.volume_mounts or []
-          volume_mounts.append(
-              client.V1VolumeMount(
-                  name=CUSTOM_LIBTPU_VOLUME_NAME,
-                  mount_path=parent_dir,
-                  read_only=True,
-              )
-          )
-          container.volume_mounts = volume_mounts
-        env = container.env or []
-        env.append(client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path))
+        env = list(container.env or [])
+        new_env_var = client.V1EnvVar(name="TPU_LIBRARY_PATH", value=path)
+        for i, existing_env in enumerate(env):
+          if existing_env.name == "TPU_LIBRARY_PATH":
+            env[i] = new_env_var
+            break
+        else:
+          env.append(new_env_var)
         container.env = env
 
     return self
