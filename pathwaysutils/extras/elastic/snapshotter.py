@@ -21,8 +21,7 @@ from typing import Any
 
 from etils import epath
 import jax
-from orbax.checkpoint.experimental.v1._src.training.metadata import types as training_metadata_types
-from orbax.checkpoint.experimental.v1._src.tree import types as tree_types
+import orbax.checkpoint as ocp
 
 
 def is_shardable_array(x: ...) -> bool:  # pyrefly: ignore[invalid-annotation]
@@ -77,7 +76,7 @@ class Snapshotter:
     self._concatenate_by_mesh_axis, self._split_by_mesh_axis = (
         _get_pathwaysutils()
     )
-    self._latest_snapshot: tuple[list[tree_types.PyTree], int] | None = None
+    self._latest_snapshot: tuple[list[ocp.v1.tree.PyTree], int] | None = None
     self._lock = threading.Lock()
     self._queue = queue.Queue(maxsize=1)
     self.replica_axis_index = replica_axis_index
@@ -101,8 +100,8 @@ class Snapshotter:
         self._queue.task_done()
 
   def _to_snapshot_state(
-      self, state: tree_types.PyTree
-  ) -> list[tree_types.PyTree]:
+      self, state: ocp.v1.tree.PyTree
+  ) -> list[ocp.v1.tree.PyTree]:
     """Converts a PyTree into a list of replica PyTrees in pinned host memory.
 
     Args:
@@ -153,7 +152,7 @@ class Snapshotter:
 
     return replica_trees
 
-  def save(self, step: int, state: tree_types.PyTree) -> None:
+  def save(self, step: int, state: ocp.v1.tree.PyTree) -> None:
     """Backs up JAX array states to pinned host memory, asynchronously.
 
     If previous snapshotting requests are still in progress, this request may
@@ -177,10 +176,10 @@ class Snapshotter:
 
   def load(
       self,
-      abstract_state: tree_types.PyTree,
+      abstract_state: ocp.v1.tree.PyTree,
       *,
       reset_snapshot_state: bool = True,
-  ) -> tree_types.PyTree:
+  ) -> ocp.v1.tree.PyTree:
     """Move arrays from workers onto TPU devices.
 
     Uses `abstract_state.sharding` to properly re-partition onto the new mesh.
@@ -275,13 +274,13 @@ class Snapshotter:
     self._queue.join()
 
   @property
-  def latest(self) -> training_metadata_types.CheckpointMetadata[None] | None:
+  def latest(self) -> ocp.v1.training.CheckpointMetadata[None] | None:
     """Returns the training step of the most recently pinned backup."""
     with self._lock:
       if self._latest_snapshot is None:
         return None
       _, step = self._latest_snapshot
-    return training_metadata_types.CheckpointMetadata(
+    return ocp.v1.training.CheckpointMetadata(
         step=step,
         path=epath.Path(),
         metadata=None,

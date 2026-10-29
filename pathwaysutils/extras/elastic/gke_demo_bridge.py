@@ -51,10 +51,11 @@ from typing import Any
 import urllib.parse
 import webbrowser
 
-from kubernetes import client as k8s_client
 import yaml
 
 from pathwaysutils.experimental.gke import jobset as pw_jobset
+
+k8s_client = pw_jobset.client
 
 _logger = logging.getLogger("gke_demo_bridge")
 
@@ -188,15 +189,18 @@ def compute_topology_specs(tpu_type: str, topology: str) -> dict[str, Any]:
 
 def _current_kubeconfig_context() -> str:
   """Returns the active kubeconfig context, or an empty string if none is set."""
-  proc = subprocess.run(
-      ["kubectl", "config", "current-context"],
-      capture_output=True,
-      text=True,
-      check=False,
-  )
-  if proc.returncode != 0:
+  try:
+    proc = subprocess.run(
+        ["kubectl", "config", "current-context"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+      return ""
+    return proc.stdout.strip()
+  except FileNotFoundError:
     return ""
-  return proc.stdout.strip()
 
 
 def default_config() -> dict[str, Any]:
@@ -1806,12 +1810,17 @@ def _resolve_allowed_configmap_files(
     if not _SAFE_FILENAME_RE.match(fname):
       return [], f"Invalid ConfigMap filename: {fname!r}"
     real_path = os.path.realpath(hpath)
+    abs_path = os.path.abspath(hpath)
     is_allowed_root = any(
-        os.path.commonpath([real_path, root]) == root
+        os.path.commonpath([p, r]) == r
+        for p in (real_path, abs_path)
         for root in ALLOWED_CONFIGMAP_ROOTS
-        if os.path.exists(root)
+        for r in (os.path.realpath(root), os.path.abspath(root))
+        if os.path.exists(r)
     )
-    if not is_allowed_root or not real_path.endswith(".py"):
+    if not is_allowed_root or not (
+        real_path.endswith(".py") or abs_path.endswith(".py")
+    ):
       return (
           [],
           (
