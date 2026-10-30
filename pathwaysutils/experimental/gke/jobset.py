@@ -195,7 +195,8 @@ def _apply_container_kwargs(
     container.env = merged_env
 
   for field, value in kwargs.items():
-    if getattr(container, field) is not None:
+    existing = getattr(container, field)
+    if existing is not None and existing != value:
       _logger.warning(
           "Replacing the default %s of the %s container.",
           field,
@@ -314,6 +315,10 @@ def _build_rm_container(
           ),
           client.V1ContainerPort(container_port=29002, protocol="TCP"),
       ],
+      readiness_probe=client.V1Probe(
+          tcp_socket=client.V1TCPSocketAction(port=PATHWAYS_RM_PORT),
+          period_seconds=1,
+      ),
       resources=client.V1ResourceRequirements(
           limits={"cpu": "8", "memory": "32G"}
       ),
@@ -375,6 +380,10 @@ def _build_proxy_container(
               container_port=PATHWAYS_PROXY_PORT, protocol="TCP"
           )
       ],
+      readiness_probe=client.V1Probe(
+          tcp_socket=client.V1TCPSocketAction(port=PATHWAYS_PROXY_PORT),
+          period_seconds=1,
+      ),
       resources=client.V1ResourceRequirements(
           limits={"cpu": "16", "memory": "100G"}
       ),
@@ -1153,12 +1162,20 @@ class PathwaysJobSet:
       )
     path = posixpath.normpath(stripped)
 
+    target_containers: str | Sequence[str] = (
+        ("pathways-rm", "pathways-proxy", "pathways-worker")
+        if containers == "all"
+        else containers
+    )
+
     for job_template in (self._head_job_template, self._worker_job_template):
       pod_spec = job_template.spec.template.spec
       all_containers = (pod_spec.containers or []) + (
           pod_spec.init_containers or []
       )
-      matching = self._filter_matching_containers(containers, all_containers)
+      matching = self._filter_matching_containers(
+          target_containers, all_containers
+      )
       if not matching:
         continue
 
