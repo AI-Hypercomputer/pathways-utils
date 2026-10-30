@@ -4,7 +4,7 @@ Evaluating distributed machine learning training on elastic TPU topologies requi
 
 ## Live Interactive Simulation
 
-* [Hosted GitHub Pages Simulation](https://ai-hypercomputer.github.io/pathways-utils/pathwaysutils/extras/elastic/model_comparison.html) is a live interactive web application with simulation controls, or [HTMLPreview Instant Mirror](https://htmlpreview.github.io/?https://github.com/AI-Hypercomputer/pathways-utils/blob/main/pathwaysutils/extras/elastic/model_comparison.html).
+* [Hosted GitHub Pages Simulation](https://ai-hypercomputer.github.io/pathways-utils/extras/elastic/model_comparison.html) is a live interactive web application with simulation controls, or [HTMLPreview Instant Mirror](https://htmlpreview.github.io/?https://github.com/AI-Hypercomputer/pathways-utils/blob/main/extras/elastic/model_comparison.html).
 * Local browser viewing allows running `model_comparison.html` directly on your workstation by opening the file in Chrome, Firefox, or Safari, requiring zero installation or server dependencies.
 
 ## Recovery Paradigms Compared

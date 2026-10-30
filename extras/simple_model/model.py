@@ -16,7 +16,7 @@
 from flax import nnx
 import jax
 from jax import numpy as jnp
-from pathwaysutils.extras.simple_model import config as config_lib
+from extras.simple_model import config as config_lib
 
 
 def geglu(x: jax.Array) -> jax.Array:

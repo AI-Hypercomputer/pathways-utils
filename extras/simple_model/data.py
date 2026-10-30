@@ -17,7 +17,7 @@ from typing import Any
 
 import grain.python as grain
 import numpy as np
-from pathwaysutils.extras.simple_model import config as config_lib
+from extras.simple_model import config as config_lib
 
 
 class SyntheticTokenSource(grain.RandomAccessDataSource):

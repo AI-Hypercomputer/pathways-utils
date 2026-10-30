@@ -23,11 +23,11 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 from pathwaysutils.elastic import manager
-from pathwaysutils.extras.simple_model import compile as compile_lib
-from pathwaysutils.extras.simple_model import config as config_lib
-from pathwaysutils.extras.simple_model import data as data_lib
-from pathwaysutils.extras.simple_model import model as model_lib
-from pathwaysutils.extras.simple_model import workload as workload_lib
+from extras.simple_model import compile as compile_lib
+from extras.simple_model import config as config_lib
+from extras.simple_model import data as data_lib
+from extras.simple_model import model as model_lib
+from extras.simple_model import workload as workload_lib
 
 
 def setUpModule():
