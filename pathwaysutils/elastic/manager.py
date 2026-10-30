@@ -161,8 +161,6 @@ class Manager:
       finally:
         self._monitor_thread = None
         self._stop_event = None
-    else:
-      self._stop_event = None
 
   @functools.cached_property
   def total_slice_count(self) -> int:
