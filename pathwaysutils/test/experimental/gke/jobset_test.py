@@ -169,11 +169,25 @@ class PathwaysJobSetTest(parameterized.TestCase):
         rm_container["image"],
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
     )
+    self.assertEqual(
+        rm_container["readinessProbe"],
+        {
+            "periodSeconds": 1,
+            "tcpSocket": {"port": jobset.PATHWAYS_RM_PORT},
+        },
+    )
 
     proxy_container = helper.containers["pathways-head"]["pathways-proxy"]
     self.assertEqual(
         proxy_container["image"],
         "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+    )
+    self.assertEqual(
+        proxy_container["readinessProbe"],
+        {
+            "periodSeconds": 1,
+            "tcpSocket": {"port": jobset.PATHWAYS_PROXY_PORT},
+        },
     )
     self.assertIn("--num_elastic_slices=2", proxy_container["args"])
     self.assertTrue(
@@ -1429,9 +1443,17 @@ class PathwaysJobSetTest(parameterized.TestCase):
   def test_container_kwargs_no_warning_for_unset_field(self):
     with self.assertNoLogs(jobset._logger, level="WARNING"):
       self._create_jobset(
+          proxy_container_kwargs={
+              "readiness_probe": client.V1Probe(
+                  tcp_socket=client.V1TCPSocketAction(
+                      port=jobset.PATHWAYS_PROXY_PORT
+                  ),
+                  period_seconds=1,
+              ),
+          },
           worker_container_kwargs={
               "security_context": client.V1SecurityContext(privileged=True)
-          }
+          },
       )
 
   def test_worker_pod_spec_volumes_keep_shared_tmp(self):
@@ -1743,6 +1765,48 @@ class PathwaysJobSetTest(parameterized.TestCase):
     )
     self.assertIn("PATHWAYS_HEAD", [e["name"] for e in worker["env"]])
     self.assertIn("MEGASCALE_SLICE_ID", [e["name"] for e in worker["env"]])
+
+  def test_with_custom_libtpu_all_skips_non_pathways_containers(self):
+    stage_init = client.V1Container(name="stage-libtpu", image="cloud-sdk:slim")
+    pw_jobset = self._create_jobset(
+        topology="2x2",
+        num_slices=1,
+        head_pod_spec_kwargs={"init_containers": [stage_init]},
+        worker_pod_spec_kwargs={
+            "init_containers": [
+                client.V1Container(name="stage-libtpu", image="cloud-sdk:slim")
+            ]
+        },
+    )
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest"
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 test.py",
+    )
+    pw_jobset.with_custom_libtpu("/tmp/custom_libtpu/libtpu.so")
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    for container_name in ("pathways-rm", "pathways-proxy", "pathways-worker"):
+      matches = helper.get_all_containers_by_name(container_name)
+      self.assertLen(matches, 1, container_name)
+      _, container = matches[0]
+      self.assertIn(
+          {"name": "TPU_LIBRARY_PATH", "value": "/tmp/custom_libtpu/libtpu.so"},
+          container["env"],
+      )
+
+    for non_pw_name in (
+        "stage-libtpu",
+        "user-workload",
+        "colocated-python-sidecar",
+    ):
+      matches = helper.get_all_containers_by_name(non_pw_name)
+      self.assertNotEmpty(matches, non_pw_name)
+      for _, container in matches:
+        env_names = [e["name"] for e in container.get("env") or []]
+        self.assertNotIn("TPU_LIBRARY_PATH", env_names, non_pw_name)
 
   def test_add_gcsfuse_replaces_duplicate_mount_path(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
