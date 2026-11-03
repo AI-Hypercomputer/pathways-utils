@@ -198,6 +198,14 @@ class Manager:
     """The number of active slices."""
     return len(self.active_slice_indices)
 
+  @property
+  def active_devices(self) -> list[jax.Device]:
+    """The devices belonging to the active slices, ordered by slice index."""
+    devices = []
+    for slice_index in sorted(self.active_slice_indices):
+      devices.extend(self.slice_to_devices[slice_index])
+    return devices
+
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
     if isinstance(x, int):
