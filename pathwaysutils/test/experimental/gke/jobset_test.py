@@ -1989,6 +1989,285 @@ class PathwaysJobSetTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, "Missing worker replicated job"):
       jobset.PathwaysJobSet.import_yaml(worker_path)
 
+  def test_add_worker_topology_heterogeneous(self):
+    pw_jobset = self._create_jobset(
+        tpu_type="v5e", topology="4x8", num_slices=2
+    )
+    returned = pw_jobset.add_worker_topology(
+        tpu_type="ct5lp-hightpu-8t", topology="2x4", num_slices=1
+    )
+    self.assertIs(returned, pw_jobset)
+    self.assertLen(pw_jobset.worker_job_templates, 2)
+    self.assertIs(
+        pw_jobset.worker_job_template, pw_jobset.worker_job_templates[0]
+    )
+
+    config = pw_jobset.to_dict()
+    helper = JobSetManifestHelper(config)
+
+    self.assertEqual(
+        list(helper.jobs.keys()),
+        ["pathways-head", "pathways-worker-0", "pathways-worker-1"],
+    )
+    self.assertEqual(helper.jobs["pathways-worker-0"]["replicas"], 2)
+    self.assertEqual(helper.jobs["pathways-worker-1"]["replicas"], 1)
+
+    rm_args = helper.containers["pathways-head"]["pathways-rm"]["args"]
+    self.assertIn(
+        "--expected_instances=tpuv5e:4x8,tpuv5e:4x8,tpuv5e1t:2x4", rm_args
+    )
+    self.assertFalse(
+        any(
+            arg.startswith(("--instance_count=", "--instance_type="))
+            for arg in rm_args
+        )
+    )
+
+    worker0_spec = helper.jobs["pathways-worker-0"]["template"]["spec"]
+    self.assertEqual(worker0_spec["completions"], 8)
+    self.assertEqual(worker0_spec["parallelism"], 8)
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-0"]["nodeSelector"],
+        {
+            "cloud.google.com/gke-tpu-accelerator": "tpu-v5-lite-podslice",
+            "cloud.google.com/gke-tpu-topology": "4x8",
+        },
+    )
+    worker0_container = helper.containers["pathways-worker-0"][
+        "pathways-worker"
+    ]
+    self.assertEqual(
+        worker0_container["resources"]["limits"]["google.com/tpu"], "4"
+    )
+    worker0_env = {e["name"]: e for e in worker0_container["env"]}
+    self.assertEqual(
+        worker0_env["MEGASCALE_NUM_SLICES"],
+        {"name": "MEGASCALE_NUM_SLICES", "value": "3"},
+    )
+    self.assertEqual(
+        worker0_env["MEGASCALE_SLICE_ID"],
+        {
+            "name": "MEGASCALE_SLICE_ID",
+            "valueFrom": {
+                "fieldRef": {
+                    "fieldPath": (
+                        "metadata.labels['jobset.sigs.k8s.io/job-index']"
+                    )
+                }
+            },
+        },
+    )
+
+    worker1_spec = helper.jobs["pathways-worker-1"]["template"]["spec"]
+    self.assertEqual(worker1_spec["completions"], 1)
+    self.assertEqual(worker1_spec["parallelism"], 1)
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-1"]["nodeSelector"],
+        {
+            "cloud.google.com/gke-tpu-accelerator": "tpu-v5-lite-podslice",
+            "cloud.google.com/gke-tpu-topology": "2x4",
+        },
+    )
+    worker1_container = helper.containers["pathways-worker-1"][
+        "pathways-worker"
+    ]
+    self.assertEqual(
+        worker1_container["resources"]["limits"]["google.com/tpu"], "8"
+    )
+    worker1_env = {e["name"]: e for e in worker1_container["env"]}
+    self.assertEqual(
+        worker1_env["MEGASCALE_NUM_SLICES"],
+        {"name": "MEGASCALE_NUM_SLICES", "value": "3"},
+    )
+    self.assertEqual(
+        worker1_env["MEGASCALE_SLICE_ID"],
+        {"name": "MEGASCALE_SLICE_ID", "value": "2"},
+    )
+
+  def test_add_worker_topology_custom_names_and_validation(self):
+    pw_jobset = self._create_jobset(
+        tpu_type="v5e", topology="4x8", num_slices=1
+    ).add_worker_topology(
+        tpu_type="ct5lp-hightpu-8t",
+        topology="2x4",
+        num_slices=1,
+        name="v5e-8",
+    )
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    self.assertEqual(
+        list(helper.jobs.keys()),
+        ["pathways-head", "pathways-worker-0", "v5e-8"],
+    )
+
+    for invalid_name in (
+        "",
+        "  ",
+        "pathways-head",
+        "head",
+        "worker",
+        "pathways-worker-0",
+        "v5e-8",
+    ):
+      with self.assertRaises(ValueError):
+        pw_jobset.add_worker_topology(
+            tpu_type="v5e", topology="2x2", num_slices=1, name=invalid_name
+        )
+    self.assertLen(pw_jobset.worker_job_templates, 2)
+
+    collision_js = self._create_jobset(
+        tpu_type="v5e", topology="2x2", num_slices=1
+    ).add_worker_topology(
+        tpu_type="v5e",
+        topology="2x2",
+        num_slices=1,
+        name="pathways-worker-2",
+    )
+    with self.assertRaisesRegex(ValueError, "Duplicate worker job name"):
+      collision_js.add_worker_topology(
+          tpu_type="v5e", topology="2x2", num_slices=1
+      )
+
+  def test_add_worker_topology_inherits_and_overrides_defaults(self):
+    pw_jobset = self._create_jobset(
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=1,
+        max_slice_restarts=3,
+        termination_grace_period_seconds=60,
+        rm_container_kwargs={"args": ["--v=1"]},
+        worker_pod_spec_kwargs={"priority_class_name": "high"},
+        worker_container_kwargs={
+            "args": ["--logtostderr"],
+            "env": {"BASE_VAR": "1", "MEGASCALE_NUM_SLICES": "10"},
+        },
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 test.py",
+    )
+    pw_jobset.add_worker_topology(
+        tpu_type="ct5lp-hightpu-8t",
+        topology="2x4",
+        num_slices=1,
+        worker_pod_spec_kwargs={
+            "priority_class_name": "medium",
+            "termination_grace_period_seconds": 30,
+        },
+        worker_container_kwargs={
+            "args": ["--v=2"],
+            "env": {"MEGASCALE_SLICE_ID": "99", "BASE_VAR": "2"},
+        },
+    )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    rm_args = helper.init_containers["pathways-head"]["pathways-rm"]["args"]
+    self.assertEqual(
+        rm_args,
+        [
+            "--server_port=29001",
+            "--gcs_scratch_location=gs://test-bucket",
+            "--node_type=resource_manager",
+            "--expected_instances=tpuv5e:4x8,tpuv5e1t:2x4",
+            "--v=1",
+        ],
+    )
+
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-0"]["priorityClassName"], "high"
+    )
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-0"]["terminationGracePeriodSeconds"],
+        60,
+    )
+    self.assertEqual(
+        helper.jobs["pathways-worker-0"]["template"]["spec"]["backoffLimit"],
+        24,
+    )
+    worker0_env = {
+        e["name"]: e.get("value")
+        for e in helper.containers["pathways-worker-0"]["pathways-worker"][
+            "env"
+        ]
+    }
+    self.assertEqual(worker0_env["MEGASCALE_SLICE_ID"], "0")
+    self.assertEqual(worker0_env["MEGASCALE_NUM_SLICES"], "10")
+
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-1"]["priorityClassName"], "medium"
+    )
+    self.assertEqual(
+        helper.pod_specs["pathways-worker-1"]["terminationGracePeriodSeconds"],
+        30,
+    )
+    self.assertEqual(
+        helper.jobs["pathways-worker-1"]["template"]["spec"]["backoffLimit"],
+        3,
+    )
+    worker1 = helper.containers["pathways-worker-1"]["pathways-worker"]
+    self.assertEqual(worker1["args"][-2:], ["--logtostderr", "--v=2"])
+    worker1_env = {e["name"]: e.get("value") for e in worker1["env"]}
+    self.assertEqual(worker1_env["BASE_VAR"], "2")
+    self.assertEqual(worker1_env["MEGASCALE_SLICE_ID"], "99")
+    self.assertEqual(worker1_env["MEGASCALE_NUM_SLICES"], "10")
+
+  def test_add_worker_topology_with_modifiers(self):
+    pw_jobset = (
+        self._create_jobset(tpu_type="v5e", topology="4x8", num_slices=1)
+        .add_worker_topology(
+            tpu_type="ct5lp-hightpu-8t", topology="2x4", num_slices=1
+        )
+        .add_colocated_python(image="gcr.io/my-project/colocated:v1")
+        .add_gcsfuse(
+            containers="all", mount_path="/mnt/gcs", bucket="my-bucket"
+        )
+        .with_custom_libtpu(
+            "/var/lib/custom_tpu/libtpu.so",
+            containers="worker",
+        )
+    )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    for job_name in ("pathways-worker-0", "pathways-worker-1"):
+      self.assertIn(
+          "colocated-python-sidecar", helper.init_containers[job_name]
+      )
+      self.assertEqual(
+          helper.pod_metadatas[job_name]["annotations"]["gke-gcsfuse/volumes"],
+          "true",
+      )
+      worker_env = helper.containers[job_name]["pathways-worker"]["env"]
+      self.assertIn(
+          {
+              "name": "TPU_LIBRARY_PATH",
+              "value": "/var/lib/custom_tpu/libtpu.so",
+          },
+          worker_env,
+      )
+
+  def test_add_worker_topology_export_import_roundtrip(self):
+    pw_jobset = (
+        self._create_jobset(tpu_type="v5e", topology="4x8", num_slices=1)
+        .add_worker_topology(
+            tpu_type="ct5lp-hightpu-8t", topology="2x4", num_slices=1
+        )
+        .add_user_workload(
+            image="us-docker.pkg.dev/my-project/test:v1",
+            command="python3 test.py",
+        )
+    )
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "hetero_jobset.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+    self.assertLen(imported.worker_job_templates, 2)
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported.to_dict()),
+    )
+    with self.assertRaisesRegex(ValueError, "imported JobSet"):
+      imported.add_worker_topology(tpu_type="v5e", topology="2x2", num_slices=1)
+
 
 if __name__ == "__main__":
   absltest.main()

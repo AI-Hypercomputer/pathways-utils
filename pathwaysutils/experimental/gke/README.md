@@ -44,6 +44,28 @@ pw_jobset = jobset.PathwaysJobSet(
 )
 ```
 
+### Heterogeneous Multi-Topology Slices
+Combine multiple TPU slice topologies as separate worker `replicatedJobs`
+within a single `JobSet`:
+
+```python
+pw_jobset = (
+    jobset.PathwaysJobSet(
+        name="heterogeneous-v5e",
+        namespace="default",
+        pathways_dir="gs://my-bucket/scratch",
+        tpu_type="v5e",
+        topology="4x8",
+        num_slices=1,
+    )
+    .add_worker_topology(
+        tpu_type="ct5lp-hightpu-8t",
+        topology="2x4",
+        num_slices=1,
+    )
+)
+```
+
 ### In-Pod User Workload
 Run training or inference directly in the head pod alongside the Resource Manager and Proxy sidecars:
 

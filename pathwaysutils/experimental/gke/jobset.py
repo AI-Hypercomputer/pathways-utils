@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -84,6 +85,51 @@ MACHINE_TYPE_TO_GKE_ACCELERATOR_TYPE_MAP = {
     "ct4p-hightpu-4t": "tpu-v4-podslice",
     "v4": "tpu-v4-podslice",
 }
+
+
+@dataclasses.dataclass
+class _WorkerJob:
+  replicas: int
+  template: client.V1JobTemplateSpec
+  instance_type: str | None = None
+  name: str | None = None
+  overridden_env: frozenset[str] = frozenset()
+
+
+def _worker_job_names(worker_jobs: Sequence[_WorkerJob]) -> list[str]:
+  """Returns the replicatedJob names for worker_jobs."""
+  if len(worker_jobs) == 1:
+    return [PATHWAYS_WORKER_JOB_NAME]
+  return [
+      job.name if job.name is not None else f"{PATHWAYS_WORKER_JOB_NAME}-{i}"
+      for i, job in enumerate(worker_jobs)
+  ]
+
+
+def _parse_worker_topology(
+    tpu_type: str, topology: str, num_slices: int
+) -> tuple[str, str, int, int]:
+  """Validates worker slice settings and returns TPU and VM sizing."""
+  if num_slices <= 0:
+    raise ValueError(f"num_slices ({num_slices}) must be positive")
+  tpu_version = MACHINE_TYPE_TO_TPU_VERSION_MAP.get(tpu_type.lower())
+  if not tpu_version:
+    raise ValueError(f"Unsupported TPU type: {tpu_type}")
+  gke_accel_type = MACHINE_TYPE_TO_GKE_ACCELERATOR_TYPE_MAP[tpu_type.lower()]
+
+  total_chips = tpu_utils.parse_topology(topology)
+  chips_per_vm = 8 if tpu_type.lower().endswith("8t") else 4
+  if total_chips < chips_per_vm:
+    num_vms = 1
+  elif total_chips % chips_per_vm != 0:
+    raise ValueError(
+        f"Total chips ({total_chips}) for topology {topology!r} must be"
+        f" divisible by chips_per_vm ({chips_per_vm}) for {tpu_type!r}"
+    )
+  else:
+    num_vms = total_chips // chips_per_vm
+
+  return f"{tpu_version}:{topology}", gke_accel_type, num_vms, chips_per_vm
 
 
 def _format_image(image: str, default_tag: str) -> str:
@@ -481,14 +527,16 @@ class PathwaysJobSet:
 
     self._name = name
     self._namespace = namespace
+    self._pathways_dir = pathways_dir
     self._jobset_api_version = jobset_api_version
     self._max_restarts = max_restarts
-    self._worker_replicas = num_slices
+    self._max_slice_restarts = max_slice_restarts
     self._labels = dict(labels) if labels else {}
     self._annotations = dict(annotations) if annotations else {}
 
-    if num_slices <= 0:
-      raise ValueError(f"num_slices ({num_slices}) must be positive")
+    instance_type, gke_accel_type, num_vms, chips_per_vm = (
+        _parse_worker_topology(tpu_type, topology, num_slices)
+    )
     if elastic_slices < 0:
       raise ValueError(f"elastic_slices ({elastic_slices}) cannot be negative")
     if elastic_slices > num_slices:
@@ -496,29 +544,8 @@ class PathwaysJobSet:
           f"elastic_slices ({elastic_slices}) cannot be greater than "
           f"num_slices ({num_slices})"
       )
-    tpu_version = MACHINE_TYPE_TO_TPU_VERSION_MAP.get(tpu_type.lower())
-    if not tpu_version:
-      raise ValueError(f"Unsupported TPU type: {tpu_type}")
-
-    gke_accel_type = MACHINE_TYPE_TO_GKE_ACCELERATOR_TYPE_MAP.get(
-        tpu_type.lower()
-    )
-
-    # Calculate VMs.
-    total_chips = tpu_utils.parse_topology(topology)
-    chips_per_vm = 8 if tpu_type.lower().endswith("8t") else 4
-    if total_chips < chips_per_vm:
-      num_vms = 1
-    elif total_chips % chips_per_vm != 0:
-      raise ValueError(
-          f"Total chips ({total_chips}) for topology {topology!r} must be"
-          f" divisible by chips_per_vm ({chips_per_vm}) for {tpu_type!r}"
-      )
-    else:
-      num_vms = total_chips // chips_per_vm
-
-    instance_type = f"{tpu_version}:{topology}"
     image_tag = pathways_version
+    self._image_tag = image_tag
 
     # Build head template.
     self._head_job_template = self._build_head_job_template(
@@ -542,13 +569,17 @@ class PathwaysJobSet:
       worker_kwargs.setdefault(
           "termination_grace_period_seconds", termination_grace_period_seconds
       )
+    self._worker_pod_spec_kwargs = worker_kwargs
+    self._worker_container_kwargs = (
+        dict(worker_container_kwargs) if worker_container_kwargs else None
+    )
 
     # Build worker template.
     self._worker_job_template = self._build_worker_job_template(
         pathways_dir=pathways_dir,
         num_vms=num_vms,
         chips_per_vm=chips_per_vm,
-        gke_accel_type=gke_accel_type,  # pyrefly: ignore[bad-argument-type]
+        gke_accel_type=gke_accel_type,
         topology=topology,
         image_tag=image_tag,
         max_slice_restarts=max_slice_restarts,
@@ -556,6 +587,16 @@ class PathwaysJobSet:
         worker_pod_spec_kwargs=worker_kwargs,
         worker_container_kwargs=worker_container_kwargs,
     )
+    self._worker_jobs = [
+        _WorkerJob(
+            replicas=num_slices,
+            template=self._worker_job_template,
+            instance_type=instance_type,
+            overridden_env=frozenset(
+                (worker_container_kwargs or {}).get("env") or ()
+            ),
+        )
+    ]
 
     self._success_policy = None
 
@@ -566,6 +607,10 @@ class PathwaysJobSet:
   @property
   def worker_job_template(self) -> client.V1JobTemplateSpec:
     return self._worker_job_template
+
+  @property
+  def worker_job_templates(self) -> tuple[client.V1JobTemplateSpec, ...]:
+    return tuple(job.template for job in self._worker_jobs)
 
   @property
   def pathways_rm_and_worker_image(self) -> str:
@@ -675,6 +720,7 @@ class PathwaysJobSet:
       pathways_rm_and_worker_image: str,
       worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
       worker_container_kwargs: Mapping[str, Any] | None = None,
+      job_name: str = PATHWAYS_WORKER_JOB_NAME,
   ) -> client.V1JobTemplateSpec:
     """Builds the worker job template for the JobSet."""
     worker_image = _format_image(pathways_rm_and_worker_image, image_tag)
@@ -790,7 +836,7 @@ class PathwaysJobSet:
             "restart_policy": "OnFailure",
         },
         worker_pod_spec_kwargs,
-        PATHWAYS_WORKER_JOB_NAME,
+        job_name,
     )
 
     worker_pod_spec = client.V1PodSpec(**pod_spec_kwargs)
@@ -815,6 +861,147 @@ class PathwaysJobSet:
         ),
     )
     return worker_job_template
+
+  def add_worker_topology(
+      self,
+      tpu_type: str,
+      topology: str,
+      num_slices: int,
+      *,
+      name: str | None = None,
+      worker_pod_spec_kwargs: Mapping[str, Any] | None = None,
+      worker_container_kwargs: Mapping[str, Any] | None = None,
+  ) -> "PathwaysJobSet":
+    """Adds an additional worker TPU slice topology as a replicatedJob.
+
+    Call before worker mutators such as `add_gcsfuse`, `add_external_sidecar`,
+    or `with_custom_libtpu` so they apply across all worker templates.
+
+    Args:
+      tpu_type: TPU type (e.g., "v5e" or "ct5lp-hightpu-8t").
+      topology: TPU topology (e.g., "2x4").
+      num_slices: Number of slices for this topology.
+      name: Optional `replicatedJob` name. Defaults to `pathways-worker-<index>`
+        when multiple worker topologies are present.
+      worker_pod_spec_kwargs: Optional `client.V1PodSpec` overrides merged onto
+        the `worker_pod_spec_kwargs` passed to `__init__`.
+      worker_container_kwargs: Optional `client.V1Container` overrides applied
+        after the `worker_container_kwargs` passed to `__init__`.
+
+    Returns:
+      The `PathwaysJobSet` instance for chaining.
+
+    Raises:
+      ValueError: If called on an imported JobSet or an argument is invalid.
+    """
+    if any(job.instance_type is None for job in self._worker_jobs):
+      raise ValueError(
+          "add_worker_topology cannot be called on an imported JobSet."
+      )
+    if name is not None and (
+        not name.strip() or name in (PATHWAYS_HEAD_JOB_NAME, "head", "worker")
+    ):
+      raise ValueError(f"Invalid worker job name: {name!r}")
+
+    instance_type, gke_accel_type, num_vms, chips_per_vm = (
+        _parse_worker_topology(tpu_type, topology, num_slices)
+    )
+    job_name = (
+        name
+        if name is not None
+        else f"{PATHWAYS_WORKER_JOB_NAME}-{len(self._worker_jobs)}"
+    )
+    existing_names = [
+        job.name if job.name is not None else f"{PATHWAYS_WORKER_JOB_NAME}-{i}"
+        for i, job in enumerate(self._worker_jobs)
+    ]
+    if job_name in existing_names:
+      raise ValueError(f"Duplicate worker job name: {job_name!r}")
+
+    merged_pod_kwargs = _merge_pod_spec_kwargs(
+        self._worker_pod_spec_kwargs, worker_pod_spec_kwargs, job_name
+    )
+    worker_template = self._build_worker_job_template(
+        pathways_dir=self._pathways_dir,
+        num_vms=num_vms,
+        chips_per_vm=chips_per_vm,
+        gke_accel_type=gke_accel_type,
+        topology=topology,
+        image_tag=self._image_tag,
+        max_slice_restarts=self._max_slice_restarts,
+        pathways_rm_and_worker_image=self._pathways_rm_and_worker_image,
+        worker_pod_spec_kwargs=merged_pod_kwargs,
+        worker_container_kwargs=self._worker_container_kwargs,
+        job_name=job_name,
+    )
+    if worker_container_kwargs:
+      _apply_container_kwargs(
+          worker_template.spec.template.spec.containers[0],
+          worker_container_kwargs,
+      )
+
+    overridden_env = frozenset({
+        *((self._worker_container_kwargs or {}).get("env") or ()),
+        *((worker_container_kwargs or {}).get("env") or ()),
+    })
+    self._worker_jobs.append(
+        _WorkerJob(
+            replicas=num_slices,
+            template=worker_template,
+            instance_type=instance_type,
+            name=name,
+            overridden_env=overridden_env,
+        )
+    )
+    self._sync_multi_topology_config()
+    return self
+
+  def _sync_multi_topology_config(self) -> None:
+    """Updates RM expected_instances and worker MegaScale slice env vars."""
+    expected_instances: list[str] = []
+    for job in self._worker_jobs:
+      expected_instances.extend([f"{job.instance_type}"] * job.replicas)
+    expected = ",".join(expected_instances)
+    head_spec = self._head_job_template.spec.template.spec
+    for container in head_spec.containers + (head_spec.init_containers or []):
+      if container.name == "pathways-rm":
+        new_args = []
+        inserted = False
+        for arg in container.args:
+          if arg.startswith((
+              "--instance_count=",
+              "--instance_type=",
+              "--expected_instances=",
+          )):
+            if not inserted:
+              new_args.append(f"--expected_instances={expected}")
+              inserted = True
+          else:
+            new_args.append(arg)
+        container.args = new_args
+
+    total_slices = sum(job.replicas for job in self._worker_jobs)
+    slice_offset = 0
+    for job in self._worker_jobs:
+      for container in job.template.spec.template.spec.containers:
+        if container.name == "pathways-worker":
+          for i, env_var in enumerate(container.env):
+            if (
+                env_var.name == "MEGASCALE_NUM_SLICES"
+                and "MEGASCALE_NUM_SLICES" not in job.overridden_env
+            ):
+              container.env[i] = client.V1EnvVar(
+                  name="MEGASCALE_NUM_SLICES", value=str(total_slices)
+              )
+            elif (
+                env_var.name == "MEGASCALE_SLICE_ID"
+                and "MEGASCALE_SLICE_ID" not in job.overridden_env
+                and job.replicas == 1
+            ):
+              container.env[i] = client.V1EnvVar(
+                  name="MEGASCALE_SLICE_ID", value=str(slice_offset)
+              )
+      slice_offset += job.replicas
 
   def _filter_matching_containers(
       self,
@@ -959,7 +1146,27 @@ class PathwaysJobSet:
     Returns:
       The PathwaysJobSet instance for chaining.
     """
-    pod_spec = self._worker_job_template.spec.template.spec
+    for worker_template in self.worker_job_templates:
+      self._add_sidecar_to_pod_spec(
+          worker_template.spec.template.spec,
+          image=image,
+          shm_mount_path=shm_mount_path,
+          shm_size_limit=shm_size_limit,
+          name=name,
+          container_kwargs=container_kwargs,
+      )
+    return self
+
+  def _add_sidecar_to_pod_spec(
+      self,
+      pod_spec: client.V1PodSpec,
+      image: str,
+      shm_mount_path: str,
+      shm_size_limit: str | None,
+      name: str,
+      container_kwargs: Mapping[str, Any],
+  ) -> None:
+    """Adds an external sidecar container and shared memory to pod_spec."""
 
     # Add shared memory volume if not exists.
     volumes = pod_spec.volumes or []
@@ -1054,8 +1261,6 @@ class PathwaysJobSet:
           container.env = worker_env
         break
 
-    return self
-
   def add_colocated_python(
       self,
       image: str,
@@ -1113,7 +1318,7 @@ class PathwaysJobSet:
         read_only=read_only,
     )
 
-    for job_template in (self._head_job_template, self._worker_job_template):
+    for job_template in (self._head_job_template, *self.worker_job_templates):
       pod_spec = job_template.spec.template.spec
       all_containers = (pod_spec.containers or []) + (
           pod_spec.init_containers or []
@@ -1168,7 +1373,7 @@ class PathwaysJobSet:
         else containers
     )
 
-    for job_template in (self._head_job_template, self._worker_job_template):
+    for job_template in (self._head_job_template, *self.worker_job_templates):
       pod_spec = job_template.spec.template.spec
       all_containers = (pod_spec.containers or []) + (
           pod_spec.init_containers or []
@@ -1194,23 +1399,24 @@ class PathwaysJobSet:
 
   def _compile_config(self) -> dict[str, Any]:
     """Compiles the JobSet configuration into a dictionary."""
+    job_names = _worker_job_names(self._worker_jobs)
     with client.ApiClient() as api_client:
       serialized_head = api_client.sanitize_for_serialization(
           self._head_job_template
       )
-      serialized_worker = api_client.sanitize_for_serialization(
-          self._worker_job_template
-      )
+      worker_jobs = [
+          {
+              "name": job_name,
+              "replicas": job.replicas,
+              "template": api_client.sanitize_for_serialization(job.template),
+          }
+          for job_name, job in zip(job_names, self._worker_jobs)
+      ]
 
     head_job = {
         "name": PATHWAYS_HEAD_JOB_NAME,
         "replicas": 1,
         "template": serialized_head,
-    }
-    worker_job = {
-        "name": PATHWAYS_WORKER_JOB_NAME,
-        "replicas": self._worker_replicas,
-        "template": serialized_worker,
     }
 
     coordinator = {
@@ -1238,7 +1444,7 @@ class PathwaysJobSet:
                 "publishNotReadyAddresses": True,
             },
             "coordinator": coordinator,
-            "replicatedJobs": [head_job, worker_job],
+            "replicatedJobs": [head_job, *worker_jobs],
         },
     }
     if self._labels:
@@ -1282,7 +1488,7 @@ class PathwaysJobSet:
 
     # Extract replicated jobs and deserialize.
     head_job_template: client.V1JobTemplateSpec | None = None
-    worker_job_template: client.V1JobTemplateSpec | None = None
+    worker_jobs: list[_WorkerJob] = []
 
     with client.ApiClient() as api_client:
       for job in config["spec"]["replicatedJobs"]:
@@ -1290,21 +1496,27 @@ class PathwaysJobSet:
           head_job_template = _deserialize_dict(
               api_client, job["template"], client.V1JobTemplateSpec
           )
-        elif job["name"] == PATHWAYS_WORKER_JOB_NAME:
-          worker_job_template = _deserialize_dict(
-              api_client, job["template"], client.V1JobTemplateSpec
+        else:
+          worker_jobs.append(
+              _WorkerJob(
+                  replicas=job["replicas"],
+                  template=_deserialize_dict(
+                      api_client, job["template"], client.V1JobTemplateSpec
+                  ),
+                  name=job["name"],
+              )
           )
-          instance._worker_replicas = job["replicas"]
 
     if head_job_template is None:
       raise ValueError(f"Missing head job ({PATHWAYS_HEAD_JOB_NAME}) in config")
-    if worker_job_template is None:
+    if not worker_jobs:
       raise ValueError(
           f"Missing worker job ({PATHWAYS_WORKER_JOB_NAME}) in config"
       )
 
     instance._head_job_template = head_job_template
-    instance._worker_job_template = worker_job_template
+    instance._worker_job_template = worker_jobs[0].template
+    instance._worker_jobs = worker_jobs
 
     rm_image = DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE
     proxy_image = DEFAULT_PATHWAYS_PROXY_IMAGE
@@ -1337,14 +1549,14 @@ class PathwaysJobSet:
     """Validates that the config is a valid Pathways JobSet."""
     if config.get("kind") != "JobSet":
       raise ValueError("Resource kind is not JobSet")
-    jobs = {
-        j["name"]: j for j in config.get("spec", {}).get("replicatedJobs", [])
-    }
-    if PATHWAYS_HEAD_JOB_NAME not in jobs:
+    job_names = [
+        j["name"] for j in config.get("spec", {}).get("replicatedJobs", [])
+    ]
+    if PATHWAYS_HEAD_JOB_NAME not in job_names:
       raise ValueError(
           f"Missing head replicated job ('{PATHWAYS_HEAD_JOB_NAME}')"
       )
-    if PATHWAYS_WORKER_JOB_NAME not in jobs:
+    if "worker" in job_names or len(job_names) < 2:
       raise ValueError(
           f"Missing worker replicated job ('{PATHWAYS_WORKER_JOB_NAME}')"
       )
