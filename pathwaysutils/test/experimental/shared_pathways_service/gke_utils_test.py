@@ -1224,7 +1224,7 @@ class GKEUtilsTest(absltest.TestCase):
                     containers=[
                         {
                             "name": "pathways-worker",
-                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
                         },
                         {
                             "name": "colocated-python-sidecar",
@@ -1244,7 +1244,7 @@ class GKEUtilsTest(absltest.TestCase):
     )
     self.assertEqual(
         server_img,
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
     )
     self.assertEqual(
         sidecar_img,
@@ -1278,7 +1278,7 @@ class GKEUtilsTest(absltest.TestCase):
                     containers=[
                         {
                             "name": "pathways-worker",
-                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
                         }
                     ],
                 )
@@ -1290,7 +1290,7 @@ class GKEUtilsTest(absltest.TestCase):
     )
     self.assertEqual(
         server_img,
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
     )
     self.assertIsNone(sidecar_img)
 
@@ -1311,7 +1311,7 @@ class GKEUtilsTest(absltest.TestCase):
                     containers=[
                         {
                             "name": "pathways-worker",
-                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+                            "image": "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
                         }
                     ],
                     init_containers=[
@@ -1329,7 +1329,7 @@ class GKEUtilsTest(absltest.TestCase):
     )
     self.assertEqual(
         server_img,
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
     )
     self.assertEqual(sidecar_img, "sidecar-image-url")
 
@@ -1417,12 +1417,12 @@ class GKEUtilsTest(absltest.TestCase):
   def test_get_compatible_proxy_server_image(self):
     test_cases = [
         (
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
         ),
         (
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:latest",
         ),
         (
             "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/unsanitized_server:staging",
@@ -1441,12 +1441,12 @@ class GKEUtilsTest(absltest.TestCase):
             "us-docker.pkg.dev/cloud-tpu-v2-images-dev/pathways/gke/akshu/unsanitized_proxy_server:latest",
         ),
         (
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server",
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server",
         ),
         (
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server@sha256:12345",
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server@sha256:12345",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server@sha256:12345",
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server@sha256:12345",
         ),
         (
             "custom.registry.com/pathways/my_custom_image:1.0",

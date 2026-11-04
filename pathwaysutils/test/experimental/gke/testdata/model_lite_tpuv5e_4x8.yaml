@@ -95,7 +95,7 @@ spec:
                     fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
               - name: TPU_SKIP_MDS_QUERY
                 value: "true"
-              image: "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest"
+              image: "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest"
               imagePullPolicy: Always
               name: pathways-rm
               ports:
@@ -118,7 +118,7 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
-              image: "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
+              image: "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:latest"
               imagePullPolicy: Always
               name: pathways-proxy
               ports:
@@ -189,7 +189,7 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.labels['jobset.sigs.k8s.io/coordinator']
-              image: "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest"
+              image: "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest"
               imagePullPolicy: Always
               name: pathways-worker
               ports:

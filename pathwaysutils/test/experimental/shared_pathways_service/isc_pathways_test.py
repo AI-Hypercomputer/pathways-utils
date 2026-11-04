@@ -603,7 +603,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -660,7 +660,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -785,7 +785,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -833,7 +833,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         sidecar_img,
     )
     expected_versions = validators.SidecarVersions(
@@ -910,7 +910,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         sidecar_img,
     )
     expected_versions = validators.SidecarVersions(
@@ -982,7 +982,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         sidecar_img,
     )
     expected_versions = validators.SidecarVersions(
@@ -1074,7 +1074,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -1121,7 +1121,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -1456,7 +1456,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -1478,7 +1478,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     _, kwargs = mock_isc_pathways.call_args
     self.assertEqual(
         kwargs["proxy_server_image"],
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
     )
 
   def test_connect_incompatible_proxy_image_replaced_with_warning(self):
@@ -1495,7 +1495,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -1511,7 +1511,7 @@ class ISCPathwaysTest(parameterized.TestCase):
           gcs_bucket="test-bucket",
           pathways_service="test-service-pathways-head:1234",
           expected_tpu_instances={"tpuv6e:2x2": 1},
-          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:latest",
       ):
         pass
 
@@ -1520,7 +1520,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     _, kwargs = mock_isc_pathways.call_args
     self.assertEqual(
         kwargs["proxy_server_image"],
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
     )
 
   def test_connect_compatible_proxy_image_no_warning(self):
@@ -1537,7 +1537,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
         None,
     )
     mock_isc_pathways = self.enter_context(
@@ -1552,7 +1552,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         gcs_bucket="test-bucket",
         pathways_service="test-service-pathways-head:1234",
         expected_tpu_instances={"tpuv6e:2x2": 1},
-        proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+        proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
     ):
       pass
 
@@ -1560,7 +1560,7 @@ class ISCPathwaysTest(parameterized.TestCase):
     _, kwargs = mock_isc_pathways.call_args
     self.assertEqual(
         kwargs["proxy_server_image"],
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
     )
 
   def test_connect_autodetect_fails_fallback_to_default(self):
@@ -1603,7 +1603,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-0.9.0",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:jax-0.12.0",
         None,
     )
     self.enter_context(
@@ -1619,7 +1619,7 @@ class ISCPathwaysTest(parameterized.TestCase):
           gcs_bucket="test-bucket",
           pathways_service="test-service-pathways-head:1234",
           expected_tpu_instances={"tpuv6e:2x2": 1},
-          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:jax-0.9.0",
+          proxy_server_image="us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:jax-0.12.0",
       ):
         pass
 

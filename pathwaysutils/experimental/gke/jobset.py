@@ -44,10 +44,10 @@ PATHWAYS_HEAD_JOB_NAME = "pathways-head"
 PATHWAYS_WORKER_JOB_NAME = "pathways-worker"
 
 DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE = (
-    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server"
+    "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server"
 )
 DEFAULT_PATHWAYS_PROXY_IMAGE = (
-    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server"
+    "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server"
 )
 
 PATHWAYS_PROXY_PORT = 29000

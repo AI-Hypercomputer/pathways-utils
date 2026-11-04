@@ -406,7 +406,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
   @mock.patch.object(deploy_pathways_service, "run_deployment")
   def test_main_flag_conflict_raises_value_error(self, mock_run):
     with flagsaver.as_parsed(
-        jax_version="0.9.0", server_image="custom-image"
+        jax_version="0.12.0", server_image="custom-image"
     ):
       with self.assertRaisesRegex(
           ValueError, "Cannot provide both --jax_version and --server_image"

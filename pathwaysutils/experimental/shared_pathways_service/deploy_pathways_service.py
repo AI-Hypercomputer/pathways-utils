@@ -22,7 +22,7 @@ _JOBSET_NAME = flags.DEFINE_string(
     "jobset_name", "pathways-service", "Name of the JobSet"
 )
 _JAX_VERSION = flags.DEFINE_string(
-    "jax_version", "0.9.0", "JAX version (e.g., 0.9.0)"
+    "jax_version", "0.12.0", "JAX version (e.g., 0.12.0)"
 )
 _SERVER_IMAGE = flags.DEFINE_string(
     "server_image", None, "Full path to the server Docker image"
@@ -302,7 +302,10 @@ def main(argv: Sequence[str]) -> None:
     if _SERVER_IMAGE.value:
       server_image = _SERVER_IMAGE.value
     else:
-      server_image = f"us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:jax-{_JAX_VERSION.value}"
+      server_image = (
+          "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/"
+          f"server:jax-{_JAX_VERSION.value}"
+      )
 
     run_deployment(
         tpu_type=_TPU_TYPE.value,

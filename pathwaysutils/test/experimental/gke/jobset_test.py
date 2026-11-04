@@ -167,7 +167,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     rm_container = helper.containers["pathways-head"]["pathways-rm"]
     self.assertEqual(
         rm_container["image"],
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
     )
     self.assertEqual(
         rm_container["readinessProbe"],
@@ -180,7 +180,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
     proxy_container = helper.containers["pathways-head"]["pathways-proxy"]
     self.assertEqual(
         proxy_container["image"],
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:latest",
     )
     self.assertEqual(
         proxy_container["readinessProbe"],

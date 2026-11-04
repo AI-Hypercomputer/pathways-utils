@@ -42,7 +42,7 @@ _JAX_PLATFORM_PROXY = "proxy"
 _JAX_BACKEND_TARGET_KEY = "jax_backend_target"
 _JAX_BACKEND_TARGET_HOSTNAME = "grpc://127.0.0.1"
 DEFAULT_PROXY_IMAGE = (
-    "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/proxy_server:latest"
+    "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/proxy_server:latest"
 )
 
 _logger = logging.getLogger(__name__)

@@ -28,7 +28,7 @@ python3 -m pathwaysutils.experimental.shared_pathways_service.deploy_pathways_se
 --num_slices ${NUM_SLICES} [--sidecar_image ${SIDECAR_IMAGE}] [--dry_run]
 ```
 
-Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:<tag>`.
+Note, `server_image` is the Pathways server image, e.g, `us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:<tag>`.
 
 ### 3. Verify that the pods created in [Step#2](#2-deploy-the-pathways-head-pod) are running
 
