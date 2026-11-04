@@ -112,7 +112,7 @@ spec:
               - --server_port=29000
               - --resource_manager_address=$(PATHWAYS_HEAD):29001
               - --gcs_scratch_location=gs://fake-bucket/scratch
-              - --num_elastic_slices=2
+              - --num_elastic_instances=2
               env:
               - name: PATHWAYS_HEAD
                 valueFrom:

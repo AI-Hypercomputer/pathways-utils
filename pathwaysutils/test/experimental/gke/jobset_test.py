@@ -189,7 +189,7 @@ class PathwaysJobSetTest(parameterized.TestCase):
             "tcpSocket": {"port": jobset.PATHWAYS_PROXY_PORT},
         },
     )
-    self.assertIn("--num_elastic_slices=2", proxy_container["args"])
+    self.assertIn("--num_elastic_instances=2", proxy_container["args"])
     self.assertTrue(
         any(
             e.get("name") == "IFRT_PROXY_USE_INSECURE_GRPC_CREDENTIALS"
