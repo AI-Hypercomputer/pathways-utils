@@ -23,6 +23,10 @@ on:
       tag:
         type: string
         required: true
+
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build distribution
@@ -30,11 +34,11 @@ jobs:
     # to build only on push to tags or on custom dispatched workflows
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         persist-credentials: false
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       with:
         python-version: "3.x"
     - run: pip --version
@@ -42,16 +46,16 @@ jobs:
       run: pip install build
     - name: Clone pathwaysutils from tag
       if: github.event_name == 'workflow_dispatch'
-      run: git clone --branch=${INPUTS_TAG} https://github.com/AI-Hypercomputer/pathways-utils.git
+      run: git clone --branch="${INPUTS_TAG}" https://github.com/AI-Hypercomputer/pathways-utils.git
       env:
-        INPUTS_TAG: ${{inputs.tag}}
+        INPUTS_TAG: ${{ inputs.tag }}
     - name: Enter directory
       if: github.event_name == 'workflow_dispatch'
       run: cd pathways-utils
     - name: Build a binary wheel and a source tarball
       run: python3 -m build
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
         name: python-package-distributions
         path: dist/
@@ -69,35 +73,79 @@ jobs:
       id-token: write
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:
         name: python-package-distributions
         path: dist/
-    - name: Publish distribution 📦 to TestPyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+    - name: Publish distribution to TestPyPI
+      uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
       with:
         repository-url: https://test.pypi.org/legacy/
         verbose: true
 
   publish-to-pypi:
-    name: Publish Python distribution to PyPI
+    name: Publish Python distribution to PyPI via OSS Exit Gate
     if: "!inputs.testpypi && startsWith(github.ref, 'refs/tags/')" # only publish to PyPI on tag pushes
     needs:
     - build
     runs-on: ubuntu-latest
     environment:
-      # We should configure trusted publishing as specified here:
-      # https://packaging.python.org/en/latest/guides/publishing-package-distribution-releases-using-github-actions-ci-cd-workflows/#configuring-trusted-publishing
       name: pypi
-      url: https://pypi.org/p/pathwaysutils  # Replace <package-name> with your PyPI project name
+      url: https://pypi.org/p/pathwaysutils
     permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
+      contents: read
+      id-token: write
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
       with:
         name: python-package-distributions
         path: dist/
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+
+    - name: Set up Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      with:
+        python-version: "3.12"
+
+    - name: Authenticate to Google Cloud (OSS Exit Gate)
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: "projects/305452601764/locations/global/workloadIdentityPools/builders/providers/github"
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+    - name: Clean up stale releases from staging repo
+      run: |
+        # clean up stale releases from staging repo
+        packages=$(gcloud artifacts packages list \
+            --project="oss-exit-gate-prod" \
+            --location="us" \
+            --repository="pathways-utils--pypi" \
+            --format="value(name)" 2>/dev/null)
+
+        echo "${packages}" | xargs -r -I {} sh -c '
+            package_name=$(basename "{}")
+            echo "Deleting package: $package_name..."
+            gcloud artifacts packages delete "{}" \
+                --project="'"oss-exit-gate-prod"'" \
+                --location="'"us"'" \
+                --repository="'"pathways-utils--pypi"'" \
+                --quiet
+        '
+
+    - name: Stage distribution to OSS Exit Gate and upload manifest
+      env:
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        python -m pip install --upgrade pip twine
+        python -m twine upload \
+          --repository-url "https://us-python.pkg.dev/oss-exit-gate-prod/pathways-utils--pypi/" \
+          -u oauth2accesstoken \
+          -p "$(gcloud auth print-access-token)" \
+          dist/*
+        echo '{"publish_all": true}' > manifest.json
+        gcloud storage cp manifest.json \
+          "gs://oss-exit-gate-prod-projects-bucket/pathways-utils/pypi/manifests/manifest-${RUN_ID}-${RUN_ATTEMPT}.json"
