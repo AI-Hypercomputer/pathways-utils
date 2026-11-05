@@ -22,9 +22,11 @@ from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
+from fastapi import testclient
 import jax
 from jax import numpy as jnp
 from pathwaysutils import profiling
+from pathwaysutils.experimental import profiling as exp_profiling
 import requests
 
 
@@ -1101,7 +1103,6 @@ class ProfilingTest(parameterized.TestCase):
       expected_status: int,
       expected_detail_substring: str | None,
   ):
-    from fastapi import testclient
     env = dict(profiling.os.environ)
     if server_token is not None:
       env["PATHWAYS_PROFILING_AUTH_TOKEN"] = server_token
@@ -1136,8 +1137,6 @@ class ProfilingTest(parameterized.TestCase):
       "ProfileOptions requires JAX 0.9.2 or newer",
   )
   def test_profiling_server_passes_duration_ms_to_start_trace(self):
-    from fastapi import testclient
-
     with (
         mock.patch.dict(profiling.os.environ, {}, clear=True),
         mock.patch.object(profiling, "start_trace") as mock_start_trace,
@@ -1158,6 +1157,63 @@ class ProfilingTest(parameterized.TestCase):
       )
       self.assertIsNotNone(call_kwargs.get("profiler_options"))
       self.assertEqual(call_kwargs["profiler_options"].duration_ms, 2500)
+
+  @unittest.skipIf(
+      os.environ.get("GITHUB_ACTIONS") == "true",
+      "Skipping FastAPI server test in GitHub CI",
+  )
+  def test_profiling_server_error_status_codes(self):
+    with (
+        mock.patch.dict(
+            profiling.os.environ,
+            {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://allowed"},
+            clear=True,
+        ),
+        mock.patch.object(profiling, "start_trace") as mock_start_trace,
+        mock.patch.object(profiling, "stop_trace"),
+        mock.patch.object(profiling.asyncio, "sleep"),
+    ):
+      app = self._get_server_app()
+      client = testclient.TestClient(app)
+
+      # Disallowed bucket -> 400 Bad Request
+      resp_bad_bucket = client.post(
+          "/profiling",
+          json={"duration_ms": 100, "repository_path": "gs://disallowed/dir"},
+      )
+      self.assertEqual(resp_bad_bucket.status_code, 400)
+      self.assertIn("not in allowed buckets list", resp_bad_bucket.json()["detail"])
+
+      # Concurrent trace -> 409 Conflict
+      mock_start_trace.side_effect = RuntimeError(
+          "start_trace called while a trace is already being taken!"
+      )
+      resp_conflict = client.post(
+          "/profiling",
+          json={"duration_ms": 100, "repository_path": "gs://allowed/dir"},
+      )
+      self.assertEqual(resp_conflict.status_code, 409)
+      self.assertIn(
+          "trace is already being taken", resp_conflict.json()["detail"]
+      )
+
+  def test_experimental_start_trace_validates_allowed_bucket_and_rolls_back(
+      self,
+  ):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://allowed_bucket"},
+    ):
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        exp_profiling.start_trace({"traceLocation": "gs://other_bucket/dir"})
+
+    self.mock_original_start_trace.side_effect = RuntimeError(
+        "original start trace error"
+    )
+    with self.assertRaisesRegex(RuntimeError, "original start trace error"):
+      exp_profiling.start_trace({"traceLocation": "gs://test_bucket/dir"})
+    self.assertIsNone(profiling._profile_state.executable)
+    self.assertFalse(profiling._profile_state.lock.locked())
 
 
 if __name__ == "__main__":
