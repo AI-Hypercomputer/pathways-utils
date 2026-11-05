@@ -14,6 +14,7 @@
 """Experimental profiling utilites."""
 
 from collections.abc import Mapping
+import json
 from typing import Any
 
 from pathwaysutils import profiling
@@ -49,6 +50,23 @@ def start_trace(
   """
   log_dir = profile_request["traceLocation"]
   profiling._validate_gcs_bucket(str(log_dir))  # pylint: disable=protected-access
+
+  if profiling.is_native_profiling_supported():
+    # Let JAX send the profile request to the Pathways backend.
+    profiling._original_start_trace(  # pylint: disable=protected-access
+        log_dir=log_dir,
+        create_perfetto_link=create_perfetto_link,
+        create_perfetto_trace=create_perfetto_trace,
+        profiler_options=profiling._with_advanced_configuration(  # pylint: disable=protected-access
+            None,
+            {
+                profiling._PROFILE_REQUEST_KEY: json.dumps(  # pylint: disable=protected-access
+                    {"profileRequest": profile_request}
+                )
+            },
+        ),
+    )
+    return
 
   profiling._start_pathways_trace_from_profile_request(profile_request)  # pylint: disable=protected-access
 
