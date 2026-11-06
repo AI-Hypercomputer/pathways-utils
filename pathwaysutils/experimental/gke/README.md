@@ -46,7 +46,9 @@ pw_jobset = jobset.PathwaysJobSet(
 
 ### Heterogeneous Multi-Topology Slices
 Combine multiple TPU slice topologies as separate worker `replicatedJobs`
-within a single `JobSet`:
+within a single `JobSet`. Call `add_worker_topology` before worker mutators
+(`add_colocated_python`, `add_gcsfuse`, or `with_custom_libtpu`) so they apply
+across all worker templates:
 
 ```python
 pw_jobset = (
@@ -78,7 +80,8 @@ pw_jobset.add_user_workload(
 ```
 
 ### Colocated Python Sidecar
-Inject a sidecar container onto worker pods sharing memory with `pathways-worker` for fast tensor transfers:
+Inject a sidecar container onto worker pods sharing memory with
+`pathways-worker` for zero-copy tensor transfers:
 
 ```python
 pw_jobset.add_colocated_python(
@@ -97,6 +100,18 @@ pw_jobset.add_gcsfuse(
     mount_path="/data",
     bucket="my-data-bucket",
     read_only=True,
+)
+```
+
+### Custom `libtpu.so` Runtime Override
+Set `TPU_LIBRARY_PATH` across the Pathways containers (`pathways-rm`,
+`pathways-proxy`, and `pathways-worker` when `containers="all"`) without
+injecting it into user or sidecar containers:
+
+```python
+pw_jobset.with_custom_libtpu(
+    libtpu_path="/data/libtpu/libtpu.so",
+    containers="all",
 )
 ```
 
