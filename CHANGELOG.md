@@ -23,6 +23,38 @@ To release a new version (e.g. from `1.0.0` -> `2.0.0`):
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-11-06
+## What's Changed
+* Add `PathwaysJobSet.add_external_sidecar` and wrap it in `add_colocated_python`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/354
+* Prevent duplicate shared-memory mounts on pathways-worker in `add_external_sidecar`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/355
+* Propagate exceptions on deployment failure and flag conflict in deploy_pathways_service by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/359
+* Add JAX 0.12.0 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/358
+* Document that --sidecar_image is optional in the SPS README by @guptaaka in https://github.com/AI-Hypercomputer/pathways-utils/pull/345
+* Add JAX 0.12.0.1 to test matrix by @wstcliyu in https://github.com/AI-Hypercomputer/pathways-utils/pull/361
+* Validate per-axis divisibility in reshard. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/365
+* Support bool and float16 dtypes and validate sharding in persistence helper. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/370
+* Use _device_assignment in sidechannel reshard request. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/371
+* Preserve shared service mode in import_yaml and validate topologies in PathwaysJobSet. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/363
+* Fix multi-head attention, checkpoint step persistence, and topology validation in simple_model. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/372
+* Import external READMEs and update PathwaysJobSet documentation. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/352
+* Add simulated fault elasticity integration test using DeviceLossSimulator. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/373
+* Support AOT compilation and weakref eviction in fault simulator. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/374
+* Remove unused _cleanup_on_retry helper in elastic manager. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/362
+* Return bool from is_pathways_backend_used and validate proxy connection timeout. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/369
+* Do not delete an existing proxy job in _ISCPathways when proxy job creation fails by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/360
+* Make GKE JobSet container and pod mutators idempotent. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/368
+* Validate wait_for_slices parameters and clean up monitor thread state in elastic manager. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/376
+* Export extras directory to repository root on GitHub. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/377
+* Remove redundant stop event cleanup branch in Manager.close. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/366
+* Add TCP readiness probes to Pathways head containers and scope custom libtpu to Pathways containers. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/378
+* Add `active_devices` property to `pathwaysutils.elastic.manager.Manager`. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/379
+* Use --num_elastic_instances for pathways-proxy and support newer kubernetes deserialize. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/381
+* Avoid mutating caller list in split_by_mesh_axis and validate per-array shardings in concatenate_by_mesh_axis. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/367
+* Update default Pathways container image paths to the Louhi release registry. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/380
+* Fix profiler state cleanup, bucket validation, and HTTP error status codes in profiling utilities. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/364
+* Detect whether to fetch GKE credentials for the DNS endpoint by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/356
+* Make the Shared Pathways proxy readiness wait survive node scale ups by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/357
+
 ## [0.1.13] - 2026-10-16
 ## What's Changed
 * Stop clearing JAX caches and deleting live arrays on elastic events. by @copybara-service[bot] in https://github.com/AI-Hypercomputer/pathways-utils/pull/339
