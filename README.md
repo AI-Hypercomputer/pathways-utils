@@ -1,15 +1,50 @@
 # APIs to get started with using Pathways on Cloud
 
-Pathways is a novel compute orchestration method that enables single controller runtime ML workloads.
-This approach unlocks a range of new capabilities for training resiliency, multihost inference and interactive development on cluster of arbitrary scale.
-Pathways simplifies large-scale machine learning computations by enabling a single JAX client to orchestrate workloads across multiple large TPU slices, potentially spanning hundreds or thousands of TPU chips. Pathways is used internally at Google to train large models like Gemini. Pathways on Cloud brings the same benefits to Google Cloud customers.
+Pathways is a compute orchestration runtime for single-controller ML workloads
+across multiple Cloud TPU slices. A single Python controller orchestrates
+computation across hundreds or thousands of TPU chips, unlocking slice-level
+training resiliency, fast cross-slice data movement, and interactive
+multi-slice development.
 
-To make it as easy as possible for you to leverage Pathways on Cloud, we've bundled the necessary cloud-specific integrations into a single Python package and a set of container images.
-This package handles the underlying adaptations required for the cloud environment, allowing you to focus on your core workflows with minimal setup.
+This package bundles the Python client integrations, resharding and elasticity
+helpers, and GKE deployment builders for running JAX workloads on Pathways on
+Cloud.
 
-# Further Reading
-[Pathways Research Paper](https://arxiv.org/abs/2203.12533)
+## Installation
 
-[Get started with Pathways on Google Cloud](https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/pathways-intro)
+```bash
+pip install pathwaysutils
+# Optional GKE JobSet generator and kubectl/Kubernetes client dependencies:
+pip install 'pathwaysutils[gke]'
+# Optional experimental Shared Pathways Service (SPS) dependencies:
+pip install 'pathwaysutils[sps]'
+```
+
+## Core Modules
+
+- `pathwaysutils.initialize()` registers the Pathways IFRT proxy backend,
+  configures the compilation cache and XProf trace hooks, and registers Orbax
+  checkpoint handlers.
+- `pathwaysutils.reshard.reshard` reshards arrays and PyTrees across device
+  meshes directly on Pathways workers via the IFRT `RemapArray` API without
+  routing tensors through controller memory.
+- `pathwaysutils.elastic.manager.Manager` monitors slice health in the
+  background and provides `@elastic_retry` and `ScaleUpSignalError` for
+  step-level fault recovery and dynamic slice scaling.
+- [`PathwaysJobSet`][gke-readme] (`pathwaysutils.experimental.gke.jobset`)
+  builds, customizes, exports, and deploys Kubernetes `JobSet` manifests for
+  Pathways workloads on GKE.
+- [Shared Pathways Service][sps-readme]
+  (`pathwaysutils.experimental.shared_pathways_service`) deploys a persistent
+  multi-tenant Pathways service on GKE for interactive JAX sessions.
+
+## Further Reading
+
+- [Get started with Pathways on Google Cloud][cloud-docs]
+- [Pathways Research Paper](https://arxiv.org/abs/2203.12533)
+
+[gke-readme]: https://github.com/AI-Hypercomputer/pathways-utils/tree/main/pathwaysutils/experimental/gke
+[sps-readme]: https://github.com/AI-Hypercomputer/pathways-utils/tree/main/pathwaysutils/experimental/shared_pathways_service
+[cloud-docs]: https://docs.cloud.google.com/ai-hypercomputer/docs/workloads/pathways-on-cloud/pathways-intro
 
 
