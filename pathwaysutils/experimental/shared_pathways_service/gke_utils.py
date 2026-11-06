@@ -2,6 +2,7 @@
 
 import datetime
 import functools
+import json
 import logging
 import os
 import re
@@ -44,12 +45,106 @@ def _validate_k8s_name(name: str) -> None:
     )
 
 
+def _get_control_plane_endpoints_config(
+    *, cluster_name: str, project_id: str, location: str
+) -> dict[str, Any]:
+  """Returns the control plane endpoints configuration of the GKE cluster.
+
+  Args:
+    cluster_name: The name of the GKE cluster.
+    project_id: The GCP project ID.
+    location: The GCP region or zone of the cluster.
+
+  Returns:
+    The cluster's `controlPlaneEndpointsConfig` as returned by the GKE API, or
+    an empty dict if it cannot be read.
+  """
+  describe_command = [
+      "gcloud",
+      "container",
+      "clusters",
+      "describe",
+      f"--location={location}",
+      f"--project={project_id}",
+      "--format=json(controlPlaneEndpointsConfig)",
+      "--",
+      cluster_name,
+  ]
+  try:
+    result = subprocess.run(
+        describe_command, check=True, capture_output=True, text=True
+    )
+    cluster = json.loads(result.stdout or "{}")
+  except (subprocess.CalledProcessError, ValueError) as e:
+    _logger.warning(
+        "Failed to read the control plane endpoints of cluster '%s'. Using its"
+        " default endpoint. Error: %r",
+        cluster_name,
+        getattr(e, "stderr", None) or e,
+    )
+    return {}
+  return cluster.get("controlPlaneEndpointsConfig") or {}
+
+
+def _should_use_dns_endpoint(endpoints_config: dict[str, Any]) -> bool:
+  """Returns whether to reach the control plane through its DNS-based endpoint.
+
+  The DNS-based endpoint is used only if it accepts user traffic and the
+  IP-based endpoint is not open to the internet, i.e. direct IP access is
+  disabled, there is no public endpoint, or authorized networks restrict access
+  to the public endpoint.
+
+  Args:
+    endpoints_config: The cluster's `controlPlaneEndpointsConfig` as returned by
+      the GKE API.
+  """
+  dns_config = endpoints_config.get("dnsEndpointConfig") or {}
+  if not dns_config.get("endpoint") or not dns_config.get(
+      "allowExternalTraffic"
+  ):
+    return False
+
+  ip_config = endpoints_config.get("ipEndpointsConfig") or {}
+  authorized_networks_config = ip_config.get("authorizedNetworksConfig") or {}
+  is_ip_endpoint_open = (
+      ip_config.get("enabled")
+      and ip_config.get("enablePublicEndpoint")
+      and not authorized_networks_config.get("enabled")
+  )
+  return not is_ip_endpoint_open
+
+
 def fetch_cluster_credentials(
     *, cluster_name: str, project_id: str, location: str
 ) -> None:
-  """Fetches credentials for the GKE cluster."""
+  """Fetches credentials for the GKE cluster.
+
+  Runs `gcloud container clusters get-credentials`, which writes the
+  `gke_<project>_<location>_<cluster>` entry to the kube config, replacing an
+  existing entry with that name, and makes it the current context. The entry
+  points at the cluster's DNS-based control plane endpoint only if that is the
+  endpoint to use according to `_should_use_dns_endpoint`.
+
+  Args:
+    cluster_name: The name of the GKE cluster.
+    project_id: The GCP project ID.
+    location: The GCP region or zone of the cluster.
+
+  Raises:
+    subprocess.CalledProcessError: If the gcloud command fails.
+  """
   _validate_k8s_name(cluster_name)
-  _logger.info("Fetching credentials for '%s'.", cluster_name)
+  use_dns_endpoint = _should_use_dns_endpoint(
+      _get_control_plane_endpoints_config(
+          cluster_name=cluster_name, project_id=project_id, location=location
+      )
+  )
+  endpoint_type = "DNS-based" if use_dns_endpoint else "default"
+  _logger.info(
+      "Fetching credentials for '%s' using its %s endpoint.",
+      cluster_name,
+      endpoint_type,
+  )
   get_credentials_command = [
       "gcloud",
       "container",
@@ -57,10 +152,10 @@ def fetch_cluster_credentials(
       "get-credentials",
       f"--location={location}",
       f"--project={project_id}",
-      "--dns-endpoint",
-      "--",
-      cluster_name,
   ]
+  if use_dns_endpoint:
+    get_credentials_command.append("--dns-endpoint")
+  get_credentials_command.extend(["--", cluster_name])
   try:
     subprocess.run(
         get_credentials_command,
@@ -73,6 +168,15 @@ def fetch_cluster_credentials(
         r"Failed to get cluster credentials. gcloud output:\n%r", e.stderr
     )
     raise
+
+  _logger.warning(
+      "Updated the kube config: the current context now targets cluster '%s'"
+      " in project '%s' and location '%s' through its %s endpoint.",
+      cluster_name,
+      project_id,
+      location,
+      endpoint_type,
+  )
 
 
 def deploy_gke_yaml(yaml: str, action: str = "apply") -> None:
