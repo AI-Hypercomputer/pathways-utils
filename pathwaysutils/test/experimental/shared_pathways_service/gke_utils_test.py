@@ -1647,8 +1647,8 @@ class GKEUtilsTest(absltest.TestCase):
                             "name": "colocated-python-sidecar",
                             "image": (
                                 "us-docker.pkg.dev/cloud-tpu-v2-images/"
-                                "pathways-colocated-python/sidecar:"
-                                "20260423-python_3.12-jax_0.10.0"
+                                "cloud-pathways/colocated_python_sidecar:"
+                                "jax-0.12.0"
                             ),
                         },
                     ],
@@ -1666,8 +1666,8 @@ class GKEUtilsTest(absltest.TestCase):
     self.assertEqual(
         sidecar_img,
         (
-            "us-docker.pkg.dev/cloud-tpu-v2-images/pathways-colocated-python/"
-            "sidecar:20260423-python_3.12-jax_0.10.0"
+            "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/"
+            "colocated_python_sidecar:jax-0.12.0"
         ),
     )
     mock_custom_api.get_namespaced_custom_object.assert_called_once_with(
