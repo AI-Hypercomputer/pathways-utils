@@ -1129,7 +1129,9 @@ class PathwaysJobSet:
     share a memory-backed volume mounted at `shm_mount_path`, and
     `pathways-worker` is started with
     `--cloud_pathways_sidecar_shm_directory=<shm_mount_path>` so that large
-    tensors are transferred through shared host memory.
+    tensors are transferred through shared host memory. When `pathways-proxy`
+    is present in the head pod, `--sidecar_name=external` is also appended to
+    its arguments unless `--sidecar_name` is already specified.
 
     Args:
       image: Docker image for the external sidecar.
@@ -1161,7 +1163,30 @@ class PathwaysJobSet:
           name=name,
           container_kwargs=container_kwargs,
       )
+    self._enable_sidecar_on_proxy()
     return self
+
+  def _enable_sidecar_on_proxy(self) -> None:
+    """Enables external sidecar support on `pathways-proxy` when present."""
+    if not (
+        self._head_job_template.spec
+        and self._head_job_template.spec.template
+        and self._head_job_template.spec.template.spec
+    ):
+      return
+    head_pod_spec = self._head_job_template.spec.template.spec
+    all_containers = (head_pod_spec.containers or []) + (
+        head_pod_spec.init_containers or []
+    )
+    for container in all_containers:
+      if container.name == "pathways-proxy":
+        args = list(container.args or [])
+        if not any(
+            a == "--sidecar_name" or a.startswith("--sidecar_name=")
+            for a in args
+        ):
+          args.append("--sidecar_name=external")
+          container.args = args
 
   def _add_sidecar_to_pod_spec(
       self,

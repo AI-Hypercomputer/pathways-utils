@@ -757,6 +757,127 @@ class PathwaysJobSetTest(parameterized.TestCase):
     ]
     self.assertLen(shm_envs, 1)
 
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="colocated_python_headless",
+          order=("colocated_python",),
+          expect_init_container=False,
+      ),
+      dict(
+          testcase_name="external_sidecar_custom_name_headless",
+          order=("external_cpp",),
+          expect_init_container=False,
+      ),
+      dict(
+          testcase_name="sidecar_before_user_workload",
+          order=("colocated_python", "user_workload"),
+          expect_init_container=True,
+      ),
+      dict(
+          testcase_name="sidecar_after_user_workload",
+          order=("user_workload", "colocated_python"),
+          expect_init_container=True,
+      ),
+  )
+  def test_add_sidecar_enables_proxy_sidecar_flag(
+      self, order, expect_init_container
+  ):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    for step in order:
+      if step == "colocated_python":
+        pw_jobset.add_colocated_python(
+            image="gcr.io/my-project/colocated-python:latest"
+        )
+      elif step == "external_cpp":
+        pw_jobset.add_external_sidecar(
+            image="gcr.io/my-project/cpp-sidecar:latest", name="cpp"
+        )
+      elif step == "user_workload":
+        pw_jobset.add_user_workload(
+            image="gcr.io/my-project/trainer:latest", command="python3 train.py"
+        )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    head_containers = (
+        helper.init_containers["pathways-head"]
+        if expect_init_container
+        else helper.containers["pathways-head"]
+    )
+    proxy_args = head_containers["pathways-proxy"]["args"]
+    self.assertEqual(
+        [a for a in proxy_args if a.startswith("--sidecar_name")],
+        ["--sidecar_name=external"],
+    )
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="multiple_sidecars",
+          preset_args=None,
+          expected_sidecar_args=["--sidecar_name=external"],
+      ),
+      dict(
+          testcase_name="preset_equals_flag",
+          preset_args=["--sidecar_name=custom"],
+          expected_sidecar_args=["--sidecar_name=custom"],
+      ),
+      dict(
+          testcase_name="preset_separate_arg_flag",
+          preset_args=["--sidecar_name", "custom"],
+          expected_sidecar_args=["--sidecar_name", "custom"],
+      ),
+  )
+  def test_add_sidecar_deduplicates_and_preserves_proxy_sidecar_flag(
+      self, preset_args, expected_sidecar_args
+  ):
+    proxy_kwargs = {"args": list(preset_args)} if preset_args else None
+    pw_jobset = self._create_jobset(
+        topology="2x2", num_slices=1, proxy_container_kwargs=proxy_kwargs
+    )
+
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest"
+    ).add_external_sidecar(
+        image="gcr.io/my-project/cpp-sidecar:latest", name="cpp"
+    )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    proxy_args = helper.containers["pathways-head"]["pathways-proxy"]["args"]
+    sidecar_args = []
+    for i, arg in enumerate(proxy_args):
+      if arg == "--sidecar_name":
+        sidecar_args.extend(proxy_args[i : i + 2])
+      elif arg.startswith("--sidecar_name="):
+        sidecar_args.append(arg)
+    self.assertEqual(sidecar_args, expected_sidecar_args)
+
+  def test_add_sidecar_shared_pathways_service_has_no_proxy(self):
+    pw_jobset = self._create_jobset(
+        topology="2x2", num_slices=1, shared_pathways_service=True
+    )
+
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest"
+    )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    self.assertNotIn("pathways-proxy", helper.containers["pathways-head"])
+    self.assertIn(
+        "colocated-python-sidecar", helper.init_containers["pathways-worker"]
+    )
+
+  def test_add_sidecar_invalid_kwargs_does_not_mutate_proxy(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+
+    with self.assertRaises(ValueError):
+      pw_jobset.add_colocated_python(
+          image="gcr.io/my-project/colocated-python:latest",
+          not_a_field=True,
+      )
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    proxy_args = helper.containers["pathways-head"]["pathways-proxy"]["args"]
+    self.assertFalse(any(a.startswith("--sidecar_name") for a in proxy_args))
+
   # Reference similar GKE / JobSet custom object unit test suites:
   # - Google3 GKE JobSet test suite: //depot/google3/cloud/ai/map/catmint/supervisor/client/python/orchestrators/gke_callbacks_test.py
   # - Upstream Kubernetes SIGs JobSet unit tests: https://github.com/kubernetes-sigs/jobset/blob/main/pkg/controllers/jobset_controller_test.go
