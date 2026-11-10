@@ -309,6 +309,10 @@ class Manager:
     keep references to them, or the memory stays allocated during the next
     attempt.
 
+    Each attempt also makes `self.default_device` the process-wide default
+    device, so work on other threads avoids slices that are down. The previous
+    value is restored when the wrapped function exits.
+
     Often, the function will dispatch JAX operations and wait for them to
     complete while creating a log message. If using Python logging, it is
     recommended to set `logging.raiseExceptions=True` to ensure that the
@@ -376,10 +380,15 @@ class Manager:
           # Reset available_inactive_slices at attempt start since
           # active_slice_indices has just been updated by wait_for_slices.
           self.available_inactive_slices = frozenset()
-          if pre_callback is not None:
-            pre_callback()
-
+          # Set both defaults to a device of an active slice. The process-wide
+          # default covers threads that libraries run work on, which do not see
+          # thread-local defaults. The thread-local default covers this thread,
+          # because a thread-local default set by the caller takes precedence
+          # over the process-wide default.
+          jax.config.update("jax_default_device", self.default_device)
           with jax.default_device(self.default_device):
+            if pre_callback is not None:
+              pre_callback()
             return func(*args, **kwargs)
 
         def handle_scale_up_error(attempt: int, error: ScaleUpSignalError) -> None:
@@ -419,6 +428,10 @@ class Manager:
                 f"Elastic attempt {attempt} failed."
             ) from error
 
+        # Restored when the elastic run ends. If the caller set a thread-local
+        # default device, this reads that instead of the process-wide default,
+        # so the restore overwrites the process-wide default with it.
+        previous_default_device = jax.config.jax_default_device
         try:
           attempt = 1
           while True:
@@ -430,6 +443,7 @@ class Manager:
               handle_slice_down_error(attempt, error)
             attempt += 1
         finally:
+          jax.config.update("jax_default_device", previous_default_device)
           self.close()
 
       return wrapper  # pyrefly: ignore[bad-return]
