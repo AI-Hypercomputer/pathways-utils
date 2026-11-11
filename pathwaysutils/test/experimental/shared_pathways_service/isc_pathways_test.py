@@ -109,7 +109,9 @@ class ISCPathwaysTest(parameterized.TestCase):
         "--resource_manager_address=test-service:8080", substituted_yaml
     )
     self.assertIn("--gcs_scratch_location=test-bucket", substituted_yaml)
-    self.assertIn("--virtual_slices=tpuv6e:2x2,tpuv6e:2x2", substituted_yaml)
+    self.assertIn(
+        "--virtual_instances=tpuv6e:2x2,tpuv6e:2x2", substituted_yaml
+    )
     self.assertIn('image: "test-image:latest"', substituted_yaml)
     # Extract the env section and check that it doesn't contain any - name:
     # entries.
