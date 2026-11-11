@@ -20,11 +20,9 @@ events. It also provides a utility for waiting for slices to become active.
 
 from abc import ABC, abstractmethod
 import collections
-from collections.abc import Callable, Mapping, Sequence, Set
-import itertools
+from collections.abc import Mapping, Sequence, Set
 import logging
 import time
-from typing import Any
 
 import jax
 import numpy as np
