@@ -93,7 +93,8 @@ def initialize() -> None:
   if is_pathways_backend_used():
     _logger.debug("Detected Pathways-on-Cloud backend. Applying changes.")
     proxy_backend.register_backend_factory()
-    profiling.monkey_patch_jax()
+    if not profiling.is_native_profiling_supported():
+      profiling.monkey_patch_jax()
     if _is_persistence_enabled():
       type_handlers.register_type_handler(
           jax.Array,

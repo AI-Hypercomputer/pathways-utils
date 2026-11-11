@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -49,6 +50,32 @@ class InitializeTest(parameterized.TestCase):
     self.assertIn(
         "Detected Pathways-on-Cloud backend. Applying changes.", logs.output[1]
     )
+
+  @parameterized.named_parameters(
+      ("native_profiling_supported", True, False),
+      ("native_profiling_unsupported", False, True),
+  )
+  def test_initialize_monkey_patches_jax_only_without_native_profiling(
+      self, native_profiling_supported, expect_monkey_patch
+  ):
+    jax.config.update("jax_platforms", "proxy")
+    _initialize._initialization_count = 0
+    self.enter_context(
+        mock.patch.object(
+            _initialize.profiling,
+            "is_native_profiling_supported",
+            return_value=native_profiling_supported,
+        )
+    )
+    mock_monkey_patch_jax = self.enter_context(
+        mock.patch.object(
+            _initialize.profiling, "monkey_patch_jax", autospec=True
+        )
+    )
+
+    _initialize.initialize()
+
+    self.assertEqual(mock_monkey_patch_jax.called, expect_monkey_patch)
 
   @parameterized.named_parameters(
       ("initialization_count 1", 1),

@@ -35,6 +35,13 @@ class ProfilingTest(parameterized.TestCase):
 
   def setUp(self):
     super().setUp()
+    # These tests cover the profiling that pathwaysutils drives itself, i.e.,
+    # without JAX tracing the Pathways backend.
+    self.enter_context(
+        mock.patch.object(
+            profiling, "is_native_profiling_supported", return_value=False
+        )
+    )
     self.mock_post = self.enter_context(
         mock.patch.object(requests, "post", autospec=True)
     )
@@ -1214,6 +1221,117 @@ class ProfilingTest(parameterized.TestCase):
       exp_profiling.start_trace({"traceLocation": "gs://test_bucket/dir"})
     self.assertIsNone(profiling._profile_state.executable)
     self.assertFalse(profiling._profile_state.lock.locked())
+
+
+class IsNativeProfilingSupportedTest(parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      ("supported", 519, 83, True),
+      ("old_jaxlib", 518, 83, False),
+      ("old_xla", 519, 82, False),
+  )
+  def test_is_native_profiling_supported(
+      self, jaxlib_extension_version, ifrt_version, expected
+  ):
+    with mock.patch.multiple(
+        jax._src.lib,  # pylint: disable=protected-access
+        jaxlib_extension_version=jaxlib_extension_version,
+        ifrt_version=ifrt_version,
+    ):
+      self.assertEqual(profiling.is_native_profiling_supported(), expected)
+
+  def test_unsupported_without_jaxlib_extension_version(self):
+    self.enter_context(mock.patch.dict(jax._src.lib.__dict__))  # pylint: disable=protected-access
+    jax._src.lib.__dict__.pop("jaxlib_extension_version", None)  # pylint: disable=protected-access
+
+    self.assertFalse(profiling.is_native_profiling_supported())
+
+
+class NativeProfilingTest(parameterized.TestCase):
+  """Tests for Pathways on Cloud profiling when JAX traces Pathways."""
+
+  def setUp(self):
+    super().setUp()
+    self.enter_context(
+        mock.patch.object(
+            profiling, "is_native_profiling_supported", return_value=True
+        )
+    )
+    self.mock_plugin_executable_cls = self.enter_context(
+        mock.patch.object(
+            profiling.plugin_executable, "PluginExecutable", autospec=True
+        )
+    )
+    self.mock_original_start_trace = self.enter_context(
+        mock.patch.object(profiling, "_original_start_trace", autospec=True)
+    )
+    self.mock_original_stop_trace = self.enter_context(
+        mock.patch.object(profiling, "_original_stop_trace", autospec=True)
+    )
+
+  def test_start_trace_uses_jax_profiler(self):
+    result = profiling.start_trace("gs://test_bucket/test_dir")
+
+    self.assertIs(result, self.mock_original_start_trace.return_value)
+    self.mock_plugin_executable_cls.assert_not_called()
+    self.mock_original_start_trace.assert_called_once()
+    call_args = self.mock_original_start_trace.call_args[1]
+    self.assertEqual(call_args["log_dir"], "gs://test_bucket/test_dir")
+    self.assertFalse(call_args["create_perfetto_link"])
+    self.assertFalse(call_args["create_perfetto_trace"])
+    self.assertEqual(
+        call_args["profiler_options"].advanced_configuration,
+        {"pathways_max_num_hosts": 1},
+    )
+
+  def test_start_trace_with_max_num_hosts(self):
+    profiling.start_trace("gs://test_bucket/test_dir", max_num_hosts=4)
+
+    call_args = self.mock_original_start_trace.call_args[1]
+    self.assertEqual(
+        call_args["profiler_options"].advanced_configuration,
+        {"pathways_max_num_hosts": 4},
+    )
+
+  @absltest.skipIf(
+      not profiling.is_native_profiling_supported(),
+      "Requires a JAX version that supports native Pathways profiling, whose"
+      " ProfileOptions can be copied.",
+  )
+  def test_start_trace_with_profiler_options(self):
+    options = jax.profiler.ProfileOptions()
+    options.python_tracer_level = 0
+    options.advanced_configuration = {
+        "pathways_max_num_hosts": 8,
+        "tpu_trace_mode": "TRACE_ONLY_HOST",
+    }
+
+    profiling.start_trace(
+        "gs://test_bucket/test_dir", profiler_options=options, max_num_hosts=4
+    )
+
+    call_args = self.mock_original_start_trace.call_args[1]
+    session_options = call_args["profiler_options"]
+    self.assertIsNot(session_options, options)
+    self.assertEqual(session_options.python_tracer_level, 0)
+    self.assertEqual(
+        session_options.advanced_configuration,
+        {"pathways_max_num_hosts": 8, "tpu_trace_mode": "TRACE_ONLY_HOST"},
+    )
+
+  @parameterized.parameters("/logs/test_log_dir", "cns://test_bucket/test_dir")
+  def test_start_trace_log_dir_error(self, log_dir):
+    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
+      profiling.start_trace(log_dir)
+
+    self.mock_original_start_trace.assert_not_called()
+
+  def test_stop_trace_uses_jax_profiler(self):
+    result = profiling.stop_trace()
+
+    self.assertIs(result, self.mock_original_stop_trace.return_value)
+    self.mock_original_stop_trace.assert_called_once()
+    self.mock_plugin_executable_cls.assert_not_called()
 
 
 if __name__ == "__main__":
