@@ -665,7 +665,7 @@ class ISCPathwaysTest(parameterized.TestCase):
         )
     )
     mock_get_images.return_value = (
-        "us-docker.pkg.dev/cloud-tpu-v2-images/pathways/server:latest",
+        "us-docker.pkg.dev/cloud-tpu-v2-images/cloud-pathways/server:latest",
         None,
     )
     mock_isc_pathways = self.enter_context(
