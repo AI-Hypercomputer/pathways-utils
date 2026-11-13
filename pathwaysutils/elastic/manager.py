@@ -18,9 +18,10 @@ retries a function in case of `jax.errors.JaxRuntimeError` caused by slice down
 events. It also provides a utility for waiting for slices to become active.
 """
 
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
 import functools
 import logging
+import math
 import threading
 from typing import Any, TypeAlias, TypeVar
 import warnings
@@ -98,13 +99,25 @@ class Manager:
   active_slice_indices: Set[int]
   inactive_slice_indices: Set[int]
   available_inactive_slices: Set[int]
+
   _stop_event: threading.Event | None
   _monitor_thread: threading.Thread | None
-  def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
+  def __init__(
+      self,
+      devices: Sequence[jax.Device] | None = None,
+      *,
+      minimum_slice_count: int | None = None,
+      poll_interval: float | int = 10,
+      timeout: float | int | None = None,
+  ) -> None:
     """Initializes the manager.
 
     Args:
       devices: The devices to use. If None, jax.devices() is used.
+      minimum_slice_count: Minimum active slices to wait for (< 1 = all). If
+        None, active slices are sampled once without waiting.
+      poll_interval: Seconds between slice health checks when waiting.
+      timeout: Maximum seconds to wait when waiting, or None for no timeout.
     """
     if devices is None:
       devices = jax.devices()
@@ -115,9 +128,18 @@ class Manager:
     self._active_slice_indices = frozenset()
     self.available_inactive_slices = frozenset()
 
-    self.active_slice_indices = elastic.get_active_slice_indices(
-        slice_to_devices=self.slice_to_devices
-    )
+    if minimum_slice_count is not None:
+      slice_count = None if minimum_slice_count < 1 else minimum_slice_count
+      self.active_slice_indices = elastic.wait_for_slices(
+          slice_count=slice_count,
+          poll_interval=poll_interval,
+          timeout=timeout,
+          slice_to_devices=self.slice_to_devices,
+      )
+    else:
+      self.active_slice_indices = elastic.get_active_slice_indices(
+          slice_to_devices=self.slice_to_devices
+      )
 
     self._stop_event = None
     self._monitor_thread = None
@@ -205,6 +227,70 @@ class Manager:
     for slice_index in sorted(self.active_slice_indices):
       devices.extend(self.slice_to_devices[slice_index])
     return devices
+
+  def scale_grad_accumulation_steps(
+      self, base_steps: int, *, batch_sizes: tuple[int, int] | None = None
+  ) -> int:
+    """Scales gradient accumulation steps to preserve global batch size.
+
+    When running on fewer than `total_slice_count` slices, computes the smallest
+    integer number of microbatch accumulation steps that evenly divides
+    `target_batch` and covers at least `target_batch` per optimizer step.
+
+    Args:
+      base_steps: Configured gradient accumulation steps at full slice capacity
+        (0 or 1 means no gradient accumulation when all slices are active).
+      batch_sizes: Optional `(active_batch, target_batch)` override. If None,
+        defaults to `(active_slice_count * max(1, base_steps),
+        total_slice_count * max(1, base_steps))`.
+
+    Returns:
+      The scaled number of gradient accumulation steps, or `base_steps` when no
+      increase is needed.
+    """
+    min_steps = max(1, base_steps)
+    active_batch, target_batch = batch_sizes or (
+        self.active_slice_count * min_steps,
+        self.total_slice_count * min_steps,
+    )
+    if active_batch <= 0 or target_batch <= 0:
+      return base_steps
+    steps = math.ceil(target_batch / max(1, active_batch // min_steps))
+    while target_batch % steps != 0:
+      steps += 1
+    return base_steps if steps <= min_steps else steps
+
+  def aot_slice_subsets(
+      self, minimum_slice_count: int | None = None
+  ) -> Iterator[list[jax.Device]]:
+    """Yields `active_devices` for each degraded slice prefix for AOT compile.
+
+    Temporarily sets `active_slice_indices` to the first `count` active slices
+    for each `count` in `range(minimum_slice_count, active_slice_count)` so
+    callers can ahead-of-time compile meshes and steps for degraded slice
+    counts, then restores `active_slice_indices` and `available_inactive_slices`
+    on exit.
+
+    Args:
+      minimum_slice_count: Smallest degraded slice count to yield. If None,
+        `<= 0`, or `>= active_slice_count`, yields nothing.
+
+    Yields:
+      The list of `jax.Device` objects for each degraded slice prefix.
+    """
+    orig_active = self.active_slice_indices
+    orig_available = self.available_inactive_slices
+    ordered = sorted(orig_active)
+    if minimum_slice_count is not None and 0 < minimum_slice_count < len(
+        ordered
+    ):
+      try:
+        for count in range(minimum_slice_count, len(ordered)):
+          self.active_slice_indices = frozenset(ordered[:count])
+          yield self.active_devices
+      finally:
+        self.active_slice_indices = orig_active
+        self.available_inactive_slices = orig_available
 
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
@@ -324,7 +410,7 @@ class Manager:
         Deprecated: Use `retry_policy` instead.
         TODO: b/523384843 - Remove max_retries parameter.
       minimum_slice_count: The minimum number of slices required to run the
-        function. If None, defaults to the total number of slices.
+        function. If None or < 1, defaults to the total number of slices.
       poll_interval: The number of seconds to wait between activity checks.
         Defaults to 10 seconds.
       timeout: The maximum number of seconds to wait for slices to become active
@@ -348,7 +434,7 @@ class Manager:
     """
     target_slice_count = (
         self.total_slice_count
-        if minimum_slice_count is None
+        if minimum_slice_count is None or minimum_slice_count < 1
         else minimum_slice_count
     )
 
