@@ -15,6 +15,7 @@
 import json
 import logging
 import os
+import pathlib
 import threading
 from typing import Any
 import unittest
@@ -158,6 +159,9 @@ class ProfilingTest(parameterized.TestCase):
       "gs://test_bucket/test_log_dir",
       "gs://test_bucket2",
       "gs://test_bucket3/test/log/dir",
+      "/logs/test_log_dir",
+      "/mnt/gcsfuse/traces",
+      pathlib.Path("/mnt/gcsfuse/traces"),
   )
   def test_collect_profile_log_dir(self, log_dir):
     result = profiling.collect_profile(
@@ -169,14 +173,21 @@ class ProfilingTest(parameterized.TestCase):
         "http://127.0.0.1:8000/profiling",
         json={
             "duration_ms": 1000,
-            "repository_path": log_dir,
+            "repository_path": str(log_dir),
         },
         headers={},
     )
+    json.dumps(self.mock_post.call_args.kwargs["json"])
 
-  @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
+  @parameterized.parameters(
+      "",
+      "relative_path/my_log_dir",
+      "cns://test_bucket/test_dir",
+  )
   def test_collect_profile_log_dir_error(self, log_dir):
-    with self.assertRaises(ValueError):
+    with self.assertRaisesRegex(
+        ValueError, "Path must be a GCS path or an absolute path"
+    ):
       profiling.collect_profile(
           port=8000, duration_ms=1000, host="127.0.0.1", log_dir=log_dir
       )
@@ -222,13 +233,15 @@ class ProfilingTest(parameterized.TestCase):
     mock_response.raise_for_status.assert_called_once()
 
   @parameterized.parameters(
-      "/logs/test_log_dir",
+      "",
       "relative_path/my_log_dir",
       "cns://test_bucket/test_dir",
       "not_a_gcs_path",
   )
   def test_start_trace_log_dir_error(self, log_dir):
-    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
+    with self.assertRaisesRegex(
+        ValueError, "Path must be a GCS path or an absolute path"
+    ):
       profiling.start_trace(log_dir)
 
   def test_lock_released_on_success(self):
@@ -474,13 +487,108 @@ class ProfilingTest(parameterized.TestCase):
     self.assertFalse(profiling._profile_state.lock.locked())
 
   def test_trace_log_dir_error_does_not_stop_trace(self):
-    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
-      with profiling.trace("/local/test_dir"):
+    with self.assertRaisesRegex(
+        ValueError, "Path must be a GCS path or an absolute path"
+    ):
+      with profiling.trace("relative/test_dir"):
         pass
 
     self.mock_plugin_executable_cls.assert_not_called()
     self.mock_original_start_trace.assert_not_called()
     self.mock_original_stop_trace.assert_not_called()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="str_path", log_dir="/mnt/gcsfuse/traces"),
+      dict(
+          testcase_name="pathlike",
+          log_dir=pathlib.Path("/mnt/gcsfuse/traces"),
+      ),
+  )
+  def test_start_trace_and_trace_allow_absolute_posix_paths(self, log_dir):
+    profiling.start_trace(log_dir)
+    self.mock_plugin_executable_cls.assert_called_once_with(
+        json.dumps(self._get_expected_profile_request("/mnt/gcsfuse/traces"))
+    )
+    profiling.stop_trace()
+
+    self.mock_plugin_executable_cls.reset_mock()
+    self.mock_original_start_trace.reset_mock()
+    self.mock_original_stop_trace.reset_mock()
+
+    with profiling.trace(log_dir):
+      pass
+
+    self.mock_plugin_executable_cls.assert_called_once_with(
+        json.dumps(self._get_expected_profile_request("/mnt/gcsfuse/traces"))
+    )
+    self.mock_original_stop_trace.assert_called_once()
+
+  def test_validate_gcs_bucket_blocks_posix_path_when_allowed_buckets_set(
+      self,
+  ):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://bucket1,gs://bucket2"},
+    ):
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket("/mnt/gcsfuse/traces")
+
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "/mnt/gcsfuse,gs://bucket1"},
+    ):
+      profiling._validate_gcs_bucket("/mnt/gcsfuse/traces")
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket("/other/dir")
+
+  @unittest.skipIf(
+      os.environ.get("GITHUB_ACTIONS") == "true",
+      "Skipping FastAPI server test in GitHub CI",
+  )
+  def test_profiling_server_allows_absolute_posix_path(self):
+    with (
+        mock.patch.dict(profiling.os.environ, {}, clear=True),
+        mock.patch.object(profiling, "start_trace") as mock_start_trace,
+        mock.patch.object(profiling, "stop_trace"),
+        mock.patch.object(profiling.asyncio, "sleep"),
+    ):
+      app = self._get_server_app()
+      client = testclient.TestClient(app)
+      response = client.post(
+          "/profiling",
+          json={
+              "duration_ms": 100,
+              "repository_path": "/mnt/gcsfuse/traces",
+          },
+      )
+      self.assertEqual(response.status_code, 200)
+      mock_start_trace.assert_called_once_with(
+          "/mnt/gcsfuse/traces", profiler_options=mock.ANY
+      )
+
+    profiling._profiler_thread = None
+    with (
+        mock.patch.dict(
+            profiling.os.environ,
+            {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://allowed"},
+            clear=True,
+        ),
+        mock.patch.object(profiling, "start_trace") as mock_start_trace,
+        mock.patch.object(profiling, "stop_trace"),
+        mock.patch.object(profiling.asyncio, "sleep"),
+    ):
+      app = self._get_server_app()
+      client = testclient.TestClient(app)
+      response = client.post(
+          "/profiling",
+          json={
+              "duration_ms": 100,
+              "repository_path": "/mnt/gcsfuse/traces",
+          },
+      )
+      self.assertEqual(response.status_code, 400)
+      self.assertIn("not in allowed buckets list", response.json()["detail"])
+      mock_start_trace.assert_not_called()
 
   def test_start_server_starts_thread(self):
     mock_thread = self.enter_context(
