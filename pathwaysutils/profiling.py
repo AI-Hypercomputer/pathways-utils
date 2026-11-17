@@ -225,10 +225,14 @@ def _start_pathways_trace_from_profile_request(
 
 
 def _validate_path(path: str) -> None:
-  """Validates that the path is a valid GCS path."""
+  """Validates that the path is a GCS path or an absolute local path."""
   path_str = str(path)
-  if not path_str or not path_str.startswith("gs://"):
-    raise ValueError(f"Path must be a GCS path, got {path_str}")
+  if not path_str or not (
+      path_str.startswith("gs://") or os.path.isabs(path_str)
+  ):
+    raise ValueError(
+        f"Path must be a GCS path or an absolute path, got {path_str}"
+    )
 
 
 def _validate_gcs_bucket(log_dir: str) -> None:
@@ -572,19 +576,20 @@ def collect_profile(
     port: The port on which the JAX profiler server is running.
     duration_ms: The duration in milliseconds for which to collect the profile.
     host: The host on which the JAX profiler server is running.
-    log_dir: The GCS path to save the profile data.
+    log_dir: The GCS path or absolute local path to save the profile data.
 
   Returns:
     True if the profile was collected successfully, False otherwise.
 
   Raises:
-    ValueError: If the log_dir is not a GCS path.
+    ValueError: If the log_dir is not a GCS path or an absolute path.
   """
-  _validate_path(str(log_dir))
+  log_dir_str = str(log_dir)
+  _validate_path(log_dir_str)
 
   request_json = {
       "duration_ms": duration_ms,
-      "repository_path": log_dir,
+      "repository_path": log_dir_str,
   }
   headers = {}
   if effective_token := os.environ.get("PATHWAYS_PROFILING_AUTH_TOKEN"):
