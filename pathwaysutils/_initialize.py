@@ -13,14 +13,9 @@
 # limitations under the License.
 """Initialization functions for Pathways-on-Cloud utilities."""
 
-import datetime
 import logging
-import os
 
 import jax
-from orbax.checkpoint import type_handlers
-from orbax.checkpoint._src.metadata import array_metadata_store as array_metadata_store_lib
-from orbax.checkpoint._src.serialization import cloud_pathways_array_handler
 from pathwaysutils import profiling
 from pathwaysutils import proxy_backend
 
@@ -45,37 +40,13 @@ def is_pathways_backend_used() -> bool:
   )
 
 
-def _is_persistence_enabled() -> bool:
-  """Returns whether persistence is enabled.
-
-  This function checks the environment variable ENABLE_PATHWAYS_PERSISTENCE to
-  determine whether persistence is enabled. If the variable is set to "1",
-  persistence is enabled. If the variable is set to "0" or unset, persistence is
-  disabled.
-
-  Returns:
-    True if persistence is enabled, False otherwise.
-  """
-  if "ENABLE_PATHWAYS_PERSISTENCE" in os.environ:
-    if os.environ["ENABLE_PATHWAYS_PERSISTENCE"] == "1":
-      return True
-    if os.environ["ENABLE_PATHWAYS_PERSISTENCE"] == "0":
-      return False
-    else:
-      raise ValueError(
-          "ENABLE_PATHWAYS_PERSISTENCE must be set to 1/0 or unset, got: "
-          + os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
-      )
-  return False
-
-
 def initialize() -> None:
   """Initializes pathwaysutils.
 
   This function is called by the user to initialize pathwaysutils. It is
-  responsible for setting up the logging, profiling, and persistence handlers
-  through various monkey patching functions. It is also responsible for
-  registering the proxy backend factory.
+  responsible for setting up logging and profiling through various monkey
+  patching functions. It is also responsible for registering the proxy backend
+  factory.
   """
   global _initialization_count
   _initialization_count += 1
@@ -94,15 +65,6 @@ def initialize() -> None:
     _logger.debug("Detected Pathways-on-Cloud backend. Applying changes.")
     proxy_backend.register_backend_factory()
     profiling.monkey_patch_jax()
-    if _is_persistence_enabled():
-      type_handlers.register_type_handler(
-          jax.Array,
-          cloud_pathways_array_handler.CloudPathwaysArrayHandler(
-              timeout=datetime.timedelta(hours=1),
-              array_metadata_store=array_metadata_store_lib.Store(),
-          ),
-          override=True,
-      )
 
     # Turn off JAX compilation cache because Pathways handles its own
     # compilation cache.

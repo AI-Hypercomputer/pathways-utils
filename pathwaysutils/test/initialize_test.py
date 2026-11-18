@@ -12,13 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
-from orbax.checkpoint import type_handlers
-from orbax.checkpoint._src.serialization import cloud_pathways_array_handler
 from pathwaysutils import _initialize
 
 
@@ -29,13 +25,6 @@ class InitializeTest(parameterized.TestCase):
 
     orig_jax_platforms = getattr(jax.config, "jax_platforms", None)
     self.addCleanup(jax.config.update, "jax_platforms", orig_jax_platforms)
-
-    self._orig_environ = os.environ.copy()
-    self.addCleanup(self._restore_environ)
-
-  def _restore_environ(self):
-    os.environ.clear()
-    os.environ.update(self._orig_environ)
 
   def test_first_initialize(self):
     jax.config.update("jax_platforms", "proxy")
@@ -89,32 +78,6 @@ class InitializeTest(parameterized.TestCase):
   def test_is_pathways_backend_used(self, platform: str):
     jax.config.update("jax_platforms", platform)
     self.assertTrue(_initialize.is_pathways_backend_used())
-
-  def test_persistence_enabled(self):
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
-    self.assertTrue(_initialize._is_persistence_enabled())
-
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "0"
-    self.assertFalse(_initialize._is_persistence_enabled())
-
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = ""
-    self.assertRaises(ValueError, _initialize._is_persistence_enabled)
-
-    del os.environ["ENABLE_PATHWAYS_PERSISTENCE"]
-    self.assertFalse(_initialize._is_persistence_enabled())
-
-  def test_initialize_registers_orbax_pathways_handler_when_persistence_enabled(
-      self,
-  ):
-    jax.config.update("jax_platforms", "proxy")
-    os.environ["ENABLE_PATHWAYS_PERSISTENCE"] = "1"
-    _initialize._initialization_count = 0
-
-    _initialize.initialize()
-    handler = type_handlers.get_type_handler(jax.Array)
-    self.assertIsInstance(
-        handler, cloud_pathways_array_handler.CloudPathwaysArrayHandler
-    )
 
 
 if __name__ == "__main__":

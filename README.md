@@ -22,9 +22,8 @@ pip install 'pathwaysutils[sps]'
 
 ## Core Modules
 
-- `pathwaysutils.initialize()` registers the Pathways IFRT proxy backend,
-  configures the compilation cache and XProf trace hooks, and registers Orbax
-  checkpoint handlers.
+- `pathwaysutils.initialize()` registers the Pathways IFRT proxy backend and
+  configures the compilation cache and XProf trace hooks.
 - `pathwaysutils.reshard.reshard` reshards arrays and PyTrees across device
   meshes directly on Pathways workers via the IFRT `RemapArray` API without
   routing tensors through controller memory.
