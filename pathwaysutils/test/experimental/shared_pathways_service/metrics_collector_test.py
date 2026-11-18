@@ -242,6 +242,119 @@ class MetricsCollectorTest(absltest.TestCase):
     self.assertEqual(mock_client.create_time_series.call_count, 2)
     mock_sleep.assert_called()
 
+  def _create_collector_without_flusher(self, mock_client_class):
+    """Creates a collector whose background flusher thread is stopped."""
+    mock_client = mock.Mock()
+    mock_client_class.return_value = mock_client
+    collector = metrics_collector.MetricsCollector("gcp_project", "gke_cluster")
+    collector._running = False
+    collector._flusher_thread.join()
+    return collector, mock_client
+
+  def _flush_after_sampling_window(self, collector, metric_type):
+    """Flushes as if the Cloud Monitoring sampling window has passed."""
+    with mock.patch(
+        "time.time",
+        return_value=collector._last_sent_time[metric_type] + 11.0,
+    ):
+      collector.flush()
+
+  @mock.patch(
+      "pathwaysutils.experimental.shared_pathways_service.metrics_collector.monitoring_v3.MetricServiceClient"
+  )
+  def test_flush_retries_point_after_transient_error(self, mock_client_class):
+    collector, mock_client = self._create_collector_without_flusher(
+        mock_client_class
+    )
+    mock_client.create_time_series.side_effect = [
+        metrics_collector.exceptions.ServiceUnavailable("unavailable"),
+        None,
+    ]
+    collector.record_capacity_in_use(16)
+    collector.record_capacity_in_use(0)
+
+    collector.flush()
+
+    # The failed point goes back to the front of the queue.
+    queue = collector._buffer["capacity_in_use"]
+    self.assertEqual([point.value for point in queue], [16, 0])
+    self.assertEqual(queue[0].attempts, 1)
+
+    self._flush_after_sampling_window(collector, "capacity_in_use")
+
+    self.assertEqual(mock_client.create_time_series.call_count, 2)
+    _, kwargs = mock_client.create_time_series.call_args
+    self.assertEqual(
+        kwargs["time_series"][0].points[0].value.int64_value, 16
+    )
+    self.assertEqual(
+        [point.value for point in collector._buffer["capacity_in_use"]], [0]
+    )
+
+  @mock.patch(
+      "pathwaysutils.experimental.shared_pathways_service.metrics_collector.monitoring_v3.MetricServiceClient"
+  )
+  def test_flush_drops_point_after_permanent_error(self, mock_client_class):
+    collector, mock_client = self._create_collector_without_flusher(
+        mock_client_class
+    )
+    mock_client.create_time_series.side_effect = (
+        metrics_collector.exceptions.InvalidArgument("written too frequently")
+    )
+    collector.record_capacity_in_use(16)
+
+    collector.flush()
+
+    mock_client.create_time_series.assert_called_once()
+    self.assertNotIn("capacity_in_use", collector._buffer)
+
+  @mock.patch(
+      "pathwaysutils.experimental.shared_pathways_service.metrics_collector.monitoring_v3.MetricServiceClient"
+  )
+  def test_flush_drops_point_after_max_attempts(self, mock_client_class):
+    collector, mock_client = self._create_collector_without_flusher(
+        mock_client_class
+    )
+    mock_client.create_time_series.side_effect = (
+        metrics_collector.exceptions.ServiceUnavailable("unavailable")
+    )
+    collector.record_capacity_in_use(16)
+
+    collector.flush()
+    for _ in range(metrics_collector._MAX_SEND_ATTEMPTS - 1):
+      self._flush_after_sampling_window(collector, "capacity_in_use")
+
+    self.assertEqual(
+        mock_client.create_time_series.call_count,
+        metrics_collector._MAX_SEND_ATTEMPTS,
+    )
+    self.assertNotIn("capacity_in_use", collector._buffer)
+
+  @mock.patch(
+      "pathwaysutils.experimental.shared_pathways_service.metrics_collector.monitoring_v3.MetricServiceClient"
+  )
+  def test_shutdown_retries_transient_errors(self, mock_client_class):
+    collector, mock_client = self._create_collector_without_flusher(
+        mock_client_class
+    )
+    mock_client.create_time_series.side_effect = [
+        metrics_collector.exceptions.DeadlineExceeded("deadline"),
+        None,
+    ]
+    collector.record_capacity_in_use(0)
+
+    current_time = [1000.0]
+
+    def mock_sleep_func(seconds):
+      current_time[0] += seconds
+
+    with mock.patch("time.sleep", side_effect=mock_sleep_func):
+      with mock.patch("time.time", side_effect=lambda: current_time[0]):
+        collector._shutdown()
+
+    self.assertEqual(mock_client.create_time_series.call_count, 2)
+    self.assertNotIn("capacity_in_use", collector._buffer)
+
 
 if __name__ == "__main__":
   absltest.main()
