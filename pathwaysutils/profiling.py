@@ -225,32 +225,42 @@ def _start_pathways_trace_from_profile_request(
 
 
 def _validate_path(path: str) -> None:
-  """Validates that the path is a valid GCS path."""
+  """Validates that the path is a GCS path or a local path."""
   path_str = str(path)
-  if not path_str or not path_str.startswith("gs://"):
-    raise ValueError(f"Path must be a GCS path, got {path_str}")
+  if not path_str.strip() or (
+      "://" in path_str and not path_str.startswith("gs://")
+  ):
+    raise ValueError(f"Path must be a GCS path or a local path, got {path_str}")
+
+
+def _is_under(log_dir: str, allowed: str) -> bool:
+  """Returns whether log_dir is inside the allowed GCS prefix or local dir."""
+  if log_dir.startswith("gs://") or allowed.startswith("gs://"):
+    return log_dir.startswith(allowed)
+  log_dir, allowed = os.path.realpath(log_dir), os.path.realpath(allowed)
+  return os.path.commonpath([log_dir, allowed]) == allowed
 
 
 def _validate_gcs_bucket(log_dir: str) -> None:
-  """Validates that log_dir is a valid GCS path and is allowed.
+  """Validates that log_dir is a valid GCS or local path and is allowed.
 
   It validates that the log_dir is in the list of allowed buckets specified
   in the environment variable `PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS`. If the
   environment variable is not set, it assumes all buckets are allowed.
 
   Args:
-    log_dir: The GCS path to validate.
+    log_dir: The GCS or local path to validate.
 
   Raises:
-    ValueError: If the log_dir is not a valid GCS path or is not in allowed
-      buckets.
+    ValueError: If the log_dir is not a valid GCS or local path or is not in
+      allowed buckets.
   """
   _validate_path(log_dir)
 
   if env_buckets := os.environ.get("PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS"):
     allowed_buckets = {b.strip() for b in env_buckets.split(",") if b.strip()}
     if allowed_buckets and not any(
-        log_dir.startswith(bucket_name) for bucket_name in allowed_buckets
+        _is_under(log_dir, bucket_name) for bucket_name in allowed_buckets
     ):
       raise ValueError(
           f"GCS bucket '{log_dir}' is not in allowed buckets list: "
@@ -279,8 +289,9 @@ def start_trace(
   :func:`start_trace` is called while another trace is running.
 
   Args:
-    log_dir: The GCS directory to save the profiler trace to (usually the
-      TensorBoard log directory), e.g., "gs://my_bucket/profiles".
+    log_dir: The GCS or local directory to save the profiler trace to (usually
+      the TensorBoard log directory), e.g., "gs://my_bucket/profiles" or
+      "/tmp/profiles".
     create_perfetto_link: A boolean which, if true, creates and prints link to
       the Perfetto trace viewer UI (https://ui.perfetto.dev). The program will
       block until the link is opened and Perfetto loads the trace. This feature
@@ -302,8 +313,8 @@ def start_trace(
     None.
 
   Raises:
-    ValueError: If `log_dir` is not a GCS path, or is not in one of the buckets
-      listed in `PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS`.
+    ValueError: If `log_dir` is not a GCS or local path, or is not in one of
+      the buckets listed in `PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS`.
     RuntimeError: If a trace is already being taken, or if the Pathways backend
       or `jax.profiler.start_trace` fails to start the trace.
   """
@@ -402,8 +413,9 @@ def trace(
   is then propagated.
 
   Args:
-    log_dir: The GCS directory to save the profiler trace to (usually the
-      TensorBoard log directory), e.g., "gs://my_bucket/profiles".
+    log_dir: The GCS or local directory to save the profiler trace to (usually
+      the TensorBoard log directory), e.g., "gs://my_bucket/profiles" or
+      "/tmp/profiles".
     create_perfetto_link: See :func:`start_trace`.
     create_perfetto_trace: See :func:`start_trace`.
     profiler_options: Profiler options to configure the profiler for collection.
@@ -572,13 +584,13 @@ def collect_profile(
     port: The port on which the JAX profiler server is running.
     duration_ms: The duration in milliseconds for which to collect the profile.
     host: The host on which the JAX profiler server is running.
-    log_dir: The GCS path to save the profile data.
+    log_dir: The GCS or local path to save the profile data.
 
   Returns:
     True if the profile was collected successfully, False otherwise.
 
   Raises:
-    ValueError: If the log_dir is not a GCS path.
+    ValueError: If the log_dir is not a GCS or local path.
   """
   _validate_path(str(log_dir))
 
