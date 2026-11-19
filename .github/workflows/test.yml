@@ -30,6 +30,8 @@ jobs:
         jax-version: ['0.10.0', '0.10.1', '0.10.2', '0.11.0', '0.11.1', '0.11.2', '0.12.0', '0.12.0.1', 'nightly']
         exclude:
           - python-version: '3.11'
+            jax-version: 'nightly'
+          - python-version: '3.11'
             jax-version: '0.11.0'
           - python-version: '3.11'
             jax-version: '0.11.1'
@@ -58,7 +60,9 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - run: pip --version
     - if: matrix.jax-version == 'nightly'
-      run: pip install -e ".[test]" -U --pre jax jaxlib -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
+      run: |
+        pip install -e ".[test]"
+        pip install -U --pre jax jaxlib -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/
     - if: matrix.jax-version != 'nightly'
       run: pip install -e ".[test]" "jax==${JAX_VERSION}"
       env:
