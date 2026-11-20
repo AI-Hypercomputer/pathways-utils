@@ -158,6 +158,8 @@ class ProfilingTest(parameterized.TestCase):
       "gs://test_bucket/test_log_dir",
       "gs://test_bucket2",
       "gs://test_bucket3/test/log/dir",
+      "/logs/test_log_dir",
+      "relative_path/my_log_dir",
   )
   def test_collect_profile_log_dir(self, log_dir):
     result = profiling.collect_profile(
@@ -174,7 +176,7 @@ class ProfilingTest(parameterized.TestCase):
         headers={},
     )
 
-  @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
+  @parameterized.parameters("cns://test_bucket/test_dir", "s3://bucket/dir")
   def test_collect_profile_log_dir_error(self, log_dir):
     with self.assertRaises(ValueError):
       profiling.collect_profile(
@@ -222,14 +224,22 @@ class ProfilingTest(parameterized.TestCase):
     mock_response.raise_for_status.assert_called_once()
 
   @parameterized.parameters(
-      "/logs/test_log_dir",
-      "relative_path/my_log_dir",
+      "",
+      "  ",
       "cns://test_bucket/test_dir",
-      "not_a_gcs_path",
+      "s3://test_bucket/test_dir",
   )
   def test_start_trace_log_dir_error(self, log_dir):
-    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
+    with self.assertRaisesRegex(
+        ValueError, "Path must be a GCS path or a local path"
+    ):
       profiling.start_trace(log_dir)
+
+  @parameterized.parameters("/logs/test_log_dir", "relative_path/my_log_dir")
+  def test_start_trace_local_log_dir(self, log_dir):
+    profiling.start_trace(log_dir)
+
+    self.mock_original_start_trace.assert_called_once()
 
   def test_lock_released_on_success(self):
     """Tests lock release after successful start and stop trace.
@@ -474,8 +484,10 @@ class ProfilingTest(parameterized.TestCase):
     self.assertFalse(profiling._profile_state.lock.locked())
 
   def test_trace_log_dir_error_does_not_stop_trace(self):
-    with self.assertRaisesRegex(ValueError, "Path must be a GCS path"):
-      with profiling.trace("/local/test_dir"):
+    with self.assertRaisesRegex(
+        ValueError, "Path must be a GCS path or a local path"
+    ):
+      with profiling.trace("cns://test_bucket/test_dir"):
         pass
 
     self.mock_plugin_executable_cls.assert_not_called()
@@ -961,6 +973,31 @@ class ProfilingTest(parameterized.TestCase):
     ):
       with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
         profiling._validate_gcs_bucket(log_dir)
+
+  @parameterized.parameters("/tmp/allowed", "/tmp/allowed/dir")
+  def test_validate_gcs_bucket_local_dir_allowed(self, log_dir: str):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "/tmp/allowed"},
+    ):
+      profiling._validate_gcs_bucket(log_dir)
+
+  @parameterized.parameters("/tmp/allowed/../../etc/foo", "/tmp/allowed_other")
+  def test_validate_gcs_bucket_local_dir_disallowed(self, log_dir: str):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "/tmp/allowed"},
+    ):
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket(log_dir)
+
+  def test_validate_gcs_bucket_gcs_entry_does_not_match_local_path(self):
+    with mock.patch.dict(
+        profiling.os.environ,
+        {"PATHWAYS_PROFILING_ALLOWED_GCS_BUCKETS": "gs://bucket1"},
+    ):
+      with self.assertRaisesRegex(ValueError, "is not in allowed buckets list"):
+        profiling._validate_gcs_bucket("gs:/bucket1/trace")
 
   def test_start_trace_rollback_on_original_failure(self):
     self.mock_original_start_trace.side_effect = RuntimeError(
