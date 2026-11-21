@@ -1506,6 +1506,46 @@ class ISCPathwaysTest(parameterized.TestCase):
     self.assertIsNone(manager._port_forward_process)
     self.assertIsNone(manager._log_process)
 
+  def test_public_accessors_before_and_after_connect(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    self.assertEqual(manager.proxy_job_name, "test-proxy")
+    self.assertIsNone(manager.proxy_port)
+    self.assertIsNone(manager.backend_target)
+    self.assertFalse(manager.is_alive())
+
+    mock_pf_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_pf_proc.poll.return_value = None
+    manager._proxy_port = 29005
+    manager._port_forward_process = mock_pf_proc
+    self.assertEqual(manager.proxy_port, 29005)
+    self.assertEqual(manager.backend_target, "grpc://127.0.0.1:29005")
+    self.assertTrue(manager.is_alive())
+
+  def test_is_alive_false_after_port_forward_exits(self):
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    mock_pf_proc = mock.create_autospec(subprocess.Popen, instance=True)
+    mock_pf_proc.poll.return_value = 1
+    manager._port_forward_process = mock_pf_proc
+    self.assertFalse(manager.is_alive())
+
   def test_connect_auto_detect_proxy_image_success(self):
     """Tests that connect auto-detects compatible proxy image when not provided."""
     self.enter_context(mock.patch.dict(os.environ, {"USER": "testuser"}))
