@@ -352,17 +352,20 @@ class Manager:
         else minimum_slice_count
     )
 
-    if max_retries is not None and retry_policy is not None:
-      raise ValueError("Cannot specify both max_retries and retry_policy.")
-
-    if retry_policy is None:
-      if max_retries is None:
-        # Default to unlimited retries if neither parameter is supplied.
-        retry_policy = lambda attempt, error: True
-      else:
-        if max_retries <= 0:
-          raise ValueError("max_retries must be positive.")
-        retry_policy = ElasticRetryLimit(max_retries)
+    if max_retries is not None:
+      warnings.warn(
+          "`max_retries` is deprecated. Please use `retry_policy` instead.",
+          DeprecationWarning,
+          stacklevel=2,
+      )
+      if retry_policy is not None:
+        raise ValueError("Cannot specify both max_retries and retry_policy.")
+      if max_retries <= 0:
+        raise ValueError("max_retries must be positive.")
+      retry_policy = ElasticRetryLimit(max_retries)
+    elif retry_policy is None:
+      # Default to unlimited retries if neither parameter is supplied.
+      retry_policy = lambda attempt, error: True
 
     def decorator(func: _F) -> _F:
       @functools.wraps(func)
@@ -480,13 +483,15 @@ class Manager:
         DeprecationWarning,
         stacklevel=2,
     )
+    if max_retries <= 0:
+      raise ValueError("max_retries must be positive.")
     return self.elastic_retry(
-        max_retries=max_retries,
         minimum_slice_count=None,
         poll_interval=poll_interval,
         timeout=timeout,
         pre_callback=pre_callback,
         on_elastic_event_callback=on_elastic_event_callback,
+        retry_policy=ElasticRetryLimit(max_retries),
     )
 
   def replica_resize(
@@ -517,10 +522,12 @@ class Manager:
         DeprecationWarning,
         stacklevel=2,
     )
+    if max_resizes <= 0:
+      raise ValueError("max_resizes must be positive.")
     return self.elastic_retry(
-        max_retries=max_resizes,
         minimum_slice_count=1,
         poll_interval=poll_interval,
         pre_callback=pre_callback,
         on_elastic_event_callback=on_elastic_event_callback,
+        retry_policy=ElasticRetryLimit(max_resizes),
     )
