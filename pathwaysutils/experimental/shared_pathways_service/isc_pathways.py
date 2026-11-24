@@ -380,6 +380,35 @@ class _ISCPathways:
       total_chips += chips_per_instance * count
     return total_chips
 
+  @property
+  def proxy_job_name(self) -> str:
+    """The name of the GKE job that runs this session's Pathways proxy."""
+    return self._proxy_job_name
+
+  @property
+  def proxy_port(self) -> int | None:
+    """The local port forwarded to the proxy, or None if not connected."""
+    return self._proxy_port
+
+  @property
+  def backend_target(self) -> str | None:
+    """The JAX backend target (`grpc://127.0.0.1:<port>`), or None."""
+    if self._proxy_port is None:
+      return None
+    return f"{_JAX_BACKEND_TARGET_HOSTNAME}:{self._proxy_port}"
+
+  def is_alive(self) -> bool:
+    """Returns True if the session is connected and port forwarding is running.
+
+    Long-lived callers that keep one session open across many workloads can use
+    this to detect a dropped port-forward (e.g. after the proxy pod restarts)
+    and reconnect.
+    """
+    return (
+        self._port_forward_process is not None
+        and self._port_forward_process.poll() is None
+    )
+
   def __enter__(self):
     """Enters the context manager, ensuring cluster exists."""
     atexit.register(self._cleanup)
