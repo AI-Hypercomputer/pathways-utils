@@ -18,8 +18,36 @@ This introduces an abstrction layer some JAX APIs that have changed over
 """
 
 
-import functools
+from collections.abc import Sequence
 import jax
+
+
+def _concatenate_from_shards(
+    arrays: Sequence[Sequence[jax.Array]],
+    sharded_dim_idxs: Sequence[int],
+    out_shardings: Sequence[jax.sharding.NamedSharding],
+    **unused_kwargs,
+) -> list[jax.Array]:
+  """Concatenates submesh arrays via single-device shard assembly."""
+  results = []
+  for replicas, dim, sharding in zip(
+      arrays, sharded_dim_idxs, out_shardings, strict=True
+  ):
+    shape = list(replicas[0].shape)
+    if dim >= 0:
+      shape[dim] = sum(replica.shape[dim] for replica in replicas)
+    shards = []
+    for replica in replicas:
+      shards.extend(shard.data for shard in replica.addressable_shards)
+    results.append(
+        jax.make_array_from_single_device_arrays(
+            tuple(shape), sharding, shards, dtype=replicas[0].dtype
+        )
+    )
+  return results
+
+
+import functools
 
 
 class _FakeJaxFunction:
@@ -90,10 +118,7 @@ try:
 
 except (ImportError, AttributeError):
   # jax<0.10.0
-  concatenate_by_mesh_axis = _FakeJaxFunction(
-      "jax.jaxlib._pathways._concatenate_by_mesh_axis",
-      "0.10.0",
-  )
+  concatenate_by_mesh_axis = _concatenate_from_shards
 
 
 @functools.lru_cache(maxsize=1)
