@@ -78,7 +78,8 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
   that the devices are active and can perform computations.
   """
 
-  def _plus_one(self, x: jax.Array) -> jax.Array:
+  @staticmethod
+  def _plus_one(x: jax.Array) -> jax.Array:
     return x + 1
 
   def _simple_execution(self, devices: Sequence[jax.Device]) -> jax.Array:
@@ -122,7 +123,6 @@ class DefaultSliceHealthChecker(SliceHealthChecker):
         if not is_error_due_to_slice_down(error, log_traceback=False):
           raise
     return frozenset(active_slice_indices)
-
 
 
 def get_slice_to_devices(

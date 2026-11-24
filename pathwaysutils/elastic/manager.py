@@ -18,11 +18,14 @@ retries a function in case of `jax.errors.JaxRuntimeError` caused by slice down
 events. It also provides a utility for waiting for slices to become active.
 """
 
-from collections.abc import Callable, Mapping, Sequence, Set
+from collections.abc import Callable, Iterator, Mapping, Sequence, Set
+import contextlib
 import functools
 import logging
+import math
 import threading
-from typing import Any, TypeAlias, TypeVar
+import types
+from typing import Any, NamedTuple, TypeAlias, TypeVar
 import warnings
 
 import jax
@@ -48,7 +51,25 @@ class ScaleUpSignalError(Exception):
 
 
 _F = TypeVar("_F", bound=Callable[..., Any])
+_T = TypeVar("_T")
 RetryPolicy: TypeAlias = Callable[[int, Exception], bool]
+_DEFAULT_HBM_GIB = types.MappingProxyType(
+    {"TPU7x": 96, "TPU v5p": 95, "TPU v6 lite": 32, "TPU v6e": 32}
+)
+
+
+class StepPlan(NamedTuple):
+  """Degraded-slice step scaling parameters.
+
+  Attributes:
+    batch_multiplier: Per-device microbatch size multiplier (>= 1).
+    grad_accum_steps: Gradient accumulation passes (0 when disabled).
+    slice_batches: Total baseline slice-batch chunks consumed per step.
+  """
+
+  batch_multiplier: int
+  grad_accum_steps: int
+  slice_batches: int
 
 
 def _elastic_event_cleanup() -> None:
@@ -100,11 +121,22 @@ class Manager:
   available_inactive_slices: Set[int]
   _stop_event: threading.Event | None
   _monitor_thread: threading.Thread | None
-  def __init__(self, devices: Sequence[jax.Device] | None = None) -> None:
+  def __init__(
+      self,
+      devices: Sequence[jax.Device] | None = None,
+      *,
+      minimum_slice_count: int | None = None,
+      poll_interval: float | int = 10,
+      timeout: float | int | None = None,
+  ) -> None:
     """Initializes the manager.
 
     Args:
       devices: The devices to use. If None, jax.devices() is used.
+      minimum_slice_count: Minimum active slices to wait for (< 1 = all). If
+        None, active slices are sampled once without waiting.
+      poll_interval: Seconds between slice health checks when waiting.
+      timeout: Maximum seconds to wait when waiting, or None for no timeout.
     """
     if devices is None:
       devices = jax.devices()
@@ -115,12 +147,25 @@ class Manager:
     self._active_slice_indices = frozenset()
     self.available_inactive_slices = frozenset()
 
-    self.active_slice_indices = elastic.get_active_slice_indices(
-        slice_to_devices=self.slice_to_devices
-    )
+    if minimum_slice_count is not None:
+      slice_count = None if minimum_slice_count < 1 else minimum_slice_count
+      self.active_slice_indices = elastic.wait_for_slices(
+          slice_count=slice_count,
+          poll_interval=poll_interval,
+          timeout=timeout,
+          slice_to_devices=self.slice_to_devices,
+      )
+    else:
+      self.active_slice_indices = elastic.get_active_slice_indices(
+          slice_to_devices=self.slice_to_devices
+      )
 
     self._stop_event = None
     self._monitor_thread = None
+    self._max_batch_multiplier: int = 1
+    self._slice_batch_caps: dict[int, int] = {}
+    self._aot_slice_count: int | None = None
+    self._last_batch_mult: int | None = None
 
   def start_monitoring(self, poll_interval: float | int = 10) -> None:
     """Starts the background monitor thread.
@@ -205,6 +250,104 @@ class Manager:
     for slice_index in sorted(self.active_slice_indices):
       devices.extend(self.slice_to_devices[slice_index])
     return devices
+
+  def _slices_for(self, num_devices: int | None = None) -> int:
+    if num_devices is None:
+      return self._aot_slice_count or self.active_slice_count
+    devices_per_slice = len(next(iter(self.slice_to_devices.values()), ())) or 1
+    return max(1, num_devices // devices_per_slice)
+
+  def record_baseline_memory(
+      self,
+      compiled: Any,
+      *,
+      num_devices: int | None = None,
+      headroom: float = 0.20,
+  ) -> int:
+    """Infers max per-device batch multiplier from a full-slice compile."""
+    if self._slices_for(num_devices) < self.total_slice_count:
+      return self._max_batch_multiplier
+    dev = self.default_device
+    hbm = _DEFAULT_HBM_GIB.get(dev.device_kind, 16) << 30
+    with contextlib.suppress(RuntimeError, AttributeError):
+      if limit := (dev.memory_stats() or {}).get("bytes_limit"):
+        hbm = int(limit)
+    mult = 1
+    with contextlib.suppress(RuntimeError, AttributeError):
+      if (mem := compiled.memory_analysis()) and mem.temp_size_in_bytes > 0:
+        avail = (
+            (1.0 - headroom) * hbm
+            - mem.argument_size_in_bytes
+            - mem.output_size_in_bytes
+        )
+        mult = max(1, int(avail // mem.temp_size_in_bytes))
+    self._max_batch_multiplier = mult
+    return mult
+
+  def plan_step_scaling(
+      self,
+      base_grad_accum_steps: int = 0,
+      *,
+      num_devices: int | None = None,
+      scale: bool = True,
+      max_batch_multiplier: int | None = None,
+  ) -> StepPlan:
+    """Plans `(batch_multiplier, grad_accum_steps, slice_batches)`."""
+    if max_batch_multiplier is not None and max_batch_multiplier < 1:
+      raise ValueError("max_batch_multiplier must be >= 1.")
+    slices = self._slices_for(num_devices)
+    base_passes = max(1, base_grad_accum_steps)
+    if not scale or not 0 < slices < self.total_slice_count:
+      self._last_batch_mult = 1
+      return StepPlan(1, base_grad_accum_steps, slices * base_passes)
+    cap = max_batch_multiplier or self._max_batch_multiplier
+    if slices in self._slice_batch_caps:
+      cap = min(cap, self._slice_batch_caps[slices])
+    needed = math.ceil(self.total_slice_count * base_passes / slices)
+    passes = math.ceil(needed / max(1, cap))
+    batch_mult = math.ceil(needed / passes)
+    self._last_batch_mult = batch_mult
+    grad_steps = 0 if passes == 1 and base_grad_accum_steps == 0 else passes
+    return StepPlan(batch_mult, grad_steps, slices * batch_mult * passes)
+
+  def compile_with_backoff(
+      self,
+      compile_fn: Callable[[], _T],
+      *,
+      num_devices: int | None = None,
+  ) -> _T:
+    """Runs `compile_fn`, backing off per-slice batch cap on XLA HBM OOM."""
+    slices = self._slices_for(num_devices)
+    while True:
+      self._last_batch_mult = None
+      try:
+        return compile_fn()
+      except jax.errors.JaxRuntimeError as error:
+        msg = str(error).lower()
+        is_oom = "resource_exhausted" in msg or "out of memory" in msg
+        cur = self._last_batch_mult or self._slice_batch_caps.get(
+            slices, self._max_batch_multiplier
+        )
+        if cur <= 1 or not is_oom:
+          raise
+        self._slice_batch_caps[slices] = cur - 1
+
+  def aot_slice_subsets(
+      self, minimum_slice_count: int | None = None
+  ) -> Iterator[list[jax.Device]]:
+    """Yields device lists for each degraded slice prefix for AOT compile."""
+    ordered = sorted(self.active_slice_indices)
+    if minimum_slice_count is None or minimum_slice_count < 1:
+      return
+    try:
+      for count in range(minimum_slice_count, len(ordered)):
+        self._aot_slice_count = count
+        devices = []
+        for idx in ordered[:count]:
+          devices.extend(self.slice_to_devices[idx])
+        yield devices
+    finally:
+      self._aot_slice_count = None
 
   def scale_by_active_slices(self, x: int | float) -> int | float:
     """Scale x by the number of active slices."""
@@ -324,7 +467,7 @@ class Manager:
         Deprecated: Use `retry_policy` instead.
         TODO: b/523384843 - Remove max_retries parameter.
       minimum_slice_count: The minimum number of slices required to run the
-        function. If None, defaults to the total number of slices.
+        function. If None or < 1, defaults to the total number of slices.
       poll_interval: The number of seconds to wait between activity checks.
         Defaults to 10 seconds.
       timeout: The maximum number of seconds to wait for slices to become active
@@ -348,7 +491,7 @@ class Manager:
     """
     target_slice_count = (
         self.total_slice_count
-        if minimum_slice_count is None
+        if minimum_slice_count is None or minimum_slice_count < 1
         else minimum_slice_count
     )
 
