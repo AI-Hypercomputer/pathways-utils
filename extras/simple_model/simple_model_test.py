@@ -57,6 +57,7 @@ class SimpleModelTest(absltest.TestCase):
   def test_config_dimensions_and_mesh(self):
     self.assertEqual(config_lib.parse_topology("4x8"), 32)
     self.assertEqual(config_lib.parse_topology("4x4x4"), 64)
+    self.assertEqual(config_lib.parse_topology("4x4x8_twisted"), 128)
     with self.assertRaises(ValueError):
       config_lib.parse_topology("invalid")
     with self.assertRaises(ValueError):
