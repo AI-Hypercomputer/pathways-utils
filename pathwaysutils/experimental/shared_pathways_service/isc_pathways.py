@@ -185,8 +185,22 @@ def _wait_for_placement(
     metrics_collector_inst: Any = None,
     start_time: float | None = None,
     total_chips: int = 0,
+    placement_complete: threading.Event | None = None,
 ) -> None:
-  """Waits for the placement to be complete by checking proxy logs."""
+  """Waits for the placement to be complete by checking proxy logs.
+
+  Args:
+    log_process: The process streaming the proxy pod logs.
+    num_slices: The number of slices to wait for.
+    metrics_collector_inst: The metrics collector to report placement to.
+    start_time: The time at which the capacity request started.
+    total_chips: The total number of chips requested.
+    placement_complete: If given, set once all slices are placed and the
+      placement metrics are recorded.
+
+  Raises:
+    RuntimeError: If the log streaming process has no stdout.
+  """
   _logger.info("Streaming proxy logs until the placement is complete...")
   keywords = [
       "placement",
@@ -221,12 +235,15 @@ def _wait_for_placement(
         )
       else:
         _logger.info("TPU placement for %d slice(s) complete!", num_slices)
+        metrics_collector_inst.record_user_waiting(False)
         metrics_collector_inst.record_active_user(True)
         metrics_collector_inst.record_capacity_in_use(total_chips)
         if start_time:
           duration = time.time() - start_time
           metrics_collector_inst.record_assignment_time(duration)
           metrics_collector_inst.record_successful_request()
+        if placement_complete is not None:
+          placement_complete.set()
         break
 
 
@@ -262,6 +279,7 @@ class _ISCPathways:
     metrics_collector: The metrics collector instance if enabled.
     start_time: The start time of the TPU assignment.
     total_chips: The total number of TPU chips expected across all instances.
+    placement_complete: Set once all TPU slices are placed.
   """
 
   def __init__(
@@ -311,6 +329,7 @@ class _ISCPathways:
     self._old_jax_backend_target_config = None
     self.total_chips = self._get_total_chips()
     self._proxy_deployed = False
+    self.placement_complete = threading.Event()
     self._cleaned_up = False
     self._cleanup_lock = threading.Lock()
     self._original_signal_handlers: dict[signal.Signals, Any] = {}
@@ -498,6 +517,7 @@ class _ISCPathways:
 
       atexit.unregister(self._cleanup)
       self._restore_signal_handlers()
+      self._record_final_metrics()
 
       # Clear JAX caches and run garbage collection.
       _logger.info("Starting Pathways proxy cleanup.")
@@ -554,6 +574,23 @@ class _ISCPathways:
           _JAX_BACKEND_TARGET_KEY, self._old_jax_backend_target_config
       )
       _logger.info("JAX variables restored.")
+
+      # Send the buffered metrics last, since this can wait for the Cloud
+      # Monitoring sampling window and should not delay releasing resources.
+      self.metrics_collector.close()
+
+  def _record_final_metrics(self) -> None:
+    """Records the metric values for the end of this session.
+
+    Gauges keep their last value until the time series goes stale, so reset
+    the ones that this session set to a non-zero value.
+    """
+    if self.placement_complete.is_set():
+      self.metrics_collector.record_active_user(False)
+      self.metrics_collector.record_capacity_in_use(0)
+    elif self._proxy_deployed:
+      # The user was waiting for capacity and never got it.
+      self.metrics_collector.record_user_waiting(False)
 
 
 def _get_username() -> str:
@@ -698,6 +735,7 @@ def connect(
               t.metrics_collector,
               t.start_time,
               t.total_chips,
+              t.placement_complete,
           ),
           daemon=True,
       )

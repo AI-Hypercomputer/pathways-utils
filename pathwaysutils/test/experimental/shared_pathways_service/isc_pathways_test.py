@@ -4,6 +4,7 @@ import io
 import os
 import signal
 import subprocess
+import threading
 from unittest import mock
 
 from absl import flags
@@ -40,14 +41,18 @@ class ISCPathwaysTest(parameterized.TestCase):
         " -> placed\n"
     )
     mock_metrics_collector = mock.Mock()
+    placement_complete = threading.Event()
 
     isc_pathways._wait_for_placement(
         mock_process,
         num_slices=1,
         metrics_collector_inst=mock_metrics_collector,
+        placement_complete=placement_complete,
     )
 
     mock_metrics_collector.record_active_user.assert_called_once_with(True)
+    mock_metrics_collector.record_user_waiting.assert_called_once_with(False)
+    self.assertTrue(placement_complete.is_set())
 
   def test_wait_for_placement_empty_stdout_raises(self):
     """Tests that _wait_for_placement terminates and raises if stdout is None."""
@@ -593,6 +598,12 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_collector_instance.record_requested_capacity.assert_called_once_with(
         64
     )
+    # The proxy was deployed but placement never completed, so the user stops
+    # waiting when the session ends.
+    mock_collector_instance.record_user_waiting.assert_has_calls(
+        [mock.call(True), mock.call(False)]
+    )
+    mock_collector_instance.close.assert_called_once()
     mock_run.assert_called_with(
         [
             "kubectl",
@@ -791,6 +802,7 @@ class ISCPathwaysTest(parameterized.TestCase):
               mock_manager_instance.metrics_collector,
               mock_manager_instance.start_time,
               mock_manager_instance.total_chips,
+              mock_manager_instance.placement_complete,
           ),
           daemon=True,
       )
@@ -1545,6 +1557,73 @@ class ISCPathwaysTest(parameterized.TestCase):
     mock_pf_proc.poll.return_value = 1
     manager._port_forward_process = mock_pf_proc
     self.assertFalse(manager.is_alive())
+
+  def _create_manager_with_mock_metrics(self):
+    """Creates an _ISCPathways whose metrics collector is a mock."""
+    manager = isc_pathways._ISCPathways(
+        cluster="test-cluster",
+        project="test-project",
+        region="test-region",
+        gcs_bucket="test-bucket",
+        pathways_service="test-service:1234",
+        expected_tpu_instances={"tpuv6e:2x2": 1},
+        proxy_job_name="test-proxy",
+        proxy_server_image="test-image",
+    )
+    manager.metrics_collector = mock.Mock()
+    self.enter_context(
+        mock.patch.object(
+            isc_pathways.gke_utils, "delete_gke_resource", autospec=True
+        )
+    )
+    return manager
+
+  def test_cleanup_after_placement_resets_usage_metrics_and_closes(self):
+    manager = self._create_manager_with_mock_metrics()
+    manager._proxy_deployed = True
+    manager.placement_complete.set()
+
+    manager._cleanup()
+
+    collector = manager.metrics_collector
+    collector.record_active_user.assert_called_once_with(False)
+    collector.record_capacity_in_use.assert_called_once_with(0)
+    collector.record_user_waiting.assert_not_called()
+    collector.close.assert_called_once()
+
+  def test_cleanup_before_placement_resets_waiting_metric_and_closes(self):
+    manager = self._create_manager_with_mock_metrics()
+    manager._proxy_deployed = True
+
+    manager._cleanup()
+
+    collector = manager.metrics_collector
+    collector.record_user_waiting.assert_called_once_with(False)
+    collector.record_active_user.assert_not_called()
+    collector.record_capacity_in_use.assert_not_called()
+    collector.close.assert_called_once()
+
+  def test_cleanup_without_deployed_proxy_only_closes_metrics(self):
+    manager = self._create_manager_with_mock_metrics()
+
+    manager._cleanup()
+
+    collector = manager.metrics_collector
+    collector.record_user_waiting.assert_not_called()
+    collector.record_active_user.assert_not_called()
+    collector.record_capacity_in_use.assert_not_called()
+    collector.close.assert_called_once()
+
+  def test_cleanup_twice_closes_metrics_once(self):
+    manager = self._create_manager_with_mock_metrics()
+    manager._proxy_deployed = True
+    manager.placement_complete.set()
+
+    manager._cleanup()
+    manager._cleanup()
+
+    manager.metrics_collector.record_active_user.assert_called_once_with(False)
+    manager.metrics_collector.close.assert_called_once()
 
   def test_connect_auto_detect_proxy_image_success(self):
     """Tests that connect auto-detects compatible proxy image when not provided."""
