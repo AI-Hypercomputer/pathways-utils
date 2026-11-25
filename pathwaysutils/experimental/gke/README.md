@@ -47,8 +47,8 @@ pw_jobset = jobset.PathwaysJobSet(
 ### Heterogeneous Multi-Topology Slices
 Combine multiple TPU slice topologies as separate worker `replicatedJobs`
 within a single `JobSet`. Call `add_worker_topology` before worker mutators
-(`add_colocated_python`, `add_gcsfuse`, or `with_custom_libtpu`) so they apply
-across all worker templates:
+(`add_colocated_python`, `add_gcsfuse`, `with_custom_libtpu`, or
+`with_metrics`) so they apply across all worker templates:
 
 ```python
 pw_jobset = (
@@ -113,6 +113,18 @@ pw_jobset.with_custom_libtpu(
     libtpu_path="/data/libtpu/libtpu.so",
     containers="all",
 )
+```
+
+### Pathways Metrics
+Push the Pathways metrics whose public names match an RE2 regular expression
+from the Pathways containers to an OpenTelemetry collector over OTLP/gRPC. By
+default, they go to the Google-Built OpenTelemetry Collector at
+`opentelemetry-collector.opentelemetry.svc.cluster.local:4317`, which writes
+them to Cloud Monitoring; pass `endpoint` for another collector. Requires
+Pathways images that support `--metrics_regex`:
+
+```python
+pw_jobset.with_metrics(metrics_regex="compilation|chip_seconds|errors")
 ```
 
 ### Container & Pod Spec Overrides

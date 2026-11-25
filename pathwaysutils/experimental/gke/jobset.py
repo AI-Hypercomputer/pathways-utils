@@ -881,7 +881,8 @@ class PathwaysJobSet:
     """Adds an additional worker TPU slice topology as a replicatedJob.
 
     Call before worker mutators such as `add_gcsfuse`, `add_external_sidecar`,
-    or `with_custom_libtpu` so they apply across all worker templates.
+    `with_custom_libtpu`, or `with_metrics` so they apply across all worker
+    templates.
 
     Args:
       tpu_type: TPU type (e.g., "v5e" or "ct5lp-hightpu-8t").
@@ -1419,6 +1420,110 @@ class PathwaysJobSet:
         else:
           env.append(new_env_var)
         container.env = env
+
+    return self
+
+  def with_metrics(
+      self,
+      metrics_regex: str,
+      endpoint: str | None = None,
+      containers: str | Sequence[str] = "all",
+  ) -> "PathwaysJobSet":
+    """Exports Pathways metrics to an OpenTelemetry collector.
+
+    Sets `--metrics_regex` on the selected Pathways containers, which then push
+    the Pathways metrics whose public names (e.g.,
+    `pathways_pipe_message_latency_milliseconds`) contain a match of the RE2
+    regular expression over OTLP/gRPC. By default, they push them to the
+    Google-Built OpenTelemetry Collector at
+    `http://opentelemetry-collector.opentelemetry.svc.cluster.local:4317`, which
+    writes them to Cloud Monitoring. Also sets environment variables that
+    identify where the metrics come from: `OTEL_SERVICE_NAME` to the container
+    name, and `OTEL_RESOURCE_ATTRIBUTES` to the pod name and UID, through
+    `K8S_POD_NAME` and `K8S_POD_UID`. Replaces previous values of the flag and
+    of these variables. Requires Pathways images that support `--metrics_regex`.
+
+    Args:
+      metrics_regex: RE2 regular expression that selects the metrics to export
+        (e.g., `"compilation|chip_seconds|errors"`, or `"."` for all of them).
+      endpoint: Optional OTLP endpoint of another collector, an `http://` or
+        `https://` URL (e.g., `"http://my-collector.monitoring:4317"`). Sets
+        `OTEL_EXPORTER_OTLP_ENDPOINT`.
+      containers: Target container selector (e.g. `"all"` or `"worker"`).
+
+    Returns:
+      Self for method chaining.
+
+    Raises:
+      ValueError: If `metrics_regex` is empty or `endpoint` is not an `http://`
+        or `https://` URL.
+    """
+    if not metrics_regex:
+      raise ValueError("metrics_regex must not be empty.")
+    if endpoint is not None and not endpoint.lower().startswith(
+        ("http://", "https://")
+    ):
+      raise ValueError(
+          f"endpoint must be an http:// or https:// URL (got {endpoint!r})."
+      )
+
+    target_containers: str | Sequence[str] = (
+        ("pathways-rm", "pathways-proxy", "pathways-worker")
+        if containers == "all"
+        else containers
+    )
+
+    for job_template in (self._head_job_template, *self.worker_job_templates):
+      pod_spec = job_template.spec.template.spec
+      all_containers = (pod_spec.containers or []) + (
+          pod_spec.init_containers or []
+      )
+      for container in self._filter_matching_containers(
+          target_containers, all_containers
+      ):
+        container.args = [
+            arg
+            for arg in container.args or []
+            if not arg.startswith("--metrics_regex=")
+        ] + [f"--metrics_regex={metrics_regex}"]
+
+        # Kubernetes expands $(K8S_POD_NAME) and $(K8S_POD_UID) only in the
+        # variables after them, so these are appended in this order.
+        metrics_env = [
+            client.V1EnvVar(name="OTEL_SERVICE_NAME", value=container.name),
+            client.V1EnvVar(
+                name="K8S_POD_NAME",
+                value_from=client.V1EnvVarSource(
+                    field_ref=client.V1ObjectFieldSelector(
+                        field_path="metadata.name"
+                    )
+                ),
+            ),
+            client.V1EnvVar(
+                name="K8S_POD_UID",
+                value_from=client.V1EnvVarSource(
+                    field_ref=client.V1ObjectFieldSelector(
+                        field_path="metadata.uid"
+                    )
+                ),
+            ),
+            client.V1EnvVar(
+                name="OTEL_RESOURCE_ATTRIBUTES",
+                value="k8s.pod.name=$(K8S_POD_NAME),k8s.pod.uid=$(K8S_POD_UID)",
+            ),
+        ]
+        if endpoint is not None:
+          metrics_env.append(
+              client.V1EnvVar(
+                  name="OTEL_EXPORTER_OTLP_ENDPOINT", value=endpoint
+              )
+          )
+        metrics_env_names = {var.name for var in metrics_env}
+        container.env = [
+            var
+            for var in container.env or []
+            if var.name not in metrics_env_names
+        ] + metrics_env
 
     return self
 

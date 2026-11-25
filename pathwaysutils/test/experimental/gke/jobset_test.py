@@ -1922,6 +1922,180 @@ class PathwaysJobSetTest(parameterized.TestCase):
         env_names = [e["name"] for e in container.get("env") or []]
         self.assertNotIn("TPU_LIBRARY_PATH", env_names, non_pw_name)
 
+  def test_with_metrics(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    returned = pw_jobset.with_metrics("compilation|chip_seconds")
+    self.assertIs(returned, pw_jobset)
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    for container_name in ("pathways-rm", "pathways-proxy", "pathways-worker"):
+      matches = helper.get_all_containers_by_name(container_name)
+      self.assertLen(matches, 1, container_name)
+      _, container = matches[0]
+      self.assertEqual(
+          container["args"][-1], "--metrics_regex=compilation|chip_seconds"
+      )
+      # The pod variables come before OTEL_RESOURCE_ATTRIBUTES, which uses
+      # them.
+      self.assertEqual(
+          container["env"][-4:],
+          [
+              {"name": "OTEL_SERVICE_NAME", "value": container_name},
+              {
+                  "name": "K8S_POD_NAME",
+                  "valueFrom": {"fieldRef": {"fieldPath": "metadata.name"}},
+              },
+              {
+                  "name": "K8S_POD_UID",
+                  "valueFrom": {"fieldRef": {"fieldPath": "metadata.uid"}},
+              },
+              {
+                  "name": "OTEL_RESOURCE_ATTRIBUTES",
+                  "value": (
+                      "k8s.pod.name=$(K8S_POD_NAME),k8s.pod.uid=$(K8S_POD_UID)"
+                  ),
+              },
+          ],
+          container_name,
+      )
+      self.assertNotIn(
+          "OTEL_EXPORTER_OTLP_ENDPOINT", [e["name"] for e in container["env"]]
+      )
+
+  def test_with_metrics_replaces_previous_values(self):
+    pw_jobset = self._create_jobset(
+        topology="2x2",
+        num_slices=1,
+        worker_container_kwargs={
+            "args": ["--metrics_regex=old"],
+            "env": {"OTEL_SERVICE_NAME": "old", "OTEL_RESOURCE_ATTRIBUTES": ""},
+        },
+    )
+    pw_jobset.with_metrics("first", endpoint="http://first:4317")
+    pw_jobset.with_metrics("second", endpoint="https://second.example.com")
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    for container_name in ("pathways-rm", "pathways-proxy", "pathways-worker"):
+      _, container = helper.get_all_containers_by_name(container_name)[0]
+      self.assertEqual(
+          [a for a in container["args"] if a.startswith("--metrics_regex=")],
+          ["--metrics_regex=second"],
+          container_name,
+      )
+      env_names = [e["name"] for e in container["env"]]
+      self.assertLen(env_names, len(set(env_names)), container_name)
+      env = {e["name"]: e for e in container["env"]}
+      self.assertEqual(env["OTEL_SERVICE_NAME"]["value"], container_name)
+      self.assertEqual(
+          env["OTEL_EXPORTER_OTLP_ENDPOINT"]["value"],
+          "https://second.example.com",
+      )
+
+  def test_with_metrics_after_import(self):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.with_metrics("first")
+    temp_filepath = os.path.join(
+        self.create_tempdir().full_path, "jobset_metrics.yaml"
+    )
+    pw_jobset.export_yaml(temp_filepath)
+    imported = jobset.PathwaysJobSet.import_yaml(temp_filepath)
+    self.assertEqual(
+        normalize_k8s_spec(pw_jobset.to_dict()),
+        normalize_k8s_spec(imported.to_dict()),
+    )
+
+    imported.with_metrics("second")
+    helper = JobSetManifestHelper(imported.to_dict())
+    _, worker = helper.get_all_containers_by_name("pathways-worker")[0]
+    self.assertEqual(
+        [a for a in worker["args"] if a.startswith("--metrics_regex=")],
+        ["--metrics_regex=second"],
+    )
+    env_names = [e["name"] for e in worker["env"]]
+    self.assertLen(env_names, len(set(env_names)))
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="all",
+          containers="all",
+          selected=("pathways-rm", "pathways-proxy", "pathways-worker"),
+      ),
+      dict(
+          testcase_name="worker",
+          containers="worker",
+          selected=("pathways-worker",),
+      ),
+      dict(
+          testcase_name="names",
+          containers=["pathways-rm", "pathways-proxy"],
+          selected=("pathways-rm", "pathways-proxy"),
+      ),
+  )
+  def test_with_metrics_selects_containers(self, containers, selected):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    pw_jobset.add_colocated_python(
+        image="gcr.io/my-project/colocated-python:latest"
+    )
+    pw_jobset.add_user_workload(
+        image="us-docker.pkg.dev/my-project/test:v1",
+        command="python3 test.py",
+    )
+    pw_jobset.with_metrics(".", containers=containers)
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    for container_name in (
+        "pathways-rm",
+        "pathways-proxy",
+        "pathways-worker",
+        "user-workload",
+        "colocated-python-sidecar",
+    ):
+      matches = helper.get_all_containers_by_name(container_name)
+      self.assertLen(matches, 1, container_name)
+      _, container = matches[0]
+      env_names = [e["name"] for e in container.get("env") or []]
+      if container_name in selected:
+        self.assertIn("--metrics_regex=.", container["args"], container_name)
+        self.assertIn("OTEL_RESOURCE_ATTRIBUTES", env_names, container_name)
+      else:
+        self.assertNotIn(
+            "--metrics_regex=.", container.get("args") or [], container_name
+        )
+        self.assertNotIn("OTEL_RESOURCE_ATTRIBUTES", env_names, container_name)
+
+  def test_with_metrics_applies_to_all_worker_topologies(self):
+    pw_jobset = self._create_jobset(topology="4x8", num_slices=1)
+    pw_jobset.add_worker_topology(
+        tpu_type="ct5lp-hightpu-8t", topology="2x4", num_slices=1
+    ).with_metrics(".")
+
+    helper = JobSetManifestHelper(pw_jobset.to_dict())
+    workers = helper.get_all_containers_by_name("pathways-worker")
+    self.assertLen(workers, 2)
+    for job_name, worker in workers:
+      self.assertIn("--metrics_regex=.", worker["args"], job_name)
+
+  @parameterized.named_parameters(
+      dict(
+          testcase_name="empty_regex",
+          metrics_regex="",
+          endpoint=None,
+          error="metrics_regex",
+      ),
+      dict(
+          testcase_name="endpoint_without_scheme",
+          metrics_regex=".",
+          endpoint="collector:4317",
+          error="endpoint",
+      ),
+  )
+  def test_with_metrics_rejects_invalid_arguments(
+      self, metrics_regex, endpoint, error
+  ):
+    pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
+    with self.assertRaisesRegex(ValueError, error):
+      pw_jobset.with_metrics(metrics_regex, endpoint=endpoint)
+
   def test_add_gcsfuse_replaces_duplicate_mount_path(self):
     pw_jobset = self._create_jobset(topology="2x2", num_slices=1)
     pw_jobset.add_gcsfuse(
