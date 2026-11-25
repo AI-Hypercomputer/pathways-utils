@@ -105,6 +105,7 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
         max_restarts=30,
         max_slice_restarts=1000000,
         pathways_rm_and_worker_image="custom-server-image",
+        annotations={},
     )
 
     # Verify colocated python was added with correct image, SHM path, and
@@ -173,6 +174,134 @@ class DeployPathwaysServiceTest(parameterized.TestCase):
 
     mock_run_deployment.assert_called_once()
     self.assertIsNone(mock_run_deployment.call_args.kwargs["sidecar_image"])
+
+  @mock.patch.object(deploy_pathways_service, "run_deployment", autospec=True)
+  def test_main_passes_annotations(self, mock_run_deployment):
+    with flagsaver.as_parsed(
+        annotations=[
+            (
+                "ownership.tpu.google.com/co-owners="
+                "group:team-a@twosync.google.com,user:someone@google.com"
+            ),
+            "example.com/team=pathways",
+        ]
+    ):
+      deploy_pathways_service.main(["deploy_pathways_service"])
+
+    mock_run_deployment.assert_called_once()
+    self.assertEqual(
+        mock_run_deployment.call_args.kwargs["annotations"],
+        {
+            "ownership.tpu.google.com/co-owners": (
+                "group:team-a@twosync.google.com,user:someone@google.com"
+            ),
+            "example.com/team": "pathways",
+        },
+    )
+
+  @mock.patch.object(deploy_pathways_service, "run_deployment", autospec=True)
+  def test_main_invalid_annotation_raises(self, mock_run_deployment):
+    with flagsaver.as_parsed(annotations=["no-equals-sign"]):
+      with self.assertRaisesRegex(ValueError, "KEY=VALUE"):
+        deploy_pathways_service.main(["deploy_pathways_service"])
+    mock_run_deployment.assert_not_called()
+
+  @parameterized.named_parameters(
+      dict(testcase_name="empty", annotations=[], expected={}),
+      dict(
+          testcase_name="prefixed_key",
+          annotations=["ownership.tpu.google.com/co-owners=group:a@x.com"],
+          expected={"ownership.tpu.google.com/co-owners": "group:a@x.com"},
+      ),
+      dict(
+          testcase_name="unprefixed_key",
+          annotations=["owner=me"],
+          expected={"owner": "me"},
+      ),
+      dict(
+          testcase_name="value_with_equals_and_commas",
+          annotations=["example.com/k=a=b,c=d"],
+          expected={"example.com/k": "a=b,c=d"},
+      ),
+      dict(
+          testcase_name="empty_value",
+          annotations=["example.com/k="],
+          expected={"example.com/k": ""},
+      ),
+      dict(
+          testcase_name="multiple",
+          annotations=["example.com/a=1", "example.com/b=2"],
+          expected={"example.com/a": "1", "example.com/b": "2"},
+      ),
+  )
+  def test_parse_annotations_valid(self, annotations, expected):
+    self.assertEqual(
+        deploy_pathways_service.parse_annotations(annotations), expected
+    )
+
+  @parameterized.named_parameters(
+      dict(testcase_name="missing_equals", annotation="example.com/k"),
+      dict(testcase_name="empty_key", annotation="=value"),
+      dict(testcase_name="empty_name", annotation="example.com/=value"),
+      dict(testcase_name="invalid_name_char", annotation="example.com/a b=v"),
+      dict(testcase_name="name_too_long", annotation=f"{'a' * 64}=v"),
+      dict(testcase_name="uppercase_prefix", annotation="Example.com/k=v"),
+      dict(testcase_name="empty_prefix", annotation="/k=v"),
+      dict(testcase_name="prefix_too_long", annotation=f"{'a' * 254}/k=v"),
+  )
+  def test_parse_annotations_invalid(self, annotation):
+    with self.assertRaises(ValueError):
+      deploy_pathways_service.parse_annotations([annotation])
+
+  def test_parse_annotations_duplicate_key_raises(self):
+    with self.assertRaisesRegex(ValueError, "more than once"):
+      deploy_pathways_service.parse_annotations(
+          ["example.com/k=1", "example.com/k=2"]
+      )
+
+  def _run_dry_run_deployment(self, **kwargs):
+    captured_config = {}
+
+    def capture_yaml_dump(config, *args, **unused_kwargs):
+      del args, unused_kwargs
+      captured_config.update(config)
+      return ""
+
+    with mock.patch.object(
+        deploy_pathways_service.yaml, "dump", side_effect=capture_yaml_dump
+    ):
+      deploy_pathways_service.run_deployment(
+          tpu_type="v5e",
+          topology="4x8",
+          num_slices=2,
+          jobset_name="test-jobset",
+          gcs_bucket="gs://test-bucket",
+          server_image="server-image",
+          sidecar_image=None,
+          dry_run=True,
+          **kwargs,
+      )
+    return captured_config
+
+  def test_run_deployment_sets_annotations(self):
+    annotations = {
+        "ownership.tpu.google.com/co-owners": "group:a@x.com,group:b@x.com",
+        "example.com/team": "pathways",
+    }
+
+    captured_config = self._run_dry_run_deployment(annotations=annotations)
+
+    self.assertEqual(captured_config["metadata"]["annotations"], annotations)
+
+  @parameterized.named_parameters(
+      dict(testcase_name="default", kwargs={}),
+      dict(testcase_name="none", kwargs=dict(annotations=None)),
+      dict(testcase_name="empty", kwargs=dict(annotations={})),
+  )
+  def test_run_deployment_no_annotations_omits_annotations(self, kwargs):
+    captured_config = self._run_dry_run_deployment(**kwargs)
+
+    self.assertNotIn("annotations", captured_config["metadata"])
 
   @mock.patch.object(gke_utils, "get_current_cluster_and_project")
   def test_run_deployment_worker_backoff_limit(self, mock_detect):

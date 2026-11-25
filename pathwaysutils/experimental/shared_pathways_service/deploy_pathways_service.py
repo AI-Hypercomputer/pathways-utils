@@ -1,10 +1,11 @@
 """Deploys Pathways service to a Kubernetes cluster using a JobSet template."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import dataclasses
 import datetime
 import logging
 import math
+import re
 from typing import Any
 from absl import app
 from absl import flags
@@ -61,6 +62,23 @@ _MAX_RESTARTS = flags.DEFINE_integer(
     " head (a crash, or an eviction such as a GKE node upgrade), since worker"
     " Jobs have an effectively unlimited backoff limit.",
     lower_bound=0,
+)
+_ANNOTATIONS = flags.DEFINE_multi_string(
+    "annotations",
+    [],
+    "Annotation to set on the JobSet, in the form KEY=VALUE. Repeat the flag"
+    " to set multiple annotations. The value may contain '=' and ','. For"
+    " example, to let a group manage the JobSet on clusters that enforce"
+    " ownership-based delete protection: --annotations="
+    "ownership.tpu.google.com/co-owners=group:my-team@twosync.google.com",
+)
+# Kubernetes annotation keys are qualified names: an optional DNS subdomain
+# prefix followed by '/' and a name of at most 63 characters.
+_ANNOTATION_KEY_NAME_RE = re.compile(
+    r"[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?"
+)
+_ANNOTATION_KEY_PREFIX_RE = re.compile(
+    r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*"
 )
 _SIDECAR_SHM_DIR = "/tmp/sidecar_dir"
 # These make the colocated Python sidecar logs as verbose as possible so that
@@ -209,6 +227,52 @@ def _add_sidecar(pw_jobset: jobset.PathwaysJobSet, sidecar_image: str) -> None:
   )
 
 
+def _validate_annotation_key(key: str) -> None:
+  """Raises ValueError if `key` is not a valid Kubernetes annotation key."""
+  prefix, sep, name = key.rpartition("/")
+  if sep and (
+      len(prefix) > 253 or not _ANNOTATION_KEY_PREFIX_RE.fullmatch(prefix)
+  ):
+    raise ValueError(
+        f"Invalid annotation key {key!r}: the prefix {prefix!r} must be a DNS"
+        " subdomain of at most 253 characters."
+    )
+  if len(name) > 63 or not _ANNOTATION_KEY_NAME_RE.fullmatch(name):
+    raise ValueError(
+        f"Invalid annotation key {key!r}: the name {name!r} must be at most 63"
+        " characters, start and end with an alphanumeric character, and"
+        " contain only alphanumerics, '-', '_' or '.'."
+    )
+
+
+def parse_annotations(annotations: Sequence[str]) -> dict[str, str]:
+  """Parses KEY=VALUE strings into a dict of JobSet annotations.
+
+  Args:
+    annotations: Strings of the form KEY=VALUE. The string is split at the first
+      '=', so the value may itself contain '='.
+
+  Returns:
+    A dict mapping annotation keys to values.
+
+  Raises:
+    ValueError: An entry is malformed, has an invalid key, or repeats a key.
+  """
+  parsed = {}
+  for annotation in annotations:
+    key, sep, value = annotation.partition("=")
+    key = key.strip()
+    if not sep:
+      raise ValueError(
+          f"Invalid annotation {annotation!r}: expected the form KEY=VALUE."
+      )
+    _validate_annotation_key(key)
+    if key in parsed:
+      raise ValueError(f"Annotation {key!r} is specified more than once.")
+    parsed[key] = value
+  return parsed
+
+
 def run_deployment(
     *,
     tpu_type,
@@ -221,8 +285,12 @@ def run_deployment(
     dry_run,
     deploy_func: Callable[[dict[str, Any]], None] = deploy_jobset,
     max_restarts: int = 30,
+    annotations: Mapping[str, str] | None = None,
 ) -> None:
   """Executes the deployment logic."""
+  annotations = dict(annotations) if annotations else {}
+  if annotations:
+    _logger.info("Setting JobSet annotations: %s", annotations)
   # Use PathwaysJobSet builder instead of YAML template.
   pw_jobset = jobset.PathwaysJobSet(
       name=jobset_name,
@@ -239,6 +307,7 @@ def run_deployment(
       pathways_rm_and_worker_image=(
           server_image or jobset.DEFAULT_PATHWAYS_RM_AND_WORKER_IMAGE
       ),
+      annotations=annotations,
   )
 
   if sidecar_image:
@@ -317,6 +386,7 @@ def main(argv: Sequence[str]) -> None:
         sidecar_image=_SIDECAR_IMAGE.value,
         dry_run=_DRY_RUN.value,
         max_restarts=_MAX_RESTARTS.value,
+        annotations=parse_annotations(_ANNOTATIONS.value),
     )
   except ValueError as e:
     _logger.exception("Error: %s", e)
