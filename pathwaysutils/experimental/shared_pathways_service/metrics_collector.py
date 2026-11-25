@@ -1,6 +1,7 @@
 """Metrics collector for Shared Pathways Service."""
 
 import atexit
+import dataclasses
 import logging
 import threading
 import time
@@ -71,6 +72,42 @@ _METRIC_DESCRIPTORS = [
     },
 ]
 
+# Maximum number of times to try sending a metric point before dropping it.
+_MAX_SEND_ATTEMPTS = 3
+
+# Maximum time in seconds to wait for the background flusher thread to stop.
+_FLUSHER_JOIN_TIMEOUT_S = 5
+
+
+@dataclasses.dataclass
+class _BufferedPoint:
+  """A metric point waiting to be sent to Cloud Monitoring.
+
+  Attributes:
+    value: The value of the point.
+    value_type: The `TypedValue` field to set, for example "int64_value".
+    metric_labels: The labels to attach to the point.
+    attempts: The number of failed attempts to send the point so far.
+  """
+
+  value: Any
+  value_type: str
+  metric_labels: Dict[str, str] | None
+  attempts: int = 0
+
+
+def _is_retryable_error(error: Exception) -> bool:
+  """Returns whether a failed Cloud Monitoring write may succeed if retried."""
+  return isinstance(
+      error,
+      (
+          exceptions.DeadlineExceeded,
+          exceptions.InternalServerError,
+          exceptions.ResourceExhausted,
+          exceptions.ServiceUnavailable,
+      ),
+  )
+
 
 class MetricsCollector:
   """Collects usage metrics for Shared Pathways Service and reports to Cloud Monitoring."""
@@ -87,17 +124,19 @@ class MetricsCollector:
     self.client = monitoring_v3.MetricServiceClient()
     self.project_name = f"projects/{self.project_id}"
     self._lock = threading.Lock()
-    self._buffer: Dict[str, list[tuple[Any, str, Dict[str, str] | None]]] = {}
+    self._buffer: Dict[str, list[_BufferedPoint]] = {}
     self._last_sent_time: Dict[str, float] = {}
     self._instance_id = str(uuid.uuid4())
-    self._running = True
+    self._stop_event = threading.Event()
+    self._close_lock = threading.Lock()
+    self._closed = False
     for descriptor in _METRIC_DESCRIPTORS:
       self._create_metric_descriptor(**descriptor)
     self._flusher_thread = threading.Thread(
         target=self._flush_loop, daemon=True
     )
     self._flusher_thread.start()
-    atexit.register(self._shutdown)
+    atexit.register(self.close)
     _logger.info("Metrics collection initialized.")
 
   def _create_time_series_object(
@@ -134,10 +173,10 @@ class MetricsCollector:
     return series
 
   def _flush_loop(self):
-    """Runs continuously to flush the metrics buffer."""
-    while self._running:
+    """Runs continuously to flush the metrics buffer until stopped."""
+    while not self._stop_event.is_set():
       self.flush()
-      time.sleep(1)
+      self._stop_event.wait(1)
 
   def flush(self):
     """Sends any eligible buffered metrics to Cloud Monitoring."""
@@ -151,18 +190,60 @@ class MetricsCollector:
         last_time = self._last_sent_time.get(metric_type, 0)
         # Add a slight cushion (10.5s) to prevent sub-second drift errors.
         if now - last_time >= 10.5 or last_time == 0:
-          item = queue.pop(0)
-          to_send.append((metric_type, *item))
+          point = queue.pop(0)
+          to_send.append((metric_type, point))
           self._last_sent_time[metric_type] = now
           if not queue:
             del self._buffer[metric_type]
 
-    for metric_type, value, value_type, metric_labels in to_send:
-      self._transmit(metric_type, value, value_type, metric_labels)
+    for metric_type, point in to_send:
+      if self._transmit(
+          metric_type, point.value, point.value_type, point.metric_labels
+      ):
+        continue
+      point.attempts += 1
+      if point.attempts >= _MAX_SEND_ATTEMPTS:
+        _logger.warning(
+            "Dropping metric %s after %d failed attempts.",
+            metric_type,
+            point.attempts,
+        )
+        continue
+      # Put the point back at the front of its queue so that it is retried
+      # before any newer points of the same metric. The retry waits for the
+      # next sampling window, which also spaces out the attempts.
+      with self._lock:
+        self._buffer.setdefault(metric_type, []).insert(0, point)
+
+  def close(self) -> None:
+    """Stops background flushing and sends all buffered metrics.
+
+    Blocks until every buffered point is sent or dropped. Cloud Monitoring
+    accepts at most one point per time series every 10 seconds, so this can
+    take about 10.5 seconds for each point still queued for a metric. Metrics
+    recorded after this call are dropped.
+
+    This is safe to call more than once. If it is never called, it runs when
+    the interpreter exits.
+    """
+    with self._close_lock:
+      if self._closed:
+        return
+      self._closed = True
+    atexit.unregister(self.close)
+    self._stop_event.set()
+    if self._flusher_thread is not threading.current_thread():
+      self._flusher_thread.join(timeout=_FLUSHER_JOIN_TIMEOUT_S)
+      if self._flusher_thread.is_alive():
+        _logger.warning(
+            "Metrics flusher thread did not stop within %s seconds.",
+            _FLUSHER_JOIN_TIMEOUT_S,
+        )
+    self._shutdown()
 
   def _shutdown(self):
     """Synchronously drains the final state of the queue before exiting."""
-    self._running = False
+    self._stop_event.set()
     while True:
       with self._lock:
         if not any(self._buffer.values()):
@@ -191,6 +272,13 @@ class MetricsCollector:
       metric_labels: Dict[str, str] | None = None,
   ):
     """Queues a single metric in the buffer."""
+    if self._closed:
+      _logger.warning(
+          "Metrics collector is closed. Dropping metric %s: %s",
+          metric_type,
+          value,
+      )
+      return
     default_labels = {"client_instance_id": self._instance_id}
     default_labels["cluster_name"] = self.cluster_name
     if self.job_name:
@@ -210,7 +298,9 @@ class MetricsCollector:
           metric_type,
           (value, value_type, default_labels),
       )
-      self._buffer[metric_type].append((value, value_type, default_labels))
+      self._buffer[metric_type].append(
+          _BufferedPoint(value, value_type, default_labels)
+      )
 
   def _transmit(
       self,
@@ -218,8 +308,19 @@ class MetricsCollector:
       value: Any,
       value_type: str,
       metric_labels: Dict[str, str] | None = None,
-  ):
-    """Physically transmits a TimeSeries to Cloud Monitoring."""
+  ) -> bool:
+    """Physically transmits a TimeSeries to Cloud Monitoring.
+
+    Args:
+      metric_type: The metric name, without `METRIC_PREFIX`.
+      value: The value of the point.
+      value_type: The `TypedValue` field to set, for example "int64_value".
+      metric_labels: The labels to attach to the point.
+
+    Returns:
+      False if the write failed with an error that may go away on retry, and
+      True otherwise, including when the write failed permanently.
+    """
     series = self._create_time_series_object(
         metric_type, value, value_type, metric_labels
     )
@@ -230,6 +331,8 @@ class MetricsCollector:
       _logger.info("Sent metric %s: %s", metric_type, value)
     except exceptions.GoogleAPICallError as e:
       _logger.warning("Failed to send metric %s: %s", metric_type, e)
+      return not _is_retryable_error(e)
+    return True
 
   def _create_metric_descriptor(
       self,
