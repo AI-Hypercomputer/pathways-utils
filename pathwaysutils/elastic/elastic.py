@@ -40,6 +40,13 @@ _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES = frozenset([
     "NOT_FOUND",
     "INTERNAL",
 ])
+# Matched by message. The status code alone, CANCELLED, is also reported when
+# the client disconnects from the IFRT proxy server.
+_ELASTIC_DOWN_ADDITIONAL_ERROR_MESSAGES = frozenset([
+    # The colocated Python sidecar of a slice went away with a call pending,
+    # for example because the pod of the slice was evicted.
+    "SidecarSession is cancelled",
+])
 
 
 class SliceHealthChecker(ABC):
@@ -267,6 +274,8 @@ def is_error_due_to_slice_down(
   - DEADLINE_EXCEEDED
   - NOT_FOUND
   - INTERNAL
+  or with the following text in the message:
+  - SidecarSession is cancelled
 
   Args:
     error: The error to check.
@@ -288,13 +297,17 @@ def is_error_due_to_slice_down(
       error_due_to_slice_down = True
 
     elif any(
-        error_type in str(error)
-        for error_type in _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES
+        pattern in str(error)
+        for pattern in (
+            _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES
+            | _ELASTIC_DOWN_ADDITIONAL_ERROR_MESSAGES
+        )
     ):
       _logger.warning(
           "Caught an error that may or may not be due to slice down (matched"
-          " _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES). This error will be treated"
-          " as due to slice down."
+          " _ELASTIC_DOWN_ADDITIONAL_ERROR_TYPES or"
+          " _ELASTIC_DOWN_ADDITIONAL_ERROR_MESSAGES). This error will be"
+          " treated as due to slice down."
       )
       traceback_logging_level = logging.WARNING
 
